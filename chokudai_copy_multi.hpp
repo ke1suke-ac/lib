@@ -82,7 +82,6 @@ public:
         int time_check_interval = 64;
         bool max_turn_is_answer = true;
         bool use_hash_dedup = true;
-        bool print_warnings = true;  // 元ライブラリとの互換用（固定表は満杯にならない）
         int chokudai_width = 1;      // 各ターン・各スイープの展開上限。1 以上へ丸める
         std::int64_t max_sweeps = 0; // 0 以下は無制限
         bool finish_on_timeout = false; // 未発見で時間切れなら K=1 の追加スイープを高々1回
@@ -224,7 +223,6 @@ public:
         bool time_limit_reached = false;
 
         bool completed_max_turn = false; // 最大ターンの候補が1件でも受理された
-        bool hash_table_full = false; // 互換用。容量を保証するため常に false
         Cost best_cost{};
         int best_turn = 0;
         std::optional<State> best_state;
@@ -306,78 +304,93 @@ private:
     template<class State>
     class Engine {
         static_assert(std::copy_constructible<State>, "State must be copy constructible");
-        static_assert(std::move_constructible<State>, "State must be move constructible");
         static_assert(std::assignable_from<State&, State>, "State must be assignable");
-        struct Item { State state; Cost cost; Hash hash; bool has_hash; };
-        struct Key { Cost cost{}; std::uint64_t serial = 0; };
+        struct Key {
+            Cost cost{};
+            Hash hash{};
+            // 使用中は受理順、空きスロットでは次の空き位置を格納する。
+            union { std::uint64_t serial = 0; int next_free; };
+            bool has_hash = false;
+        };
         struct Ends { int best = -1; int worst = -1; };
         // 状態本体と比較用情報を分け、最良・最悪の両端を同じ木で管理する
         class Queue {
         public:
-            std::vector<std::optional<Item>> items;
+            std::vector<std::optional<State>> items;
             std::vector<Key> keys;
-            std::vector<int> free_slots;
+            int free_head = -1;
             std::vector<Ends> tree;
-            struct Bucket { Hash hash{}; int slot = -1; }; // -1=空、-2=削除済み
-            std::vector<Bucket> table;
-            std::size_t base = 1;
+            std::vector<int> table; // スロット番号。-1=空
+            std::size_t base;
             std::size_t hash_size = 0;
-            std::size_t tombstones = 0;
             int size = 0;
             // 空のターンキューを確保する、O(W)
-            Queue(int width, std::size_t capacity) : items(static_cast<std::size_t>(width)),
-                keys(static_cast<std::size_t>(width)), hash_size(capacity) {
-                // 葉を2冪にそろえ、空きスロットは小さい番号から使う
-                while (base < static_cast<std::size_t>(width)) base *= 2;
-                tree.resize(base * 2);
-                free_slots.reserve(static_cast<std::size_t>(width));
-                for (int i = width; i > 0; --i) free_slots.push_back(i - 1);
+            Queue(int width, std::size_t capacity)
+                : base(std::bit_ceil(static_cast<std::size_t>(width))), hash_size(capacity) {
+                keys.reserve(static_cast<std::size_t>(width));
+                items.reserve(static_cast<std::size_t>(width));
+                // 葉の情報は items から読み、木には内部ノードだけを置く。
+                // State の領域は予約し、実際に使うスロットから構築する。
+                tree.resize(base);
             }
-            // 最良スロットを取得する、O(1)
-            int best() const { return tree[1].best; }
-            // 最悪スロットを取得する、O(1)
-            int worst() const { return tree[1].worst; }
+            int free_slot() const { return free_head < 0 ? static_cast<int>(items.size()) : free_head; }
+            // 非空キューの最良スロットを取得する、O(1)
+            int best() const { return base == 1 ? 0 : tree[1].best; }
+            // 非空キューの最悪スロットを取得する、O(1)
+            int worst() const { return base == 1 ? 0 : tree[1].worst; }
             // キーに対応する現在保持中のスロットを探す、期待 O(1)
             int find(Hash hash) const {
                 if (table.empty()) return -1;
                 std::size_t pos = bucket(hash);
-                while (table[pos].slot != -1) {
-                    if (table[pos].slot >= 0 && table[pos].hash == hash) return table[pos].slot;
+                while (table[pos] != -1) {
+                    if (keys[static_cast<std::size_t>(table[pos])].hash == hash) return table[pos];
                     pos = (pos + 1) & (table.size() - 1);
                 }
                 return -1;
             }
             // 指定スロットを取り除く、期待 O(log W + S)
-            void erase(int slot) {
-                // 削除マークは再挿入時に回収し、必要に応じて表全体を再構築する
+            void erase(int slot, bool updating = true) {
+                // 線形探索の穴を詰め、削除マークと定期再構築を不要にする
                 const auto id = static_cast<std::size_t>(slot);
-                if (items[id]->has_hash && !table.empty()) {
-                    std::size_t pos = bucket(items[id]->hash);
-                    while (table[pos].slot != slot) pos = (pos + 1) & (table.size() - 1);
-                    table[pos].slot = -2;
-                    ++tombstones;
+                if (keys[id].has_hash && !table.empty()) {
+                    std::size_t pos = bucket(keys[id].hash);
+                    while (table[pos] != slot) pos = (pos + 1) & (table.size() - 1);
+                    const auto mask = table.size() - 1;
+                    std::size_t next = (pos + 1) & mask;
+                    while (table[next] >= 0) {
+                        const auto home = bucket(keys[static_cast<std::size_t>(table[next])].hash);
+                        if (((pos - home) & mask) < ((next - home) & mask)) {
+                            table[pos] = table[next];
+                            pos = next;
+                        }
+                        next = (next + 1) & mask;
+                    }
+                    table[pos] = -1;
                 }
                 items[id].reset();
                 --size;
-                free_slots.push_back(slot);
-                update(slot, false);
+                keys[id].next_free = free_head;
+                free_head = slot;
+                if (updating) update(slot);
             }
             // 検査済みの候補を指定スロットへ格納する、期待償却 O(log W + S)
             template<class Maker>
             void insert(int slot, Cost cost, Hash hash, bool hashed, std::uint64_t serial, Maker&& maker) {
                 // maker の例外が出た場合には古い候補をまだ取り除いていない
                 State made(std::invoke(std::forward<Maker>(maker)));
-                if (items[static_cast<std::size_t>(slot)]) erase(slot);
-                assert(!free_slots.empty() && free_slots.back() == slot);
-                free_slots.pop_back();
                 const auto id = static_cast<std::size_t>(slot);
-                items[id].emplace(Item{std::move(made), cost, hash, hashed});
-                keys[id] = Key{cost, serial};
+                if (id == items.size()) { items.emplace_back(); keys.emplace_back(); }
+                if (items[id]) erase(slot, false);
+                if (free_head >= 0) free_head = keys[id].next_free;
+                items[id].emplace(std::move(made));
+                keys[id] = Key{cost, hash, serial, hashed};
                 ++size;
-                update(slot, true);
+                update(slot);
                 if (hashed && hash_size > 0) {
-                    if (table.empty() || tombstones > items.size()) rebuild();
-                    else add_hash(hash, slot);
+                    if (table.empty()) table.assign(hash_size, -1);
+                    std::size_t pos = bucket(hash);
+                    while (table[pos] >= 0) pos = (pos + 1) & (table.size() - 1);
+                    table[pos] = slot;
                 }
             }
         private:
@@ -387,12 +400,16 @@ private:
                 if (x.cost != y.cost) return x.cost < y.cost;
                 return x.serial < y.serial;
             }
-            void update(int slot, bool active) {
+            void update(int slot) {
                 // 空の子を除外して、同点なら受理順が早いものを best にする
                 std::size_t pos = base + static_cast<std::size_t>(slot);
-                tree[pos] = active ? Ends{slot, slot} : Ends{};
                 for (pos /= 2; pos > 0; pos /= 2) {
-                    const Ends a = tree[pos * 2], b = tree[pos * 2 + 1];
+                    auto child = [&](std::size_t i) {
+                        if (i < base) return tree[i];
+                        const auto j = i - base;
+                        return j < items.size() && items[j] ? Ends{static_cast<int>(j), static_cast<int>(j)} : Ends{};
+                    };
+                    const Ends a = child(pos * 2), b = child(pos * 2 + 1);
                     if (a.best < 0) tree[pos] = b;
                     else if (b.best < 0) tree[pos] = a;
                     else tree[pos] = Ends{before(a.best, b.best) ? a.best : b.best,
@@ -401,20 +418,6 @@ private:
             }
             std::size_t bucket(Hash hash) const {
                 return static_cast<std::size_t>(multi_detail::mix(static_cast<std::uint64_t>(hash))) & (table.size() - 1);
-            }
-            void add_hash(Hash hash, int slot) {
-                std::size_t pos = bucket(hash);
-                while (table[pos].slot >= 0) pos = (pos + 1) & (table.size() - 1);
-                if (table[pos].slot == -2) --tombstones;
-                table[pos] = Bucket{hash, slot};
-            }
-            void rebuild() {
-                // 表は2W以上の空間を確保し、削除マークが W を超えたら再構築する
-                table.assign(hash_size, Bucket{});
-                tombstones = 0;
-                for (std::size_t i = 0; i < items.size(); ++i) {
-                    if (items[i] && items[i]->has_hash) add_hash(items[i]->hash, static_cast<int>(i));
-                }
             }
         };
         Param p_;
@@ -441,20 +444,20 @@ private:
             limit_us_ = multi_detail::to_us(p_.time_limit_ms);
             if (p_.use_hash_dedup) {
                 const auto w = static_cast<std::uint64_t>(p_.beam_width);
-                const auto requested = p_.hash_capacity <= 0 ? 4 * w + 17 : static_cast<std::uint64_t>(p_.hash_capacity);
-                const auto capacity = std::clamp(requested, 2 * w + 1, 4 * w + 17);
-                hash_size_ = 1;
-                while (hash_size_ < capacity) hash_size_ *= 2;
+                // 削除時に穴を詰めるため、使用率を1/2以下にすれば空きバケットを保てる。
+                const auto requested = p_.hash_capacity <= 0 ? 2 * w : static_cast<std::uint64_t>(p_.hash_capacity);
+                const auto capacity = std::clamp(requested, 2 * w, 4 * w + 17);
+                hash_size_ = std::bit_ceil(capacity);
             }
             layers_.resize(static_cast<std::size_t>(p_.max_turn) + 1);
             completed_max_turn_ = p_.max_turn == 0;
             // NaN の初期コストでは探索を開始しない（push の候補数には含めない）
             if (valid_cost(cost)) {
                 Queue& q = layer(0);
-                q.insert(q.free_slots.back(), cost, hash, hashed, serial_++, [&]() -> State&& { return std::move(initial); });
+                q.insert(0, cost, hash, hashed, serial_++, [&]() -> State&& { return std::move(initial); });
                 rt_.stored_states = rt_.peak_stored_states = 1;
                 pending_ = p_.max_turn > 0 ? 1 : 0;
-                if (p_.max_turn == 0 && p_.max_turn_is_answer) save_best(*q.items[0], 0);
+                if (p_.max_turn == 0 && p_.max_turn_is_answer) save_best(*q.items[0], cost, 0);
             }
         }
         // 候補を検査し、受理時だけ状態を生成する、期待償却 O(log W + S)
@@ -476,25 +479,24 @@ private:
                 ++rt_.pruned_by_width;
                 return false;
             }
-            int slot = has_hash && p_.use_hash_dedup ? q.find(hash) : -1;
+            int slot = has_hash ? q.find(hash) : -1;
             const bool duplicate = slot >= 0;
             if (duplicate && !(cost < q.keys[static_cast<std::size_t>(slot)].cost)) {
                 ++rt_.pruned_by_hash;
                 return false;
             }
-            const bool replacing = duplicate || full;
-            if (!duplicate) slot = full ? q.worst() : q.free_slots.back();
+            if (!duplicate) slot = full ? q.worst() : q.free_slot();
             q.insert(slot, cost, hash, has_hash, serial_++, std::forward<Maker>(maker));
             ++rt_.accepted_candidates;
             if (duplicate) ++rt_.replaced_by_hash;
             else if (full) ++rt_.replaced_by_width;
-            if (!replacing) {
+            else {
                 ++rt_.stored_states;
                 if (turn < p_.max_turn) ++pending_;
                 rt_.peak_stored_states = std::max(rt_.peak_stored_states, rt_.stored_states);
             }
             if (turn == p_.max_turn) completed_max_turn_ = true;
-            if (finished || (p_.max_turn_is_answer && turn == p_.max_turn)) save_best(*q.items[static_cast<std::size_t>(slot)], turn);
+            if (finished || (p_.max_turn_is_answer && turn == p_.max_turn)) save_best(*q.items[static_cast<std::size_t>(slot)], cost, turn);
             return true;
         }
         // 探索し、最良状態を返す、候補数 G に対し期待 O(T W S + G(log W + S) + スイープ数 T)
@@ -506,8 +508,6 @@ private:
             rt_.stop_reason = reason();
             // スイープの境界でも時間を検査するので、空のターンが多くても制限を検出する
             while (rt_.stop_reason == StopReason::None) do_sweep(expand, hook, false);
-            sample_time();
-            rt_.stop_reason = reason();
             if (rt_.stop_reason == StopReason::TimeLimit && p_.finish_on_timeout && !rt_.found && pending_ > 0) {
                 do_sweep(expand, hook, true);
             }
@@ -535,12 +535,12 @@ private:
             if (!q) q = std::make_unique<Queue>(p_.beam_width, hash_size_);
             return *q;
         }
-        void save_best(const Item& item, int turn) {
+        void save_best(const State& state, Cost cost, int turn) {
             // 受理時の解をコピーし、後から同じスロットが置換されても失わない
-            if (!rt_.found || item.cost < rt_.best_cost) {
-                best_state_.emplace(item.state);
+            if (!rt_.found || cost < rt_.best_cost) {
+                best_state_.emplace(state);
                 rt_.found = true;
-                rt_.best_cost = item.cost;
+                rt_.best_cost = cost;
                 rt_.best_turn = turn;
                 ++rt_.best_update_count;
                 rt_.last_best_update_sweep = rt_.sweep;
@@ -579,12 +579,13 @@ private:
                 Queue& q = *ptr;
                 for (int k = 0; k < width && q.size > 0; ++k) {
                     const int slot = q.best();
-                    Item item = std::move(*q.items[static_cast<std::size_t>(slot)]);
+                    const Key key = q.keys[static_cast<std::size_t>(slot)];
+                    State item = std::move(*q.items[static_cast<std::size_t>(slot)]);
                     q.erase(slot);
                     --rt_.stored_states;
                     --pending_;
-                    StateView<State> now(turn, item.cost, item.state, item.hash, item.has_hash);
-                    Emitter<State> emit(*this, turn, item.hash);
+                    StateView<State> now(turn, key.cost, item, key.hash, key.has_hash);
+                    Emitter<State> emit(*this, turn, key.hash);
                     // Runtime ありの形式を優先し、利用するだけでは時計を追加で読まない
                     if constexpr (std::is_invocable_v<Expand&, const StateView<State>&, const Runtime&, Emitter<State>&>) {
                         expand(now, static_cast<const Runtime&>(rt_), emit);
@@ -654,7 +655,7 @@ template<class B, class U>
 bool push(typename B::template Emitter<std::remove_cvref_t<U>>& e, U&& state,
           typename B::cost_type cost, int step = 1, bool hashed = false,
           typename B::hash_type hash = {}, bool finished = false) {
-    if constexpr (requires { typename B::Param{}.max_step; }) {
+    if constexpr (requires (typename B::Param p) { p.max_step; }) {
         if (hashed) return e.push(std::forward<U>(state), cost, hash, step, finished);
         return e.push(std::forward<U>(state), cost, step, finished);
     } else {
@@ -666,7 +667,7 @@ bool push(typename B::template Emitter<std::remove_cvref_t<U>>& e, U&& state,
 template<class B, class S, class Maker>
 bool lazy(typename B::template Emitter<S>& e, typename B::cost_type cost, int step,
           bool hashed, typename B::hash_type hash, bool finished, Maker&& maker) {
-    if constexpr (requires { typename B::Param{}.max_step; }) {
+    if constexpr (requires (typename B::Param p) { p.max_step; }) {
         if (hashed) return e.push_lazy(cost, hash, step, finished, std::forward<Maker>(maker));
         return e.push_lazy(cost, step, finished, std::forward<Maker>(maker));
     } else {

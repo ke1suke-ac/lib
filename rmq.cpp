@@ -543,3 +543,73 @@ int main() {
 
     return 0;
 }
+
+// 実行結果(atcoder)
+// CartesianRMQは、遅すぎて使えず。。
+
+// ==== Correctness tests (with NaiveRMQ) ====
+// N = 10
+//   [SegmentTree (ACL)] correctness check
+//     OK (5000 random queries)
+//   [SparseTable] correctness check
+//     OK (5000 random queries)
+//   [Cartesian+Euler+Block+Table] correctness check
+//     OK (5000 random queries)
+
+// N = 1000
+//   [SegmentTree (ACL)] correctness check
+//     OK (3000 random queries)
+//   [SparseTable] correctness check
+//     OK (3000 random queries)
+//   [Cartesian+Euler+Block+Table] correctness check
+//     OK (3000 random queries)
+
+// ==== Benchmark tests (without NaiveRMQ) ====
+// N = 10
+//   [SegmentTree (ACL)]
+//     build: reps=2000, total=0.040178 ms, avg=2.0089e-05 ms
+//     query: Q=1000000, total=16.7197 ms, avg=16.7197 ns/query, checksum=221886474952933
+//   [SparseTable]
+//     build: reps=2000, total=0.091826 ms, avg=4.5913e-05 ms
+//     query: Q=1000000, total=1.4328 ms, avg=1.4328 ns/query, checksum=221886474952933
+
+// N = 100
+//   [SegmentTree (ACL)]
+//     build: reps=2000, total=0.160309 ms, avg=8.01545e-05 ms
+//     query: Q=1000000, total=33.7541 ms, avg=33.7541 ns/query, checksum=35704511303318
+//   [SparseTable]
+//     build: reps=2000, total=0.507829 ms, avg=0.000253915 ms
+//     query: Q=1000000, total=1.34454 ms, avg=1.34454 ns/query, checksum=35704511303318
+
+// N = 1000
+//   [SegmentTree (ACL)]
+//     build: reps=500, total=0.357022 ms, avg=0.000714044 ms
+//     query: Q=1000000, total=53.8697 ms, avg=53.8697 ns/query, checksum=14192494425618
+//   [SparseTable]
+//     build: reps=500, total=1.8367 ms, avg=0.0036734 ms
+//     query: Q=1000000, total=1.38929 ms, avg=1.38929 ns/query, checksum=14192494425618
+
+// N = 10000
+//   [SegmentTree (ACL)]
+//     build: reps=200, total=2.06037 ms, avg=0.0103018 ms
+//     query: Q=1000000, total=73.6328 ms, avg=73.6328 ns/query, checksum=1576403324115
+//   [SparseTable]
+//     build: reps=200, total=11.1417 ms, avg=0.0557087 ms
+//     query: Q=1000000, total=1.90583 ms, avg=1.90583 ns/query, checksum=1576403324115
+
+// N = 100000
+//   [SegmentTree (ACL)]
+//     build: reps=50, total=5.57057 ms, avg=0.111411 ms
+//     query: Q=1000000, total=93.3739 ms, avg=93.3739 ns/query, checksum=176742206457
+//   [SparseTable]
+//     build: reps=50, total=42.6555 ms, avg=0.853109 ms
+//     query: Q=1000000, total=4.90114 ms, avg=4.90114 ns/query, checksum=176742206457
+
+// N = 1000000
+//   [SegmentTree (ACL)]
+//     build: reps=5, total=13.2521 ms, avg=2.65042 ms
+//     query: Q=1000000, total=114.432 ms, avg=114.432 ns/query, checksum=25210134370
+//   [SparseTable]
+//     build: reps=5, total=87.0141 ms, avg=17.4028 ms
+//     query: Q=1000000, total=11.9064 ms, avg=11.9064 ns/query, checksum=25210134370
+
