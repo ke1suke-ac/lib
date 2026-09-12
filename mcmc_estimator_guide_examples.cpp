@@ -1,6 +1,6 @@
-// McmcEstimator guide v04: mcmc_estimator_v09.hppに対応。
-// MCMC_GUIDE_EXAMPLEを1〜15に設定して、実行する例を選ぶ。既定はU01。
-// 例: g++ -std=c++20 -O2 -DMCMC_GUIDE_EXAMPLE=4 mcmc_estimator_guide_examples_v04.cpp -o mcmc_guide_demo_v04
+// McmcEstimator guide v06: mcmc_estimator_v09.hppに対応。
+// MCMC_GUIDE_EXAMPLE: 基本U01〜U17は1〜17、U16-A/B/Cは161/162/163。既定はU01。
+// 例: g++ -std=c++20 -O2 -DMCMC_GUIDE_EXAMPLE=161 mcmc_estimator_guide_examples_v06.cpp -o mcmc_guide_demo_v06
 #ifndef MCMC_GUIDE_EXAMPLE
 #define MCMC_GUIDE_EXAMPLE 1
 #endif
@@ -674,6 +674,347 @@ int main() {
     return 0;
 }
 
+#elif MCMC_GUIDE_EXAMPLE == 16
+#include "mcmc_estimator_v09.hpp"
+
+using Solver = McmcEstimator<>;
+using AffineInput = std::array<double, 3>;
+// 1行 = { {x1, x2, x3}, 観測値y, 誤差の標準偏差scale, 重みweight }。
+// scaleとweightは省略すると1。二乗誤差を最小化するだけなら、この既定値でよい。
+using AffineRow = Solver::Observation<AffineInput>;
+struct AffineEstimate {
+    std::array<double, 3> a; // a[0]=a1, a[1]=a2, a[2]=a3
+    double b;
+};
+
+// 入力: 同じ未知係数で得た複数の観測、計算予算。
+// 出力: 探索中に見つけた最良の係数。評価が完了しなければnullopt。
+std::optional<AffineEstimate> fit_affine3(
+    std::vector<AffineRow> rows, Solver::Budget budget) {
+    assert(!rows.empty());
+    Solver::Parameters p;
+    // real(初期値, 下限, 上限)。範囲は問題の事前知識に合わせて変更する。
+    const std::array<std::size_t, 3> ai{
+        p.real(0, -10, 10), p.real(0, -10, 10), p.real(0, -10, 10)};
+    const auto bi = p.real(0, -10, 10);
+
+    // ライブラリが候補係数sを渡すので、そのときの計算結果を返す。
+    auto predict = [ai, bi](const AffineInput& x, const McmcState& s) {
+        return s.real[ai[0]] * x[0] + s.real[ai[1]] * x[1]
+             + s.real[ai[2]] * x[2] + s.real[bi];
+    };
+    // 既定のGaussian損失で、予測値と各行の観測値を比較する。
+    auto model = Solver::make_observation_model(std::move(rows), predict);
+    auto session = Solver::make_numeric_session(p, std::move(model));
+    const auto result = session.solve(budget);
+    if (!result.state) return std::nullopt;
+    const auto& s = *result.state;
+    return AffineEstimate{{s.real[ai[0]], s.real[ai[1]], s.real[ai[2]]}, s.real[bi]};
+}
+
+int main() {
+    // 動作確認用データ: y = 2*x1 - 3*x2 + 0.5*x3 + 1。
+    // 実際には、手元の入力と観測値からこのvectorを作る。
+    // 各入力を独立に変える。例えば常にx1=x2だとa1とa2を区別できない。
+    std::vector<AffineRow> rows;
+    for (double x1 : {-1.0, 0.0, 1.0})
+        for (double x2 : {-1.0, 0.0, 1.0})
+            for (double x3 : {-1.0, 0.0, 1.0})
+                rows.push_back({{x1, x2, x3}, 2*x1 - 3*x2 + 0.5*x3 + 1});
+
+    // 再現しやすいよう固定回数で実行。時間指定ならBudget::for_us(20'000)。
+    const auto r = fit_affine3(std::move(rows), Solver::Budget::for_steps(80'000));
+    if (!r) return 1;
+    std::cout << "a1=" << r->a[0] << " a2=" << r->a[1]
+              << " a3=" << r->a[2] << " b=" << r->b << '\n';
+    return 0;
+}
+
+#elif MCMC_GUIDE_EXAMPLE == 161
+#include "mcmc_estimator_v09.hpp"
+
+using Solver = McmcEstimator<>;
+using AffineInput = std::array<double, 3>;
+using AffineRow = Solver::Observation<AffineInput>;
+
+struct AffineSigmaEstimate {
+    std::array<double, 3> a; // a1,a2,a3
+    double b;
+    double sigma; // 全観測に共通するノイズの標準偏差
+};
+
+// 入力: {{x1,x2,x3}, 観測値y}の列、計算予算。
+// 全行でscale=1,weight=1とする。未知のsigmaは行に指定しない。
+// 出力: 予算内で見つけた最良の四係数とsigma。候補なしならnullopt。
+std::optional<AffineSigmaEstimate> fit_affine3_joint_sigma(
+    std::vector<AffineRow> rows, Solver::Budget budget) {
+    assert(!rows.empty());
+    assert(std::all_of(rows.begin(), rows.end(), [](const AffineRow& row) {
+        return row.scale == 1 && row.weight == 1;
+    }));
+    Solver::Parameters p;
+    const std::array<std::size_t, 3> ai{
+        p.real(0, -10, 10), p.real(0, -10, 10), p.real(0, -10, 10)};
+    const auto bi = p.real(0, -10, 10);
+    // real(初期値,下限,上限)。sigmaの範囲は観測値の単位に合わせて変更する。
+    const auto si = p.real(1.0, 0.001, 10.0);
+
+    // 候補係数から平均値を予測する。ここで乱数を加えない。
+    auto predict = [ai, bi](const AffineInput& x, const McmcState& s) {
+        return s.real[ai[0]]*x[0] + s.real[ai[1]]*x[1]
+             + s.real[ai[2]]*x[2] + s.real[bi];
+    };
+    // 既知のrow.scaleではなく、候補状態に入っている共通sigmaを使う。
+    auto loss = [si](const McmcState& s, const AffineRow& row, double predicted) {
+        // gaussian_lossは、二乗誤差項とlog(sigma)の両方を含む。
+        return Solver::gaussian_loss(row.value, predicted, s.real[si]);
+    };
+    auto model = Solver::make_observation_model(std::move(rows), predict, loss);
+    auto session = Solver::make_numeric_session(p, std::move(model));
+    const auto result = session.solve(budget);
+    if (!result.state) return std::nullopt;
+    const auto& s = *result.state;
+    return AffineSigmaEstimate{
+        {s.real[ai[0]], s.real[ai[1]], s.real[ai[2]]}, s.real[bi], s.real[si]};
+}
+
+int main() {
+    // 動作確認用: a=(2,-3,0.5),b=1、独立な正規ノイズの標準偏差は0.2。
+    // 真値はデータ生成にだけ使う。推定関数へsigmaの真値を渡さない。
+    std::mt19937 rng(1);
+    std::normal_distribution<double> noise(0.0, 0.2);
+    std::vector<AffineRow> rows;
+    for (int repeat = 0; repeat < 4; ++repeat)
+        for (double x1 : {-1.0, 0.0, 1.0})
+            for (double x2 : {-1.0, 0.0, 1.0})
+                for (double x3 : {-1.0, 0.0, 1.0})
+                    rows.push_back({{x1,x2,x3}, 2*x1 - 3*x2 + 0.5*x3 + 1 + noise(rng)});
+
+    // 実際には手元の観測列を渡す。時間指定ならBudget::for_us(20'000)など。
+    const auto r = fit_affine3_joint_sigma(std::move(rows), Solver::Budget::for_steps(80'000));
+    if (!r) return 1;
+    std::cout << "a1=" << r->a[0] << " a2=" << r->a[1]
+              << " a3=" << r->a[2] << " b=" << r->b << " sigma=" << r->sigma << '\n';
+    return 0;
+}
+
+#elif MCMC_GUIDE_EXAMPLE == 162
+#include "mcmc_estimator_v09.hpp"
+
+using Solver = McmcEstimator<>;
+using AffineInput = std::array<double, 3>;
+using AffineRow = Solver::Observation<AffineInput>;
+
+struct AffineSigmaEstimate {
+    std::array<double, 3> a; // a1,a2,a3
+    double b;
+    double sigma; // sqrt(残差平方和/観測数)。完全一致なら0になり得る。
+};
+
+// 入力: {{x1,x2,x3}, 観測値y}の列、計算予算。
+// 共通の未知sigmaを推定するため、全行でscale=1,weight=1とする。
+// 出力: 最良の四係数と、その残差から計算したsigma。候補なしならnullopt。
+std::optional<AffineSigmaEstimate> fit_affine3_residual_sigma(
+    std::vector<AffineRow> rows, Solver::Budget budget) {
+    assert(!rows.empty());
+    assert(std::all_of(rows.begin(), rows.end(), [](const AffineRow& row) {
+        return row.scale == 1 && row.weight == 1;
+    }));
+    Solver::Parameters p;
+    const std::array<std::size_t, 3> ai{
+        p.real(0, -10, 10), p.real(0, -10, 10), p.real(0, -10, 10)};
+    const auto bi = p.real(0, -10, 10);
+    auto predict = [ai, bi](const AffineInput& x, const McmcState& s) {
+        return s.real[ai[0]]*x[0] + s.real[ai[1]]*x[1]
+             + s.real[ai[2]]*x[2] + s.real[bi];
+    };
+    // 探索するのは四係数だけ。既定のGaussian損失で二乗誤差を小さくする。
+    auto session = Solver::make_numeric_session(p,
+        Solver::make_observation_model(std::move(rows), predict));
+    const auto result = session.solve(budget);
+    if (!result.state) return std::nullopt;
+    const auto& s = *result.state;
+
+    // Sessionが所有する観測と予測関数を再利用し、残差平方和を計算する。
+    // この全観測の走査はsolveから戻った後に行うので、実時間予算に余裕を残す。
+    const auto& model = session.model();
+    double rss = 0;
+    for (const auto& row : model.observations()) {
+        const double residual = row.value - model.prediction(row.input, s);
+        rss += residual * residual;
+    }
+    const double sigma = std::sqrt(rss / static_cast<double>(model.size()));
+    return AffineSigmaEstimate{
+        {s.real[ai[0]], s.real[ai[1]], s.real[ai[2]]}, s.real[bi], sigma};
+}
+
+int main() {
+    // U16-Aと同じ観測を作り、残差からのsigma推定と比較できるようにする。
+    std::mt19937 rng(1);
+    std::normal_distribution<double> noise(0.0, 0.2);
+    std::vector<AffineRow> rows;
+    for (int repeat = 0; repeat < 4; ++repeat)
+        for (double x1 : {-1.0, 0.0, 1.0})
+            for (double x2 : {-1.0, 0.0, 1.0})
+                for (double x3 : {-1.0, 0.0, 1.0})
+                    rows.push_back({{x1,x2,x3}, 2*x1 - 3*x2 + 0.5*x3 + 1 + noise(rng)});
+
+    const auto r = fit_affine3_residual_sigma(std::move(rows), Solver::Budget::for_steps(80'000));
+    if (!r) return 1;
+    std::cout << "a1=" << r->a[0] << " a2=" << r->a[1]
+              << " a3=" << r->a[2] << " b=" << r->b << " sigma=" << r->sigma << '\n';
+    return 0;
+}
+
+#elif MCMC_GUIDE_EXAMPLE == 163
+#include "mcmc_estimator_v09.hpp"
+
+using Solver = McmcEstimator<>;
+using AffineInput = std::array<double, 3>;
+
+// 入力x1,x2,x3と観測値yは実数でよい。整数に制限するのは四係数。
+// 1行 = {{x1,x2,x3}, y, 誤差の標準偏差scale, 重みweight}。
+// scaleとweightは省略すると1。既知の標準偏差sigma>0は第3要素に指定する。
+using AffineRow = Solver::Observation<AffineInput>;
+
+struct AffineIntegerEstimate {
+    std::array<std::int64_t, 3> a; // a[0]=a1, a[1]=a2, a[2]=a3
+    std::int64_t b;
+};
+
+// 入力: 全観測に共通する整数係数で得た観測、計算予算。
+// 出力: 探索中に見つけた最良の整数係数。候補を得られなければnullopt。
+std::optional<AffineIntegerEstimate> fit_affine3_integer(
+    std::vector<AffineRow> rows, Solver::Budget budget) {
+
+    assert(!rows.empty());
+    Solver::Parameters p;
+
+    // integer(初期値, 下限, 上限)。上下限を含む整数だけを探索する。
+    // 範囲は問題の事前知識に合わせて変更する。
+    const std::array<std::size_t, 3> ai{
+        p.integer(0, -10, 10),
+        p.integer(0, -10, 10),
+        p.integer(0, -10, 10)
+    };
+    const auto bi = p.integer(0, -10, 10);
+
+    // 整数係数はstate.discreteから読む。
+    // 入力xがdoubleなので、予測値の計算はdoubleになる。
+    auto predict = [ai, bi](const AffineInput& x, const McmcState& s) {
+        return s.discrete[ai[0]] * x[0]
+             + s.discrete[ai[1]] * x[1]
+             + s.discrete[ai[2]] * x[2]
+             + s.discrete[bi];
+    };
+
+    // 既定のGaussian損失で、予測値と実測値を比較する。
+    auto model = Solver::make_observation_model(std::move(rows), predict);
+    auto session = Solver::make_numeric_session(p, std::move(model));
+    const auto result = session.solve(budget);
+    if (!result.state) return std::nullopt;
+
+    const auto& s = *result.state;
+    return AffineIntegerEstimate{
+        {s.discrete[ai[0]], s.discrete[ai[1]], s.discrete[ai[2]]},
+        s.discrete[bi]
+    };
+}
+
+int main() {
+    // 動作確認用データ: y = 2*x1 - 3*x2 + x3 + 1。
+    // 真の係数a1=2,a2=-3,a3=1,b=1は、全て整数。
+    // 実際には、この生成部分を手元の入力と観測値に置き換える。
+    std::vector<AffineRow> rows;
+    for (double x1 : {-1.0, 0.0, 1.0})
+        for (double x2 : {-0.5, 0.0, 0.5})
+            for (double x3 : {-0.25, 0.0, 0.25})
+                rows.push_back({{x1,x2,x3}, 2*x1 - 3*x2 + x3 + 1});
+
+    // 固定回数で実行。時間指定ならBudget::for_us(20'000)など。
+    const auto r = fit_affine3_integer(
+        std::move(rows), Solver::Budget::for_steps(80'000));
+    if (!r) return 1;
+
+    std::cout << "a1=" << r->a[0] << " a2=" << r->a[1]
+              << " a3=" << r->a[2] << " b=" << r->b << '\n';
+    return 0;
+}
+
+#elif MCMC_GUIDE_EXAMPLE == 17
+#include "mcmc_estimator_v09.hpp"
+
+using Solver = McmcEstimator<>;
+
+// 1行 = {入力x, 観測値y, 誤差の標準偏差scale, 重みweight}。
+// scaleとweightは省略すると1。通常の二乗誤差なら省略してよい。
+using FunctionRow = Solver::Observation<double>;
+
+struct FunctionEstimate {
+    int t; // 1: a*x+b、2: a*x*x+b、3: a*sin(x)+b
+    double a, b;
+};
+
+// 入力: 全観測に共通の未知t,a,bで得た観測、計算予算。
+// xの単位はラジアン。
+// 出力: 探索中に見つけた最良の組。評価が完了しなければnullopt。
+std::optional<FunctionEstimate> fit_function_type(
+    std::vector<FunctionRow> rows, Solver::Budget budget) {
+
+    assert(!rows.empty());
+    Solver::Parameters p;
+
+    // category(初期ID, 候補数)。内部IDは0,1,2なので、t=内部ID+1。
+    const auto ti = p.category(0, 3);
+
+    // real(初期値, 下限, 上限)。範囲は問題に合わせて変更する。
+    const auto ai = p.real(0, -10, 10);
+    const auto bi = p.real(0, -10, 10);
+
+    // 候補のt,a,bと入力xから予測値を計算する。
+    auto predict = [ti, ai, bi](double x, const McmcState& s) {
+        const double a = s.real[ai], b = s.real[bi];
+        switch (s.discrete[ti]) {
+            case 0: return a*x + b;            // t=1
+            case 1: return a*x*x + b;          // t=2
+            default: return a*std::sin(x) + b; // t=3
+        }
+    };
+
+    // 式の種類tと実数a,bを一緒に探索する。
+    auto model = Solver::make_observation_model(std::move(rows), predict);
+    auto session = Solver::make_numeric_session(p, std::move(model));
+    const auto result = session.solve(budget);
+    if (!result.state) return std::nullopt;
+
+    const auto& s = *result.state;
+    return FunctionEstimate{
+        static_cast<int>(s.discrete[ti]) + 1, s.real[ai], s.real[bi]};
+}
+
+int main() {
+    // 3種類それぞれを、真の係数a=2,b=1で試す。
+    // true_tは動作確認用データの生成にだけ使い、推定関数には渡さない。
+    for (int true_t : {1, 2, 3}) {
+        // 実際には、手元の入力と観測値からこのvectorを作る。
+        std::vector<FunctionRow> rows;
+        for (double x : {-3.0, -2.0, -1.0, 0.0, 1.0, 2.0, 3.0}) {
+            const double response = true_t == 1 ? x
+                                  : true_t == 2 ? x*x : std::sin(x);
+            rows.push_back({x, 2*response + 1});
+        }
+
+        // 固定回数で実行。時間指定ならBudget::for_us(20'000)など。
+        const auto r = fit_function_type(
+            std::move(rows), Solver::Budget::for_steps(80'000));
+        if (!r) return 1;
+
+        std::cout << "true_t=" << true_t << " estimated_t=" << r->t
+                  << " a=" << r->a << " b=" << r->b << '\n';
+    }
+    return 0;
+}
+
 #else
-#error "MCMC_GUIDE_EXAMPLE must be between 1 and 15"
+#error "MCMC_GUIDE_EXAMPLE must be 1..17 or 161..163"
 #endif
