@@ -163,15 +163,6 @@ private:
         }
     };
 
-    template <class Calc>
-    static Calc infinity() {
-        if constexpr (std::floating_point<Calc>) {
-            return std::numeric_limits<Calc>::infinity();
-        } else {
-            return std::numeric_limits<Calc>::max() / 4;
-        }
-    }
-
     template <class Calc, class Distance>
     static Calc total_local(std::span<const int> order, const Distance& dist, bool cycle) {
         const int n = static_cast<int>(order.size());
@@ -332,6 +323,7 @@ private:
                                             const CandidateSet& block_candidates, const TSPParam& block_param,
                                             SearchControl& block_control, Move& block_move,
                                             std::vector<int>& block_touched) -> bool {
+                if (block_control.timed_out) return false;
                 static constexpr auto block_swap_delta = [](std::span<const int> delta_route, const Distance& delta_dist,
                                       bool delta_cycle, int i, int j, int k) -> Calc {
                     const int delta_n = static_cast<int>(delta_route.size());
@@ -377,6 +369,7 @@ private:
             scan_move = Move{};
 
             auto consider_two_opt = [&](int l, int r, int other) {
+                if (scan_control.timed_out) return false;
                 if (l < 0 || r >= scan_n || l >= r) return false;
                 if (scan_param.fixed_start && l == 0) return false;
                 if (!scan_param.cycle && scan_param.fixed_end && r == scan_n - 1) return false;
@@ -393,6 +386,7 @@ private:
             };
 
             auto consider_relocate = [&](int l, int length, int after, int other) {
+                if (scan_control.timed_out) return false;
                 if (!valid_relocate(scan_n, scan_param.cycle, scan_param.fixed_start, scan_param.fixed_end,
                                     l, length, after)) {
                     return false;
@@ -408,6 +402,7 @@ private:
             };
 
             auto consider_swap = [&](int other) {
+                if (scan_control.timed_out) return false;
                 const int po = scan_position[other];
                 if (po == pv) return false;
                 if (scan_param.fixed_start && (pv == 0 || po == 0)) return false;
@@ -581,11 +576,11 @@ private:
                 const int reserved_end = (!nn_param.cycle && nn_param.fixed_end) ? nn_n - 1 : -1;
                 while (static_cast<int>(nn_route.size()) < nn_n - (reserved_end >= 0 ? 1 : 0)) {
                     int best = -1;
-                    Calc best_cost = infinity<Calc>();
+                    Calc best_cost{};
                     for (int v = 0; v < nn_n; ++v) {
                         if (used[v] || v == reserved_end) continue;
                         const Calc cost = nn_dist(nn_current, v);
-                        if (cost < best_cost) {
+                        if (best < 0 || cost < best_cost) {
                             best_cost = cost;
                             best = v;
                         }
@@ -609,7 +604,7 @@ private:
                                      first_construction_end - construction_begin)
                                      .count();
 
-        // 旧探索でも順序を変更できない退化入力では、無効なkickを繰り返さない。
+        // 小規模入力は構築結果を返し、無効なkickを繰り返さない。
         if (n <= 2 || (!param.cycle && param.fixed_start && param.fixed_end && n == 3)) {
             for (int i = 0; i < n; ++i) output[i] = vertices[route[i]];
             stats->total_ms = std::chrono::duration<double, std::milli>(
@@ -746,8 +741,9 @@ private:
     
             const std::uint64_t repair_states = std::uint64_t{1} << repair_window;
             const std::uint64_t repair_full = repair_states - 1;
-            const Calc repair_inf = infinity<Calc>();
-            std::vector<Calc> repair_dp(static_cast<std::size_t>(repair_states) * static_cast<std::size_t>(repair_window), repair_inf);
+            // 有限距離の完全グラフなので、集合内の各終点へ必ず到達できる。
+            // 未設定の遷移先はparentで区別し、コスト値を番兵として使わない。
+            std::vector<Calc> repair_dp(static_cast<std::size_t>(repair_states) * static_cast<std::size_t>(repair_window));
             std::vector<signed char> repair_parent(static_cast<std::size_t>(repair_states) *
                                             static_cast<std::size_t>(repair_window), -1);
     
@@ -783,7 +779,6 @@ private:
                     const int repair_last = std::countr_zero(repair_last_bits);
                     repair_last_bits &= repair_last_bits - 1;
                     const Calc repair_value = repair_dp[repair_index(repair_mask, repair_last)];
-                    if (repair_value == repair_inf) continue;
                     std::uint64_t repair_next_bits = repair_remaining;
                     while (repair_next_bits != 0) {
                         const int repair_next = std::countr_zero(repair_next_bits);
@@ -792,7 +787,8 @@ private:
                         const Calc repair_candidate = repair_value +
                             repair_local_distance[static_cast<std::size_t>(repair_last) * repair_window + repair_next];
                         Calc& repair_destination = repair_dp[repair_index(repair_next_mask, repair_next)];
-                        if (repair_candidate < repair_destination) {
+                        if (repair_parent[repair_index(repair_next_mask, repair_next)] < 0 ||
+                            repair_candidate < repair_destination) {
                             repair_destination = repair_candidate;
                             repair_parent[repair_index(repair_next_mask, repair_next)] = static_cast<signed char>(repair_last);
                         }
@@ -802,11 +798,11 @@ private:
                 }
             }
     
-            Calc repair_best = repair_inf;
+            Calc repair_best{};
             int repair_best_last = -1;
             for (int repair_last = 0; repair_last < repair_window; ++repair_last) {
                 const Calc repair_candidate = repair_dp[repair_index(repair_full, repair_last)] + repair_right_distance[repair_last];
-                if (repair_candidate < repair_best) {
+                if (repair_best_last < 0 || repair_candidate < repair_best) {
                     repair_best = repair_candidate;
                     repair_best_last = repair_last;
                 }
@@ -962,7 +958,6 @@ auto held_karp_tsp(std::span<T> order, const F& dist, bool cycle,
     const bool anchored = cycle || fixed_start;
     const int offset = anchored ? 1 : 0;
     const int m = n - offset - static_cast<int>(fixed_end);
-    const Result inf = TSPParam::infinity<Result>();
     std::vector<Result> distance_cache(static_cast<std::size_t>(n) * n);
     for (int a = 0; a < n; ++a) {
         for (int b = 0; b < n; ++b) {
@@ -976,7 +971,8 @@ auto held_karp_tsp(std::span<T> order, const F& dist, bool cycle,
         return static_cast<std::size_t>(mask) * static_cast<std::size_t>(m) +
                static_cast<std::size_t>(last);
     };
-    std::vector<Result> dp(static_cast<std::size_t>(states) * m, inf);
+    // 全距離が有限なので有効状態はすべて到達可能。最大整数も通常の費用として扱う。
+    std::vector<Result> dp(static_cast<std::size_t>(states) * m);
     std::vector<signed char> parent(static_cast<std::size_t>(states) * m, -1);
     for (int first = 0; first < m; ++first) {
         dp[index(std::uint64_t{1} << first, first)] =
@@ -989,31 +985,32 @@ auto held_karp_tsp(std::span<T> order, const F& dist, bool cycle,
             last_bits &= last_bits - 1;
             const std::uint64_t previous_mask = mask ^ (std::uint64_t{1} << last);
             if (previous_mask == 0) continue;
-            Result best_value = inf;
+            Result best_value{};
             int best_previous = -1;
             std::uint64_t previous_bits = previous_mask;
             while (previous_bits != 0) {
                 const int previous = std::countr_zero(previous_bits);
                 previous_bits &= previous_bits - 1;
                 const Result value = dp[index(previous_mask, previous)];
-                if (value == inf) continue;
                 const Result candidate = value + distance_cache[
                     static_cast<std::size_t>(previous + offset) * n + last + offset];
-                if (candidate < best_value) { best_value = candidate; best_previous = previous; }
+                if (best_previous < 0 || candidate < best_value) {
+                    best_value = candidate;
+                    best_previous = previous;
+                }
             }
             dp[index(mask, last)] = best_value;
             parent[index(mask, last)] = static_cast<signed char>(best_previous);
         }
     }
     const std::uint64_t full = states - 1;
-    Result best = inf;
+    Result best{};
     int last_best = -1;
     for (int last = 0; last < m; ++last) {
         Result candidate = dp[index(full, last)];
-        if (candidate == inf) continue;
         if (cycle || fixed_end) candidate += distance_cache[
             static_cast<std::size_t>(last + offset) * n + (cycle ? 0 : n - 1)];
-        if (candidate < best) { best = candidate; last_best = last; }
+        if (last_best < 0 || candidate < best) { best = candidate; last_best = last; }
     }
     assert(last_best >= 0);
     std::uint64_t mask = full;
@@ -1039,7 +1036,106 @@ auto held_karp_tsp(std::vector<T, Allocator>& order, const F& dist,
 
 #if __INCLUDE_LEVEL__ == 0
 
+// 大きな有限費用、負辺、評価回数制限を独立した全列挙・再計算で検証する
+void test_tsp_review_regressions() {
+    auto check = [](bool ok) { if (!ok) std::abort(); };
+    auto check_exact = [&]<class Cost>() {
+        const Cost maximum = std::numeric_limits<Cost>::max();
+        std::vector<int> two = {0, 1};
+        auto extreme_dist = [&](int a, int b) -> Cost {
+            return a == 0 && b == 1 ? maximum : Cost{};
+        };
+        check(tsp::held_karp_tsp<Cost>(two, extreme_dist) == maximum);
+        two = {0, 1};
+        check(tsp::held_karp_tsp<Cost>(two, extreme_dist, false, true) == maximum);
+
+        // 小さい係数に大きな定数を掛け、すべての部分和が型に収まる入力を作る。
+        std::mt19937_64 random(419020);
+        const Cost scale = maximum / 64;
+        for (int trial = 0; trial < 48; ++trial) {
+            const int n = 2 + trial % 6;
+            std::vector<std::vector<Cost>> matrix(n, std::vector<Cost>(n));
+            for (int a = 0; a < n; ++a) for (int b = 0; b < n; ++b) {
+                if (a != b) matrix[a][b] = scale *
+                    static_cast<Cost>(static_cast<int>(random() % 5) + (trial % 2 ? -2 : 1));
+            }
+            auto dist = [&](int a, int b) { return matrix[(a + 7) / 3][(b + 7) / 3]; };
+            for (bool cycle : {false, true}) for (bool start : {false, true}) {
+                for (bool finish : {false, true}) {
+                    if (cycle && finish) continue;
+                    std::vector<int> order(n);
+                    for (int i = 0; i < n; ++i) order[i] = 3 * i - 7;
+                    const auto vertices = order;
+                    Cost optimum = maximum;
+                    do {
+                        if (start && order.front() != vertices.front()) continue;
+                        if (finish && order.back() != vertices.back()) continue;
+                        Cost sum{};
+                        for (int i = 1; i < n; ++i) sum += dist(order[i - 1], order[i]);
+                        if (cycle) sum += dist(order.back(), order.front());
+                        optimum = std::min(optimum, sum);
+                    } while (std::next_permutation(order.begin(), order.end()));
+                    order = vertices;
+                    const Cost answer = tsp::held_karp_tsp<Cost>(order, dist, cycle, start, finish);
+                    check(answer == optimum);
+                    check(answer == tsp::total_distance<Cost>(std::span<const int>(order), dist, cycle));
+                    if (start) check(order.front() == vertices.front());
+                    if (finish) check(order.back() == vertices.back());
+                    std::sort(order.begin(), order.end());
+                    check(order == vertices);
+                }
+            }
+        }
+    };
+    check_exact.template operator()<long long>();
+    check_exact.template operator()<__int128_t>();
+
+    // 小区間repairの部分和が大きな有限値でも、正常な順列と費用を返す。
+    for (const long long cost : {std::numeric_limits<long long>::max() / 16,
+                                600'000'000'000'000'000LL}) {
+        std::vector<int> order = {0, 1, 2, 3, 4};
+        auto dist = [&](int a, int b) { return a == b ? 0LL : cost; };
+        tsp::TSPParam param;
+        param.time_limit_ms = 1000;
+        param.max_move_evaluations = 3000;
+        tsp::TSPStats stats;
+        check(tsp::improve_tsp(order, dist, param, &stats) == cost * 5);
+        check(stats.exact_repairs > 0);
+        std::sort(order.begin(), order.end());
+        check(order == std::vector<int>({0, 1, 2, 3, 4}));
+    }
+
+    // 終了する近傍の種類によらず、上限後の次候補を評価しない。
+    for (bool symmetric : {false, true}) for (int mode = 0; mode < 6; ++mode) {
+        auto dist = [&](int a, int b) {
+            if (symmetric && a > b) std::swap(a, b);
+            return a == b ? 0LL : static_cast<long long>((a * 17 + b * 31 + mode) % 53);
+        };
+        for (unsigned limit = 1; limit <= 80; ++limit) {
+            std::vector<int> order = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+            tsp::TSPParam param;
+            param.time_limit_ms = 1000;
+            param.max_move_evaluations = limit;
+            param.symmetric = symmetric;
+            param.cycle = mode == 0 || mode == 1;
+            param.fixed_start = mode == 1 || mode == 3 || mode == 5;
+            param.fixed_end = mode == 4 || mode == 5;
+            tsp::TSPStats stats;
+            const auto before = tsp::total_distance(std::span<const int>(order), dist, param.cycle);
+            const auto result = tsp::improve_tsp(order, dist, param, &stats);
+            check(stats.move_evaluations <= limit);
+            check(result <= before);
+            check(result == tsp::total_distance(std::span<const int>(order), dist, param.cycle));
+            if (param.fixed_start) check(order.front() == 0);
+            if (param.fixed_end) check(order.back() == 8);
+            std::sort(order.begin(), order.end());
+            check(order == std::vector<int>({0, 1, 2, 3, 4, 5, 6, 7, 8}));
+        }
+    }
+}
+
 int main() {
+    test_tsp_review_regressions();
     auto require_test = [&](bool condition, std::string_view message) {
         if (condition) return;
         std::cerr << "test failed: " << message << '\n';

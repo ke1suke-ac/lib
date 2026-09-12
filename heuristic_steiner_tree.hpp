@@ -1,5 +1,4 @@
 #pragma once
-// v17: scoped implementation helpers; public calls and search algorithms preserved.
 #include <bits/stdc++.h>
 
 /*
@@ -50,6 +49,8 @@ key-path 交換、elite 解合成を組み合わせる。同じグラフで繰�
     L は正規化する候補辺集合の最大長で、入力や経路展開に含まれる重複も数える。
     無向グラフ、非負 long long 重みを前提とする。
     多重辺に対応し、自己ループは入力可能だが解の改善には使われない。
+    距離と候補解の費用和は inf() 未満に収める。augment の既設辺の元費用は加算しない。
+    頂点・辺・両方向 arc の個数と添字は int の範囲内に収める。
     terminals の重複は各公開 solve/repair 系メソッド内で除去する。
     time_limit_ms が 0 かつ deadline 未指定なら固定反復数で動作し、同一入力・seed なら決定的になる。
     time_limit_ms と deadline の早い方を停止目標にする。どちらも soft limit であり、
@@ -173,22 +174,27 @@ private:
         }
 
     public:
+        // 保持しているキーを全て取り除く O(1)、バケット数は 65
         void clear() {
             for (auto &bucket : buckets_) bucket.clear();
             last_ = 0;
             size_ = 0;
         }
 
+        // キューが空かを返す O(1)
         bool empty() const {
             return size_ == 0;
         }
 
+        // 単調な非負距離の候補を追加する 償却 O(1)
         void push(key_type key, value_type value) {
             buckets_[bucket_index(key, last_)].push_back({key, value});
             ++size_;
         }
 
+        // 最小キーと頂点を取り出す 償却 O(log C)
         std::pair<key_type, value_type> pop() {
+            // 最初の非空バケットの最小値を新しい基準とし、候補を振り分け直す
             if (buckets_[0].empty()) {
                 int bucket_id = 1;
                 while (bucket_id < 65 && buckets_[bucket_id].empty()) ++bucket_id;
@@ -205,6 +211,7 @@ private:
                 buckets_[bucket_id].clear();
             }
 
+            // 基準値に等しい候補を 1 個取り出す
             const auto result = buckets_[0].back();
             buckets_[0].pop_back();
             --size_;
@@ -219,16 +226,20 @@ private:
         int terminal_components_ = 0;
 
     public:
+        // n 個の独立な成分を構築する O(n)
         explicit dsu(int n)
             : parent_(n, -1), has_terminal_(n, false) {}
 
+        // 併合前の頂点を terminal として登録する O(1)
         void set_terminal(int vertex) {
             if (has_terminal_[vertex]) return;
             has_terminal_[vertex] = true;
             ++terminal_components_;
         }
 
+        // 2 成分を併合し、terminal を含む成分数を更新する 償却 O(alpha(N))
         bool merge(int a, int b) {
+            // 根を求め、辿った経路を根へ直接つなぎ直す
             const auto leader = [&](int vertex) -> int {
                 int root = vertex;
                 while (parent_[root] >= 0) root = parent_[root];
@@ -237,6 +248,7 @@ private:
 
             };
 
+            // 小さい成分を大きい成分へ併合する
             a = leader(a);
             b = leader(b);
             if (a == b) return false;
@@ -248,6 +260,7 @@ private:
             return true;
         }
 
+        // 全 terminal が同じ成分に含まれるかを返す O(1)
         bool terminals_connected() const {
             return terminal_components_ <= 1;
         }
@@ -274,6 +287,7 @@ private:
         std::chrono::steady_clock::time_point begin;
         std::chrono::steady_clock::time_point stop;
 
+        // 相対予算と絶対 deadline の早い方を停止目標にする O(1)
         explicit time_controller(const heuristic_steiner_tree_options &options)
             : begin(std::chrono::steady_clock::now()), stop(options.deadline) {
             if (options.time_limit_ms > 0) {
@@ -282,16 +296,20 @@ private:
             }
         }
 
+        // 停止目標に到達したかを返す O(1)
         bool over() const {
             return stop != std::chrono::steady_clock::time_point::max() &&
                 std::chrono::steady_clock::now() >= stop;
         }
 
+        // 指定割合の予算を使い切ったかを返す O(1)
         bool over_fraction(int numerator, int denominator) const {
             assert(0 <= numerator && numerator <= denominator && 0 < denominator);
             if (stop == std::chrono::steady_clock::time_point::max()) return false;
             const auto budget = stop > begin ? stop - begin : std::chrono::steady_clock::duration::zero();
-            const auto threshold = begin + budget * numerator / denominator;
+            // 商と余りに分け、遠い deadline でも倍率の乗算をオーバーフローさせない
+            const auto threshold = begin + budget / denominator * numerator +
+                budget % denominator * numerator / denominator;
             return std::chrono::steady_clock::now() >= threshold;
         }
 
@@ -388,7 +406,7 @@ private:
         }
     }
 
-    // 不要な構築を遅延する。構築時間を相対予算から除く従来の扱いは保つ
+    // 構築を必要時まで遅延し、構築時間を相対予算から除く
     void ensure_workspace(solve_workspace &workspace, time_controller &timer,
                           const heuristic_steiner_tree_options &options) const {
         if (workspace_ready_) return;
@@ -746,6 +764,8 @@ private:
         return heuristic_steiner_tree_path_mode::on_demand;
     }
 
+    // 既設辺を含む場合は葉刈りだけを行い、呼び出し元で追加費用を集計する
+    template <bool sum_cost = true>
     tree_solution prune_tree(std::vector<int> tree_edges,
                              const std::vector<int> &terminals) const {
         tree_solution result;
@@ -804,7 +824,7 @@ private:
         for (int local_id = 0; local_id < tree_size; ++local_id) {
             if (!alive[local_id]) continue;
             result.edges.push_back(tree_edges[local_id]);
-            result.cost += edges_[tree_edges[local_id]].cost;
+            if constexpr (sum_cost) result.cost += edges_[tree_edges[local_id]].cost;
         }
         std::sort(result.edges.begin(), result.edges.end());
         return result;
@@ -872,8 +892,7 @@ private:
             }
         }
         if (!connected) return {};
-        tree_solution result = prune_tree(std::move(tree_edges), terminals);
-        result.cost = 0;
+        tree_solution result = prune_tree<false>(std::move(tree_edges), terminals);
         for (int edge_id : result.edges) {
             if (!is_free[edge_id]) result.cost += edges_[edge_id].cost;
         }
@@ -1223,8 +1242,7 @@ private:
                 }
             }
             if (!connected) return {};
-            tree_solution result = prune_tree(std::move(tree_edges), local_terminals);
-            result.cost = 0;
+            tree_solution result = prune_tree<false>(std::move(tree_edges), local_terminals);
             for (int edge_id : result.edges) {
                 if (!local_is_free[edge_id]) result.cost += edges_[edge_id].cost;
             }
@@ -1609,7 +1627,7 @@ private:
         }
     }
 
-    // 従来のelite局所探索を完了してから、残り予算で最良解だけを改善する。
+    // elite 局所探索を完了してから、残り予算で最良解だけを改善する
     void final_refinement(tree_solution &best, const std::vector<int> &terminals,
         const std::vector<int> &free_edges, const std::vector<char> &is_free,
         bool quality, const time_controller &timer, solve_workspace &workspace,
@@ -1621,7 +1639,7 @@ private:
         };
 
         // 頂点ごとに全key-pathを再走査せず、端点の索引を1回だけ構築する。
-        // 各頂点内のpath順と、候補の費用降順・頂点番号昇順は従来の列挙と同じ。
+        // 各頂点内は path 順とし、候補は費用降順・頂点番号昇順で列挙する。
         const auto enumerate_branch_neighborhoods = [&](
             const std::vector<key_path> &paths,
             const std::vector<int> &local_terminals) -> std::pair<std::vector<branch_neighborhood>, std::vector<int>> {
@@ -1935,7 +1953,7 @@ public:
         assert(n >= 0);
     }
 
-    // 無向辺を追加し、その 0-indexed 辺番号を返す O(1)
+    // 無向辺を追加し、その 0-indexed 辺番号を返す 償却 O(1)
     int add_edge(int u, int v, long long w) {
         assert(0 <= u && u < n_ && 0 <= v && v < n_ && 0 <= w);
         const int edge_id = static_cast<int>(edges_.size());
@@ -2520,9 +2538,7 @@ public:
         return result;
     }
 
-    // N=頂点数、M=辺数、K=terminal 数、A=preset/restart 由来の試行数とする。
-    // オプションは省略可能。ヒューリスティックな Steiner tree を求める
-    // O(A * (K * (N + M log C) + M log M + K^2))、C は最大探索距離
+    // ヒューリスティックな Steiner tree を求める O(A(K(N + M log C) + M log M + K^2))
     heuristic_steiner_tree_result solve(const std::vector<int> &input_terminals,
                                         const heuristic_steiner_tree_options &options = {}) const {
         const auto sequential_shortest_path = [&](
@@ -2646,13 +2662,13 @@ public:
 
         const std::vector<int> terminals = normalize_terminals(input_terminals);
         heuristic_steiner_tree_result result;
-        if (terminals.size() <= 1) {
-            result.ok = true;
-            return result;
-        }
         for (int terminal : terminals) {
             assert(0 <= terminal && terminal < n_);
             (void)terminal;
+        }
+        if (terminals.size() <= 1) {
+            result.ok = true;
+            return result;
         }
 
         // 共通ワーク領域と探索状態を初期化する
@@ -2810,8 +2826,7 @@ public:
         return result;
     }
 
-    // 既存の辺集合を正規化し、preset に応じた局所探索で改善する
-    // O(K * (N + M log C) + A * (N + M log C + M log M))、C は最大探索距離
+    // 既存の辺集合を正規化し、preset に応じて改善する O(K(N + M log C) + A(N + M log C + M log M))
     heuristic_steiner_tree_result improve(const std::vector<int> &input_terminals,
                                           const std::vector<int> &initial_edge_ids,
                                           const heuristic_steiner_tree_options &options = {}) const {
@@ -2897,8 +2912,7 @@ public:
         return result;
     }
 
-    // ヒューリスティック解のコストだけを返す
-    // O(A * (K * (N + M log C) + M log M + K^2))、C は最大探索距離
+    // ヒューリスティック解の費用だけを返す O(A(K(N + M log C) + M log M + K^2))
     long long solve_cost(const std::vector<int> &terminals,
                          const heuristic_steiner_tree_options &options = {}) const {
         const auto result = solve(terminals, options);
@@ -2936,6 +2950,10 @@ public:
 #if __INCLUDE_LEVEL__ == 0
 
 int main() {
+    // NDEBUG でも検査を実行し、自己テストの省略や未使用変数を防ぐ
+    const auto check = [](bool condition) {
+        if (!condition) throw std::runtime_error("self-test failed");
+    };
     struct brute_dsu {
         std::vector<int> parent;
         explicit brute_dsu(int n) : parent(n, -1) {}
@@ -3030,8 +3048,8 @@ int main() {
         heuristic_steiner_tree_options options;
         options.path_mode = heuristic_steiner_tree_path_mode::on_demand;
         const auto result = solver.improve({0, 2, 4}, {0, 1, 2, 3}, options);
-        assert(result.ok && verify_result(solver, {0, 2, 4}, result));
-        assert(result.cost <= 20);
+        check(result.ok && verify_result(solver, {0, 2, 4}, result));
+        check(result.cost <= 20);
     }
 
     {
@@ -3043,31 +3061,31 @@ int main() {
         solver.add_edge(4, 5, 1);
         solver.add_edge(0, 5, 10);
         const auto result = solver.solve({0, 3, 5});
-        assert(result.ok && result.cost == 5);
-        assert(verify_result(solver, {0, 3, 5}, result));
+        check(result.ok && result.cost == 5);
+        check(verify_result(solver, {0, 3, 5}, result));
         const auto reused = solver.solve({1, 4});
-        assert(reused.ok && reused.cost == 3);
-        assert(verify_result(solver, {1, 4}, reused));
+        check(reused.ok && reused.cost == 3);
+        check(verify_result(solver, {1, 4}, reused));
 
         heuristic_steiner_tree_options options;
         options.preset = heuristic_steiner_tree_preset::quality;
         options.path_mode = heuristic_steiner_tree_path_mode::on_demand;
         const auto improved = solver.improve({0, 3, 5}, {0, 1, 2, 5}, options);
-        assert(improved.ok && improved.cost == 5);
-        assert(verify_result(solver, {0, 3, 5}, improved));
-        assert(!solver.improve({0, 3, 5}, {0, 1}).ok);
+        check(improved.ok && improved.cost == 5);
+        check(verify_result(solver, {0, 3, 5}, improved));
+        check(!solver.improve({0, 3, 5}, {0, 1}).ok);
     }
     {
         heuristic_steiner_tree solver(4);
         solver.add_edge(0, 1, 1);
         solver.add_edge(2, 3, 1);
         const auto result = solver.solve({0, 3});
-        assert(!result.ok);
+        check(!result.ok);
     }
     {
         heuristic_steiner_tree solver(3);
-        assert(solver.solve({}).ok);
-        assert(solver.solve({1, 1}).cost == 0);
+        check(solver.solve({}).ok);
+        check(solver.solve({1, 1}).cost == 0);
     }
     {
         heuristic_steiner_tree solver(4);
@@ -3077,19 +3095,19 @@ int main() {
         solver.add_edge(1, 2, 0);
         solver.add_edge(2, 3, 1);
         const auto result = solver.solve({0, 2, 3});
-        assert(result.ok && result.cost == 1);
-        assert(verify_result(solver, {0, 2, 3}, result));
-        assert(solver.solve_cost({0, 2, 3}) == 1);
+        check(result.ok && result.cost == 1);
+        check(verify_result(solver, {0, 2, 3}, result));
+        check(solver.solve_cost({0, 2, 3}) == 1);
     }
     {
         heuristic_steiner_tree solver(3);
         solver.add_edge(0, 1, 10);
         solver.add_edge(1, 2, 10);
-        assert(solver.solve({0, 2}).cost == 20);
+        check(solver.solve({0, 2}).cost == 20);
         solver.add_edge(0, 2, 1);
         const auto result = solver.solve({0, 2});
-        assert(result.ok && result.cost == 1);
-        assert(verify_result(solver, {0, 2}, result));
+        check(result.ok && result.cost == 1);
+        check(verify_result(solver, {0, 2}, result));
     }
     {
         // radix sort の上位 byte と、大きな非負コストの加算を確認する
@@ -3100,8 +3118,8 @@ int main() {
         solver.add_edge(2, 3, high + 9);
         solver.add_edge(0, 3, 3 * high + 30);
         const auto result = solver.solve({0, 2, 3});
-        assert(result.ok && result.cost == 3 * high + 21);
-        assert(verify_result(solver, {0, 2, 3}, result));
+        check(result.ok && result.cost == 3 * high + 21);
+        check(verify_result(solver, {0, 2, 3}, result));
     }
     {
         // 全辺で共通する下位 byte を省略しても (cost, edge_id) 順が保たれることを確認する
@@ -3114,8 +3132,8 @@ int main() {
         solver.add_edge(3, 4, unit);
         solver.add_edge(1, 2, 10 * unit);
         const auto result = solver.solve({0, 4});
-        assert(result.ok && result.cost == 3 * unit);
-        assert(verify_result(solver, {0, 4}, result));
+        check(result.ok && result.cost == 3 * unit);
+        check(verify_result(solver, {0, 4}, result));
     }
     {
         heuristic_steiner_tree solver(5);
@@ -3126,27 +3144,27 @@ int main() {
         const int e14 = solver.add_edge(1, 4, 10);
 
         const auto normalized = solver.normalize({0, 4}, {e01, e12, e23, e34, e14});
-        assert(normalized.ok && normalized.cost == 4);
-        assert(verify_result(solver, {0, 4}, normalized));
-        assert(!solver.normalize({0, 4}, {e01, e34}).ok);
+        check(normalized.ok && normalized.cost == 4);
+        check(verify_result(solver, {0, 4}, normalized));
+        check(!solver.normalize({0, 4}, {e01, e34}).ok);
 
         heuristic_steiner_tree_options options;
         options.preset = heuristic_steiner_tree_preset::balanced;
         options.restart_limit = 4;
         const auto repaired = solver.repair({0, 4}, {e01, e34}, options);
-        assert(repaired.ok && repaired.cost == 4);
-        assert(verify_result(solver, {0, 4}, repaired));
+        check(repaired.ok && repaired.cost == 4);
+        check(verify_result(solver, {0, 4}, repaired));
         const auto repaired_biased = solver.repair({0, 4}, {e14}, options);
-        assert(repaired_biased.ok && repaired_biased.cost == 4);
-        assert(verify_result(solver, {0, 4}, repaired_biased));
+        check(repaired_biased.ok && repaired_biased.cost == 4);
+        check(verify_result(solver, {0, 4}, repaired_biased));
 
         const auto augmented = solver.augment({0, 4}, {e01, e34}, options);
-        assert(augmented.ok && augmented.added_cost == 2);
-        assert(verify_augmentation(solver, {0, 4}, {e01, e34}, augmented));
+        check(augmented.ok && augmented.added_cost == 2);
+        check(verify_augmentation(solver, {0, 4}, {e01, e34}, augmented));
         const auto already_connected = solver.augment({0, 4}, {e01, e12, e23, e34}, options);
-        assert(already_connected.ok && already_connected.added_cost == 0 &&
+        check(already_connected.ok && already_connected.added_cost == 0 &&
                already_connected.added_edges.empty());
-        assert(verify_augmentation(
+        check(verify_augmentation(
             solver, {0, 4}, {e01, e12, e23, e34}, already_connected));
     }
     {
@@ -3158,9 +3176,9 @@ int main() {
         heuristic_steiner_tree_options options;
         options.preset = heuristic_steiner_tree_preset::fast;
         const auto augmented = solver.augment({0, 3}, {e01, e23}, options);
-        assert(augmented.ok && augmented.added_cost == 7);
-        assert(augmented.added_edges == std::vector<int>{e12});
-        assert(verify_augmentation(solver, {0, 3}, {e01, e23}, augmented));
+        check(augmented.ok && augmented.added_cost == 7);
+        check(augmented.added_edges == std::vector<int>{e12});
+        check(verify_augmentation(solver, {0, 3}, {e01, e23}, augmented));
         (void)e03;
     }
     {
@@ -3170,14 +3188,14 @@ int main() {
         heuristic_steiner_tree_options options;
         options.deadline = std::chrono::steady_clock::now() - std::chrono::milliseconds(1);
         const auto result = solver.solve({0, 2}, options);
-        assert(result.ok && result.cost == 2);
+        check(result.ok && result.cost == 2);
         const auto repaired = solver.repair({0, 2}, {e01}, options);
-        assert(repaired.ok && repaired.cost == 2);
-        assert(verify_result(solver, {0, 2}, repaired));
+        check(repaired.ok && repaired.cost == 2);
+        check(verify_result(solver, {0, 2}, repaired));
         const auto augmented = solver.augment({0, 2}, {e01}, options);
-        assert(augmented.ok && augmented.added_cost == 1 &&
+        check(augmented.ok && augmented.added_cost == 1 &&
                augmented.added_edges == std::vector<int>{e12});
-        assert(verify_augmentation(solver, {0, 2}, {e01}, augmented));
+        check(verify_augmentation(solver, {0, 2}, {e01}, augmented));
     }
     {
         // 同じグラフの terminal cache を再利用し、terminal 交換時は共通行だけ引き継ぐ
@@ -3200,11 +3218,11 @@ int main() {
         const auto changed = solver.solve({0, 2, 4, 7}, options);
         const auto fresh = fresh_solver.solve({0, 2, 4, 7}, options);
         const auto repeated = solver.solve({0, 2, 4, 7}, options);
-        assert(first.ok && changed.ok && fresh.ok && repeated.ok);
-        assert(changed.cost == fresh.cost && changed.edges == fresh.edges);
-        assert(repeated.cost == changed.cost && repeated.edges == changed.edges);
-        assert(changed.statistics.dijkstra_count < fresh.statistics.dijkstra_count);
-        assert(repeated.statistics.dijkstra_count < changed.statistics.dijkstra_count);
+        check(first.ok && changed.ok && fresh.ok && repeated.ok);
+        check(changed.cost == fresh.cost && changed.edges == fresh.edges);
+        check(repeated.cost == changed.cost && repeated.edges == changed.edges);
+        check(changed.statistics.dijkstra_count < fresh.statistics.dijkstra_count);
+        check(repeated.statistics.dijkstra_count < changed.statistics.dijkstra_count);
 
         heuristic_steiner_tree limited_solver(8);
         for (const auto &edge : edges) {
@@ -3212,15 +3230,92 @@ int main() {
         }
         options.memory_limit_bytes = 4ULL * 8 *
             (sizeof(long long) + sizeof(int));
-        assert(limited_solver.solve({0, 2, 4, 6}, options).ok);
+        check(limited_solver.solve({0, 2, 4, 6}, options).ok);
         const auto limited = limited_solver.solve({0, 2, 4, 7}, options);
-        assert(limited.cost == fresh.cost && limited.edges == fresh.edges);
-        assert(limited.statistics.dijkstra_count < fresh.statistics.dijkstra_count);
+        check(limited.cost == fresh.cost && limited.edges == fresh.edges);
+        check(limited.statistics.dijkstra_count < fresh.statistics.dijkstra_count);
 
         solver.clear_terminal_cache();
         const auto cleared = solver.solve({0, 2, 4, 7}, options);
-        assert(cleared.cost == fresh.cost && cleared.edges == fresh.edges);
-        assert(cleared.statistics.dijkstra_count == fresh.statistics.dijkstra_count);
+        check(cleared.cost == fresh.cost && cleared.edges == fresh.edges);
+        check(cleared.statistics.dijkstra_count == fresh.statistics.dijkstra_count);
+    }
+
+    // 既設辺の元費用の合計が long long を超えても、追加費用だけを集計する
+    for (int preset = 0; preset < 3; ++preset) for (int mode = 0; mode < 3; ++mode) {
+        heuristic_steiner_tree solver(4);
+        const int e01 = solver.add_edge(0, 1, std::numeric_limits<long long>::max());
+        const int e12 = solver.add_edge(1, 2, std::numeric_limits<long long>::max());
+        const int e23 = solver.add_edge(2, 3, 7);
+        heuristic_steiner_tree_options options;
+        options.preset = static_cast<heuristic_steiner_tree_preset>(preset);
+        options.path_mode = static_cast<heuristic_steiner_tree_path_mode>(mode);
+        options.restart_limit = 4;
+        const auto added = solver.augment({0, 3}, {e01, e12, e01}, options);
+        check(added.ok && added.added_cost == 7 && added.added_edges == std::vector<int>{e23});
+        check(verify_augmentation(solver, {0, 3}, {e01, e12}, added));
+        const auto connected = solver.augment({0, 3}, {e01, e12, e23}, options);
+        check(connected.ok && connected.added_cost == 0 && connected.added_edges.empty());
+    }
+
+    // 遠い絶対時刻でも、固定反復数の探索結果と統計値が時間無制限時に一致する
+    for (int preset = 0; preset < 3; ++preset) for (int mode = 0; mode < 3; ++mode) {
+        heuristic_steiner_tree solver(5);
+        solver.add_edge(0, 1, 3);
+        solver.add_edge(1, 2, 4);
+        solver.add_edge(1, 3, 2);
+        solver.add_edge(3, 4, 1);
+        solver.add_edge(0, 4, 8);
+        heuristic_steiner_tree_options options;
+        options.preset = static_cast<heuristic_steiner_tree_preset>(preset);
+        options.path_mode = static_cast<heuristic_steiner_tree_path_mode>(mode);
+        options.restart_limit = 4;
+        const auto normal = solver.solve({0, 2, 4}, options);
+        const auto augmented = solver.augment({0, 2, 4}, {0}, options);
+        solver.clear_terminal_cache();
+        options.deadline = std::chrono::steady_clock::time_point::max() -
+            std::chrono::steady_clock::duration(1);
+        const auto distant = solver.solve({0, 2, 4}, options);
+        const auto distant_augmented = solver.augment({0, 2, 4}, {0}, options);
+        check(normal.ok && distant.ok && normal.cost == distant.cost && normal.edges == distant.edges);
+        check(normal.statistics.dijkstra_count == distant.statistics.dijkstra_count);
+        check(normal.statistics.restart_count == distant.statistics.restart_count);
+        check(augmented.ok && distant_augmented.ok &&
+              augmented.added_cost == distant_augmented.added_cost &&
+              augmented.added_edges == distant_augmented.added_edges);
+        check(augmented.statistics.dijkstra_count == distant_augmented.statistics.dijkstra_count);
+        check(augmented.statistics.restart_count == distant_augmented.statistics.restart_count);
+    }
+
+    std::mt19937_64 boundary_random(20260912);
+    // 2 terminal の追加費用を独立な Floyd-Warshall と比較する。base は巨大重みを含む
+    for (int test = 0; test < 100; ++test) {
+        const int n = 2 + static_cast<int>(boundary_random() % 8);
+        heuristic_steiner_tree solver(n);
+        std::vector<int> base;
+        std::vector<std::vector<long long>> distance(n,
+            std::vector<long long>(n, heuristic_steiner_tree::inf()));
+        for (int v = 0; v < n; ++v) distance[v][v] = 0;
+        for (int i = 0; i < 3 * n; ++i) {
+            const int u = i < n - 1 ? i : static_cast<int>(boundary_random() % static_cast<unsigned>(n));
+            const int v = i < n - 1 ? i + 1 : static_cast<int>(boundary_random() % static_cast<unsigned>(n));
+            const bool free = boundary_random() % 3 == 0;
+            const long long cost = free ? 0 : static_cast<long long>(boundary_random() % 10);
+            const int id = solver.add_edge(u, v, free ? std::numeric_limits<long long>::max() : cost);
+            if (free) base.push_back(id);
+            distance[u][v] = distance[v][u] = std::min(distance[u][v], cost);
+        }
+        for (int k = 0; k < n; ++k) for (int u = 0; u < n; ++u) for (int v = 0; v < n; ++v)
+            distance[u][v] = std::min(distance[u][v], distance[u][k] + distance[k][v]);
+        for (int preset = 0; preset < 3; ++preset) for (int mode = 0; mode < 3; ++mode) {
+            heuristic_steiner_tree_options options;
+            options.preset = static_cast<heuristic_steiner_tree_preset>(preset);
+            options.path_mode = static_cast<heuristic_steiner_tree_path_mode>(mode);
+            options.restart_limit = 4;
+            const auto result = solver.augment({0, n - 1}, base, options);
+            check(result.ok && result.added_cost == distance[0][n - 1]);
+            check(verify_augmentation(solver, {0, n - 1}, base, result));
+        }
     }
 
     std::mt19937_64 random(123456789);
@@ -3259,8 +3354,8 @@ int main() {
             options.seed = static_cast<std::uint64_t>(test);
             options.restart_limit = 4;
             const auto result = solver.solve(terminals, options);
-            assert(verify_result(solver, terminals, result));
-            assert(result.cost >= optimum);
+            check(verify_result(solver, terminals, result));
+            check(result.cost >= optimum);
         }
     }
 

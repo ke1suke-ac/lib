@@ -286,7 +286,7 @@ public:
             norm += a * a;
             incidence_[j].push_back({id, a});
         }
-        factors_.push_back({std::move(form), loss, true, std::max(norm, 1.0)});
+        factors_.push_back({std::move(form), loss, std::max(norm, 1.0), true});
         for (State* s : {&current_, &best_}) {
             const double z = factors_.back().form.evaluate(s->x), v = cost(loss, z);
             s->z.push_back(z);
@@ -475,8 +475,9 @@ private:
     struct Factor {
         LinearForm form;
         Loss loss;
-        bool enabled;
         double norm;
+        // 整数の厳密な積和にできないハード制約は、変数値から再評価する。
+        bool enabled, exact_hard = false;
     };
 
     struct State {
@@ -705,6 +706,21 @@ private:
         std::vector<double> effect(factors_.size(), 0);
         std::vector<int> mark(factors_.size(), -1), touched;
         int stamp = 0;
+        for (int r = 0; r < static_cast<int>(factors_.size()); ++r) {
+            auto& f = factors_[r];
+            f.exact_hard = false;
+            if (!f.enabled || f.loss.kind != Loss::Kind::HardInterval) continue;
+            hard_ids_.push_back(r);
+            // 整数だけの積和は冒頭の範囲内で厳密なので、従来の差分計算を使える。
+            f.exact_hard = f.form.offset != std::round(f.form.offset)
+                           || std::any_of(f.form.terms.begin(), f.form.terms.end(), [&](Term t) {
+                                  const auto& d = domains_[t.variable];
+                                  return t.coefficient != std::round(t.coefficient)
+                                         || (d.kind != Domain::Kind::Integer
+                                             && (d.kind != Domain::Kind::Fixed
+                                                 || d.lower != std::round(d.lower)));
+                              });
+        }
         // 方向ごとの因子係数と正規曲率を一度だけ集約する
         auto append = [&](std::vector<Term> terms) {
             Move m;
@@ -743,7 +759,7 @@ private:
                         effect[r] += a * b;
                     }
             for (int r : touched)
-                if (effect[r] != 0) {
+                if (effect[r] != 0 || factors_[r].exact_hard) {
                     m.effects.push_back({r, effect[r]});
                     const auto& f = factors_[r];
                     if (m.finite_variable >= 0 && f.loss.kind == Loss::Kind::HardInterval
@@ -842,9 +858,6 @@ private:
                         append({{e.u, 1}, {e.v, e.ratio}});
                 }
         }
-        for (int r = 0; r < static_cast<int>(factors_.size()); ++r)
-            if (factors_[r].enabled && factors_[r].loss.kind == Loss::Kind::HardInterval)
-                hard_ids_.push_back(r);
         prepared_ = true;
         prepared_auto_ = automatic;
         return true;
@@ -864,7 +877,7 @@ private:
         if (hard)
             for (auto [r, c] : m.effects) {
                 const auto& f = factors_[r];
-                if (f.loss.kind == Loss::Kind::HardInterval)
+                if (f.loss.kind == Loss::Kind::HardInterval && c != 0)
                     intersect(f.loss.lower - current_.z[r], f.loss.upper - current_.z[r], c);
             }
         if (m.integral) {
@@ -903,30 +916,37 @@ private:
             evaluated_partial_ = residual_only;
             evaluated_costs_.resize(m.effects.size());
         }
-        int exact_variable = m.finite_variable;
-        double exact_value = 0;
+        bool exact = m.finite_variable >= 0;
         if (m.terms.size() == 1 && !m.integral) {
             const auto [j, a] = m.terms.front();
             const double x = current_.x[j] + a * t;
-            exact_value = project(domains_[j], x);
-            if (exact_value != x) exact_variable = j;
+            exact |= project(domains_[j], x) != x;
         } else if (!m.integral) {
             // 同時更新は方向を崩す射影をせず、丸めによる値域外も棄却する
             for (auto [j, a] : m.terms)
                 if (!domains_[j].contains(current_.x[j] + a * t)) return INFINITY;
         }
         for (auto [r, c] : m.effects) {
-            const auto& l = factors_[r].loss;
+            const auto& f = factors_[r];
+            const auto& l = f.loss;
             if (residual_only && l.kind == Loss::Kind::Gaussian) {
                 ++pos;
                 continue;
             }
             double z = current_.z[r] + c * t;
-            if (exact_variable >= 0) {
-                // 有限候補と単独更新の境界丸めは、確定する値をそのまま代入する
-                z = factors_[r].form.offset;
-                for (auto [j, a] : factors_[r].form.terms)
-                    z += a * (j == exact_variable ? exact_value : current_.x[j]);
+            if (exact || f.exact_hard) {
+                // ハード制約は差分値でなく、実際に確定する変数値から判定する。
+                z = f.form.offset;
+                auto it = m.terms.begin();
+                for (auto [j, a] : f.form.terms) {
+                    while (it != m.terms.end() && it->variable < j) ++it;
+                    double x = current_.x[j];
+                    if (it != m.terms.end() && it->variable == j) {
+                        x += it->coefficient * t;
+                        if (m.terms.size() == 1 && !m.integral) x = project(domains_[j], x);
+                    }
+                    z += a * x;
+                }
             }
             const double v = cost(l, z);
             if (evaluated_move_) evaluated_costs_[pos] = v;
@@ -983,16 +1003,17 @@ private:
             exact |= current_.x[j] != x;
         }
         for (auto [r, c] : m.effects) {
+            const auto& f = factors_[r];
             if (dirty_ready_ && !factor_mark_[r]) {
                 factor_mark_[r] = 1;
                 dirty_factors_.push_back(r);
             }
-            current_.z[r] = exact ? factors_[r].form.evaluate(current_.x) : current_.z[r] + c * t;
+            current_.z[r] = exact || f.exact_hard ? f.form.evaluate(current_.x) : current_.z[r] + c * t;
             replace_cost(current_,
                          r,
-                         reuse && !(evaluated_partial_ && factors_[r].loss.kind == Loss::Kind::Gaussian)
+                         reuse && !(evaluated_partial_ && f.loss.kind == Loss::Kind::Gaussian)
                              ? evaluated_costs_[pos]
-                             : cost(factors_[r].loss, current_.z[r]));
+                             : cost(f.loss, current_.z[r]));
             ++pos;
         }
         evaluated_move_ = nullptr;
@@ -1096,6 +1117,25 @@ private:
         if (lo >= hi) return false;
         double t = 0;
         bool gaussian_proposal = false;
+        auto evaluate = [&](double& step, bool residual_only = false) {
+            double d = delta(m, step, residual_only);
+            // 境界丸めで制約外になった実数の最適化候補は、元の状態側へ数ULPだけ戻す。
+            // 採取中の提案は変えず、制約外なら通常どおり棄却する。
+            if (greedy && !m.integral && m.finite_variable < 0) {
+                for (int attempt = 0; attempt < 4 && !std::isfinite(d); ++attempt) {
+                    double inner = std::nextafter(step, 0.0);
+                    for (auto [j, a] : m.terms) {
+                        const double x = std::nextafter(current_.x[j] + a * step, current_.x[j]);
+                        const double candidate = (x - current_.x[j]) / a;
+                        inner = step > 0 ? std::min(inner, candidate) : std::max(inner, candidate);
+                    }
+                    if (inner == step) break;
+                    step = inner;
+                    d = delta(m, step, residual_only);
+                }
+            }
+            return d;
+        };
         // 小さな離散集合は全候補の条件付き重みを評価する
         choices_.clear();
         if (method != Method::Metropolis) {
@@ -1137,7 +1177,7 @@ private:
                 b = std::min(b, hi);
             }
             double best_delta = 0, chosen = 0;
-            const double fa = delta(m, a), fb = delta(m, b);
+            const double fa = evaluate(a), fb = evaluate(b);
             if (fa < best_delta) {
                 best_delta = fa;
                 chosen = a;
@@ -1153,7 +1193,7 @@ private:
                     double q =
                         std::clamp(-slope / curvature, std::max(lo, -4 * width), std::min(hi, 4 * width));
                     if (m.integral) q = std::clamp(std::round(q), lo, hi);
-                    const double fq = delta(m, q);
+                    const double fq = evaluate(q);
                     if (fq < best_delta) chosen = q;
                 }
             }
@@ -1220,9 +1260,9 @@ private:
         } else
             t = rng_.normal() * move_width(m, multiplier);
         if (t == 0 || t < lo || t > hi) return false;
-        const double d = delta(m, t, gaussian_proposal);
+        const double d = evaluate(t, gaussian_proposal);
         const bool accept =
-            std::isfinite(d) && (greedy ? d <= 0 : std::log(rng_.uniform()) <= -d / temperature);
+            t != 0 && std::isfinite(d) && (greedy ? d <= 0 : std::log(rng_.uniform()) <= -d / temperature);
         if (accept) commit(m, t);
         return accept;
     }

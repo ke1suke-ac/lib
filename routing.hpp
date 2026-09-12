@@ -11,6 +11,9 @@
  * ruin-and-recreate を共有し、実行時の virtual dispatch は使用しない。
  *
  * 公開 API は用途別に分け、内部の探索構成はベンチマークで選定した一種類に固定する。
+ * 距離・作業費・需要・報酬は非負の有限値とし、和・差分の中間値まで各数値型に収める。
+ * PDPのLoadと費用計算のCalcには符号付き型を使う。
+ * 浮動小数点の容量・費用境界は丸め誤差の影響を受けるため、厳密判定には整数単位を使う。
  */
 #pragma once
 
@@ -276,6 +279,7 @@ class RoutingContext {
     bool symmetric_ = true;
 
 public:
+    // 空の距離共有情報を構築する。O(1)
     RoutingContext() = default;
 
     // 登録頂点数を返す。O(1)
@@ -377,7 +381,7 @@ private:
         if constexpr (std::floating_point<T>) {
             return std::numeric_limits<T>::infinity();
         } else {
-            return std::numeric_limits<T>::max() / 4;
+            return std::numeric_limits<T>::max();
         }
     }
 
@@ -674,7 +678,7 @@ private:
                 if (control.after_evaluation()) return false;
                 if (!feasible) return true;
                 route_best = std::min(route_best, delta);
-                if (delta < result.delta) {
+                if (result.route < 0 || delta < result.delta) {
                     result.delta = delta;
                     result.route = route;
                     result.position = position;
@@ -841,6 +845,7 @@ private:
         template <SelectionKind Selection, bool UseCapacity>
         void single_local_search(State& state, FastRng& rng, SearchControl& control) const {
             auto try_single_relocate = [&](int node, int target_route, int target_position) {
+                if (control.timed_out) return false;
                 const int source_route = state.route_of[node];
                 const int source_position = state.position[node];
                 if (source_route < 0) return false;
@@ -1220,7 +1225,7 @@ private:
                 const auto construction_begin = std::chrono::steady_clock::now();
                 State best;
                 if (initial_routes) {
-                    best = std::move(initial);
+                    best = initial;
                     repair_single_state<Selection, UseCapacity>(best, control);
                 } else {
                     best.routes.assign(problem.vehicle_count, {});
@@ -1347,6 +1352,10 @@ private:
                 return best;
             };
             State state = run_search();
+            // 任意仕事の補充などで同報酬の費用が増えても、入力の良い解を失わない。
+            if (initial_routes && better_state<Selection>(initial, state, exact_count)) {
+                state = std::move(initial);
+            }
             RoutingSolution<Vertex, Calc, Reward> result;
             result.routes.resize(state.routes.size());
             for (int r = 0; r < static_cast<int>(state.routes.size()); ++r) {
@@ -1462,6 +1471,7 @@ private:
                 const auto& route = state.routes[r];
                 auto& prefix = state.load_before[r];
                 prefix.assign(route.size() + 1, Load{});
+                int onboard = 0;
                 for (int p = 0; p < static_cast<int>(route.size()); ++p) {
                     const int node = route[p];
                     if (node < 0 || node >= problem.node_count || state.node_route[node] >= 0) {
@@ -1473,14 +1483,13 @@ private:
                     const int request = node / 2;
                     Load delta = problem.quantity[request];
                     if (!((node & 1) == 0)) delta = -delta;
-                    prefix[p + 1] = prefix[p] + delta;
-                    if (prefix[p + 1] < Load{} ||
-                        prefix[p + 1] > problem.capacity[r]) {
+                    onboard += (node & 1) == 0 ? 1 : -1;
+                    // 空荷は組合せから厳密に0へ戻し、小数の加減算誤差を持ち越さない。
+                    // 非負性と最終空荷は、後段の両端・同一車両・先行順序の検査で保証する。
+                    prefix[p + 1] = onboard == 0 ? Load{} : prefix[p] + delta;
+                    if (prefix[p + 1] > problem.capacity[r]) {
                         state.resource_feasible = false;
                     }
-                }
-                if (prefix.back() != Load{}) {
-                    state.resource_feasible = false;
                 }
                 state.route_cost[r] = pair_route_cost(std::span<const int>(route), r);
                 state.total_cost += state.route_cost[r];
@@ -1594,7 +1603,7 @@ private:
                     if (control.after_evaluation()) return false;
                     if (!feasible) return true;
                     route_best = std::min(route_best, delta);
-                    if (delta < result.delta) {
+                    if (result.route < 0 || delta < result.delta) {
                         result = {route, pickup_position, delivery_position, delta,
                                   result.second_delta};
                     }
@@ -1902,7 +1911,7 @@ private:
                 const auto construction_begin = std::chrono::steady_clock::now();
                 State best;
                 if (initial_routes) {
-                    best = std::move(initial);
+                    best = initial;
                     repair_pair_state<Selection>(best, control);
                 } else {
                     best.routes.assign(problem.vehicle_count, {});
@@ -2062,6 +2071,10 @@ private:
                 return best;
             };
             State state = run_search();
+            // 任意仕事の補充などで同報酬の費用が増えても、入力の良い解を失わない。
+            if (initial_routes && better_state<Selection>(initial, state, exact_count)) {
+                state = std::move(initial);
+            }
             RoutingSolution<Vertex, Calc, Reward> result;
             result.routes.resize(state.routes.size());
             for (int r = 0; r < static_cast<int>(state.routes.size()); ++r) {
@@ -2646,7 +2659,87 @@ auto solve_selective_pdvrp(
 
 #if __INCLUDE_LEVEL__ == 0
 
+// 費用の数値境界、小数荷重、既存解の保持、評価回数上限を検証する
+void test_routing_review_regressions() {
+    auto check = [](bool ok) { if (!ok) std::abort(); };
+    using Task = routing::RouteTask<int>;
+    using Pair = routing::PickupDeliveryTask<int>;
+    using Vehicle = routing::RouteVehicle<int>;
+    routing::RoutingParam param;
+    param.time_limit_ms = 1000;
+    param.max_move_evaluations = 1000;
+    const auto unit_distance = [](int a, int b) { return static_cast<long long>(std::abs(a - b)); };
+
+    // 大きな有限費用と型の最大値を、制約内なら通常の実行可能経路として扱う。
+    for (long long cost : {2'400'000'000'000'000'000LL, std::numeric_limits<long long>::max()}) {
+        const auto zero_distance = [](int, int) { return 0LL; };
+        const std::vector<Task> tasks = {{1, 1, 10, cost, false}};
+        const std::vector<Pair> pairs = {{1, 2, 1, 10, cost, 0, false}};
+        for (long long budget : {cost, cost - 1}) {
+            const std::vector<Vehicle> vehicles = {{0, 0, 1, budget}};
+            const auto one = routing::solve_cvrp(std::span(tasks), std::span(vehicles), zero_distance, param);
+            const auto pair = routing::solve_pdvrp(std::span(pairs), std::span(vehicles), zero_distance, param);
+            check(one.feasible == (budget == cost));
+            check(pair.feasible == (budget == cost));
+            if (budget == cost) {
+                check(one.travel_cost == cost && one.unserved_items.empty());
+                check(pair.travel_cost == cost && pair.unserved_items.empty());
+                const auto select = routing::solve_selective_vrp(std::span(tasks), std::span(vehicles), zero_distance, 1, param);
+                const auto select_pair = routing::solve_selective_pdvrp(std::span(pairs), std::span(vehicles), zero_distance, 1, param);
+                check(select.feasible && select.travel_cost == cost);
+                check(select_pair.feasible && select_pair.travel_cost == cost);
+            }
+        }
+    }
+
+    // 同報酬で費用だけ高くなる充填があっても、良い入力解を返せる。
+    const std::vector<int> vertices = {0, 1, 2, 3, 4};
+    const auto context = routing::make_routing_context(vertices, unit_distance);
+    const std::vector<Vehicle> vehicles = {{0, 0, 10, 1000}};
+    const std::vector<Task> tasks = {{1, 1, 10, 0, true}, {2, 1, 0, 0, false}};
+    const std::vector<Pair> pairs = {{1, 2, 1, 10, 0, 0, true}, {3, 4, 1, 0, 0, 0, false}};
+    const std::vector<std::vector<int>> initial = {{1}}, initial_pair = {{1, 2}};
+    const auto prize = routing::improve_prize_collecting_vrp(context, std::span(tasks), std::span(vehicles), std::span(initial), param);
+    const auto orienteering = routing::improve_orienteering(context, std::span(tasks), std::span(vehicles), std::span(initial), param);
+    const auto prize_pair = routing::improve_prize_collecting_pdvrp(context, std::span(pairs), std::span(vehicles), std::span(initial_pair), param);
+    check(prize.feasible && prize.travel_cost == 2 && prize.collected_reward == 10);
+    check(orienteering.feasible && orienteering.travel_cost == 2 && orienteering.collected_reward == 10);
+    check(prize_pair.feasible && prize_pair.travel_cost == 4 && prize_pair.collected_reward == 10);
+
+    // 集荷配達の構造で空荷を判定し、0.1+0.2の加減算誤差を残さない。
+    using FloatPair = routing::PickupDeliveryTask<int, double>;
+    using FloatVehicle = routing::RouteVehicle<int, double>;
+    const std::vector<FloatPair> float_pairs = {{1, 2, 0.1}, {3, 4, 0.2}};
+    const std::vector<FloatVehicle> float_vehicles = {{0, 0, 1.0, 1000}};
+    for (const std::vector<int>& route : std::vector<std::vector<int>>{{1, 3, 2, 4}, {1, 3, 4, 2}, {3, 1, 2, 4}}) {
+        const std::vector<std::vector<int>> routes = {route};
+        const auto answer = routing::improve_pdvrp(context, std::span(float_pairs), std::span(float_vehicles), std::span(routes), param);
+        check(answer.feasible && answer.unserved_items.empty());
+    }
+
+    // 単一訪問の連続したrelocate候補でも上限を越えない。
+    const std::vector<int> many_vertices = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+    std::vector<Task> many_tasks;
+    for (int i = 1; i <= 8; ++i) many_tasks.push_back({i, 1, 1, 0, true});
+    const std::vector<std::vector<int>> routes = {{1, 5, 3, 7, 2, 8, 4, 6}};
+    for (bool symmetric : {false, true}) {
+        auto dist = [&](int a, int b) {
+            if (symmetric && a > b) std::swap(a, b);
+            return a == b ? 0LL : static_cast<long long>((a * 17 + b * 31) % 53);
+        };
+        const auto many_context = routing::make_routing_context(many_vertices, dist, symmetric);
+        for (unsigned limit = 1; limit <= 80; ++limit) {
+            param.max_move_evaluations = limit;
+            routing::RoutingStats stats;
+            const auto answer = routing::improve_cvrp(many_context, std::span<const Task>(many_tasks), std::span(vehicles), std::span(routes), param, &stats);
+            check(stats.move_evaluations <= limit);
+            check(answer.feasible && answer.unserved_items.empty());
+        }
+    }
+}
+
 int main() {
+    test_routing_review_regressions();
     enum class SelectionKind : unsigned char {
         AllMandatory,
         MaximizeReward,

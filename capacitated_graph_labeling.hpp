@@ -31,7 +31,8 @@
  *
  * 注意:
  *   - 需要量と容量はlong long、目的値はテンプレート引数Costで管理する
- *   - Costの演算オーバーフローは検査しない
+ *   - Costの演算、long longの総需要量・容量計算、intの添字が範囲内に収まる入力を使う
+ *   - 浮動小数点の目的値には差分加算による丸め誤差がある。NaN・無限大のコストは使わない
  *   - 一般の重み付き需要・許可ラベル付き実行可能性判定自体が難しいため、実行可能解を
  *     構築できなかった場合はresult.feasible=falseを返す。この組合せが厳しい場合は、
  *     問題固有手法で作った実行可能解をimprove_capacitated_graph_labelingへ渡す
@@ -39,9 +40,7 @@
  *   - Potts専用キャッシュは通常O(NK + N)、部分repairではO(|S|K + |S|)メモリを使う
  *   - Potts型のgreedy構築は、各頂点の隣接辺をラベル別に一度集計して高速化する
  */
-#if __INCLUDE_LEVEL__ > 0
 #pragma once
-#endif
 
 #include <bits/stdc++.h>
 
@@ -611,6 +610,7 @@ private:
     }
 
 public:
+    // 隣接情報・可変頂点範囲・終了時刻を初期化する。O(N + M + K)
     solver(const problem_type& problem_, const PairCost& pair_cost_,
            const capacitated_graph_labeling_options& options_,
            const std::vector<int>* requested_vertices = nullptr)
@@ -665,15 +665,19 @@ public:
         {
             end_time = options.deadline;
             if (options.time_limit_ms >= 0.0) {
-                const auto relative_duration = std::chrono::duration<double, std::milli>(
+                // 整数tickへ変換する前に上限を確認し、時計に収まらない相対期限は飽和させる
+                const auto relative_duration = std::chrono::duration<long double, std::milli>(
                     options.time_limit_ms);
-                const auto relative_deadline =
-                    start_time + std::chrono::duration_cast<clock_type::duration>(relative_duration);
-                end_time = std::min(end_time, relative_deadline);
+                if (relative_duration < clock_type::time_point::max() - start_time) {
+                    const auto relative_deadline =
+                        start_time + std::chrono::duration_cast<clock_type::duration>(relative_duration);
+                    end_time = std::min(end_time, relative_deadline);
+                }
             }
             if (end_time != clock_type::time_point::max()) {
-                time_budget_ms = std::max(
-                    0.0, std::chrono::duration<double, std::milli>(end_time - start_time).count());
+                // 過去の期限は差を取らず0とし、time_point::min()でも減算をあふれさせない
+                time_budget_ms = end_time <= start_time ? 0.0 :
+                    std::chrono::duration<double, std::milli>(end_time - start_time).count();
             }
         }
         uses_count_bounds = !problem.lower_count.empty() || !problem.upper_count.empty();
@@ -698,6 +702,7 @@ public:
         build_movable_scope();
     }
 
+    // 初期化・探索後に最良解を返す。O(R(N log N + NK + KM + K) + T(D + K))、R=max(1, 構築回数)、T=反復数、D=最大次数
     void run(const std::vector<int>* initial,
              capacitated_graph_labeling_result<Cost>* full_result,
              capacitated_graph_labeling_repair_result<Cost>* repair_result) {
@@ -1246,7 +1251,7 @@ Cost evaluate_capacitated_graph_labeling(
     return problem.evaluate(label, pair_cost);
 }
 
-// 指定ラベル列が許可ラベルと全容量制約を満たすか判定する。O(N + K)
+// 指定ラベル列が許可ラベルと全容量制約を満たすか判定する。O(N + M + K)
 template <class Cost>
 bool is_feasible_capacitated_graph_labeling(
     const capacitated_graph_labeling_problem<Cost>& problem,
@@ -1255,9 +1260,9 @@ bool is_feasible_capacitated_graph_labeling(
     return problem.feasible(label);
 }
 
-// 容量対応greedyで初期解を構築し、焼きなましで改善する。
-// Potts型は期待O(initial_trials * (N log N + NK + M) + iterations * degree)
-// 一般型は期待O(initial_trials * (N log N + KM) + iterations * degree)
+// 計算量表記のRは構築回数、Tは探索反復数、Dは最大次数。最良解の負荷・件数保存は1回O(K)
+// Potts型の構築は1回O(N log N + NK + M + K)、一般型では辺評価がO(KM)になる
+// 容量対応greedyで初期解を構築し、焼きなましで改善する。O(R(N log N + NK + KM + K) + T(D + K))
 template <class Cost, class PairCost>
 capacitated_graph_labeling_result<Cost> solve_capacitated_graph_labeling(
     const capacitated_graph_labeling_problem<Cost>& problem,
@@ -1270,7 +1275,7 @@ capacitated_graph_labeling_result<Cost> solve_capacitated_graph_labeling(
     return result;
 }
 
-// 与えられた実行可能解を焼きなましで改善し、初期解以下の目的値を返す。期待O(iterations * degree)
+// 与えられた実行可能解を焼きなましで改善し、初期解以下の目的値を返す。O(N + M + K + NK + T(D + K))
 template <class Cost, class PairCost>
 capacitated_graph_labeling_result<Cost> improve_capacitated_graph_labeling(
     const capacitated_graph_labeling_problem<Cost>& problem,
@@ -1284,8 +1289,8 @@ capacitated_graph_labeling_result<Cost> improve_capacitated_graph_labeling(
     return result;
 }
 
-// 指定頂点だけを変更して実行可能解を改善する。
-// 範囲外頂点との境界辺と全体容量を厳密に考慮し、変更点と目的値差分だけを返す。
+// 範囲外頂点との境界辺と全体容量を考慮し、変更点と目的値差分だけを返す
+// 指定頂点集合Sだけを変更して実行可能解を改善する。O(N + M + K + |S|K + T(D + K))
 template <class Cost, class PairCost>
 capacitated_graph_labeling_repair_result<Cost>
 improve_capacitated_graph_labeling_subset(
@@ -1656,6 +1661,40 @@ int main() {
                 "expired absolute deadline must prevent local-search iterations");
     };
 
+    // 極端な相対時間・過去の絶対期限でも、時計の整数変換と加減算をあふれさせない
+    const auto test_time_boundaries = [&]() -> void {
+        using clock = std::chrono::steady_clock;
+        problem_type p;
+        p.vertex_count = 2;
+        p.label_count = 2;
+        p.unary_cost = {0, 3, 3, 0};
+        const std::vector<int> initial = {0, 1};
+        const double max_duration_ms =
+            std::chrono::duration<double, std::milli>(clock::duration::max()).count();
+        const auto past = clock::now() - std::chrono::seconds(1);
+        const auto future = clock::now() + std::chrono::hours(1);
+
+        // 巨大な相対時間があっても、明示した絶対期限と反復数上限は有効なまま
+        for (const double milliseconds : {-1.0, 0.0, 1000.0,
+                                          max_duration_ms * (1.0 - 1e-8),
+                                          max_duration_ms, std::numeric_limits<double>::max()}) {
+            for (const auto deadline : {clock::time_point::min(), past, future,
+                                        clock::time_point::max()}) {
+                capacitated_graph_labeling_options o;
+                o.time_limit_ms = milliseconds;
+                o.deadline = deadline;
+                o.iteration_limit = 4;
+                const auto r = improve_capacitated_graph_labeling(
+                    p, initial, capacitated_potts_cost<>{}, o);
+                const bool expired = milliseconds == 0.0 || deadline <= past;
+                require(r.feasible && r.status == capacitated_graph_labeling_status::success,
+                        "time boundary must preserve a feasible initial solution");
+                require(r.iterations == (expired ? 0 : 4), "time boundary iteration limit");
+                require(r.objective == 0 && r.label == initial, "time boundary optimum");
+            }
+        }
+    };
+
     const auto test_subset_repair_with_general_pair_cost = [&]() -> void {
         problem_type problem;
         problem.vertex_count = 4;
@@ -1800,9 +1839,11 @@ int main() {
 
     const auto test_extended_random_costs = [&]<class C>() -> void {
         std::mt19937_64 rng(998244353);
-        for (int tc = 0; tc < 240; ++tc) {
+        for (int tc = 0; tc < 300; ++tc) {
             capacitated_graph_labeling_problem<C> p;
-            const int n = 2 + static_cast<int>(rng() % 6);
+            // 64-bit Bloomのbit衝突が生じる頂点数でも、通常・部分更新を独立検算する
+            const int n = tc >= 240 ? 65 + static_cast<int>(rng() % 64)
+                                    : 2 + static_cast<int>(rng() % 6);
             const int k = 1 + static_cast<int>(rng() % 4);
             p.vertex_count = n;
             p.label_count = k;
@@ -1989,6 +2030,7 @@ int main() {
     test_infeasible();
     test_subset_repair_and_status();
     test_absolute_deadline();
+    test_time_boundaries();
     test_subset_repair_with_general_pair_cost();
     test_simultaneous_load_and_count_bounds();
     test_fast_random_bounds();

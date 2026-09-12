@@ -1,5 +1,5 @@
 /*
- * generic_resource_scheduler v07 (2026-09-08):
+ * generic_resource_scheduler v08:
  *   先行制約DAGと再生可能資源容量を持つ非プリエンプティブなタスクを
  *   priority list + Serial Schedule Generation Schemeでスケジュールする
  *   AHC向けヒューリスティックsolver。
@@ -25,9 +25,7 @@
  *   短い処理時間ではtimestamp付き時刻配列、長い処理時間・大きな時刻値では
  *   一定負荷区間の整列配列を自動選択する。共通prefixは配置を再利用する。
  */
-#if __INCLUDE_LEVEL__ > 0
 #pragma once
-#endif
 
 #include <bits/stdc++.h>
 
@@ -716,6 +714,18 @@ public:
         return true;
     }
 
+    // 境界処理を各探索テンプレートへ展開せず、1呼出し1回だけ共通処理する
+    __attribute__((noinline)) static std::chrono::steady_clock::time_point make_end_time(
+        std::chrono::steady_clock::time_point begin, double time_limit_ms) {
+        auto end = std::chrono::steady_clock::time_point::max();
+        const auto time_limit = std::chrono::duration<long double, std::milli>(
+            std::max(0.0, time_limit_ms));
+        if (time_limit < end - begin) {
+            end = begin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(time_limit);
+        }
+        return end;
+    }
+
     template<class Calendars, class Evaluator>
     static resource_scheduling_result run_solver_with_calendar(
         const resource_scheduling_problem& problem,
@@ -805,10 +815,7 @@ public:
         if (data.single_search_state) return result;
 
         const auto begin = std::chrono::steady_clock::now();
-        auto end =
-            begin + std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-                        std::chrono::duration<double, std::milli>(
-                            std::max(0.0, options.time_limit_ms)));
+        auto end = make_end_time(begin, options.time_limit_ms);
         if (options.deadline.has_value()) end = std::min(end, *options.deadline);
         if (options.time_limit_ms <= 0 || options.max_iterations == 0 ||
             begin >= end) {
@@ -1097,13 +1104,16 @@ public:
     }
 };
 
-// 問題だけを検証する。不正入力ではinvalid_argument。全modeの要求とDAGを走査する。
+// 以下の計算量: N=タスク数、E=先行辺数、R=資源数、M=全モード数、A=全モードの資源要求数
+// V=N+E+R+M+A log(1+A)、S=入力解の配列要素数、U=選択モードの資源要求数
+// I=探索提案数、D=初期順序構築O(N log(1+N)+E+U)と1回の復号・評価の計算量の大きい方
+// 問題だけを検証し、不正入力ではinvalid_argumentを送出する。O(V)
 inline void resource_scheduling_validate_problem(
     const resource_scheduling_problem& problem) {
     resource_scheduling_problem::implementation::validate_problem_or_throw(problem);
 }
 
-// 問題を検証後、scheduleを独立なイベント走査で検査する。schedule不正ならfalse。
+// 問題を検証後、scheduleをイベント走査で検査し、不正な解ならfalseを返す。O(V+S+U log(1+U))
 inline bool resource_scheduling_is_feasible(
     const resource_scheduling_problem& problem,
     const resource_schedule& schedule) {
@@ -1112,28 +1122,19 @@ inline bool resource_scheduling_is_feasible(
     return resource_scheduling_problem::implementation::validate_schedule(problem, data, schedule);
 }
 
-// 実行可能性を検査して組み込み目的値を返す。検査費用は概ねO(N+E+U log U)。
-inline long double resource_scheduling_evaluate(
-    const resource_scheduling_problem& problem,
-    const resource_schedule& schedule) {
-    const auto data =
-        resource_scheduling_problem::implementation::validate_problem_or_throw(problem);
-    if (!resource_scheduling_problem::implementation::validate_schedule(problem, data, schedule)) {
-        throw std::invalid_argument("scheduleが実行可能でない");
-    }
-    return resource_scheduling_problem::implementation::builtin_evaluator{}(problem, schedule);
-}
-
+// 実行可能性と独自目的値の有限性を検査して評価する。O(V+S+U log(1+U)+Evaluatorの計算量)
 template<class Evaluator>
 long double resource_scheduling_evaluate(
     const resource_scheduling_problem& problem,
     const resource_schedule& schedule,
     Evaluator evaluator) {
+    // 評価前に問題と解の実行可能性を確認する
     const auto data =
         resource_scheduling_problem::implementation::validate_problem_or_throw(problem);
     if (!resource_scheduling_problem::implementation::validate_schedule(problem, data, schedule)) {
         throw std::invalid_argument("scheduleが実行可能でない");
     }
+    // 組み込み評価を含め、計算結果が溢れた場合は例外にする
     const long double objective =
         static_cast<long double>(evaluator(problem, schedule));
     if (!std::isfinite(objective)) {
@@ -1142,7 +1143,15 @@ long double resource_scheduling_evaluate(
     return objective;
 }
 
-// 初期構築後にSA改善を行う。最適性・厳密な時間上限は保証しない。計算量は探索量に依存。
+// 実行可能性と目的値の有限性を検査して組み込み目的値を返す。O(V+S+U log(1+U))
+inline long double resource_scheduling_evaluate(
+    const resource_scheduling_problem& problem,
+    const resource_schedule& schedule) {
+    return resource_scheduling_evaluate(
+        problem, schedule, resource_scheduling_problem::implementation::builtin_evaluator{});
+}
+
+// 初期構築後にSA改善を行う。最適性・厳密な時間上限は保証しない。O(V+(I+1)(D+N+E))
 inline resource_scheduling_result resource_scheduling_solve(
     const resource_scheduling_problem& problem,
     const resource_scheduling_options& options = {}) {
@@ -1153,6 +1162,7 @@ inline resource_scheduling_result resource_scheduling_solve(
         options);
 }
 
+// 独自Evaluatorで初期構築とSA改善を行う。O(V+(I+1)(D+N+E))
 template<class Evaluator>
 resource_scheduling_result resource_scheduling_solve(
     const resource_scheduling_problem& problem,
@@ -1165,7 +1175,7 @@ resource_scheduling_result resource_scheduling_solve(
         options);
 }
 
-// 実行可能な既存解から改善する。同じ決定的Evaluatorなら元の目的値以下を返す。
+// 既存解から改善し、元の組み込み目的値以下を返す。O(V+S+U log(1+U)+(I+1)(D+N+E))
 inline resource_scheduling_result resource_scheduling_improve(
     const resource_scheduling_problem& problem,
     const resource_schedule& initial,
@@ -1177,6 +1187,7 @@ inline resource_scheduling_result resource_scheduling_improve(
         options);
 }
 
+// 独自Evaluatorで既存解を改善し、同じ決定的評価なら元以下を返す。O(V+S+U log(1+U)+(I+1)(D+N+E))
 template<class Evaluator>
 resource_scheduling_result resource_scheduling_improve(
     const resource_scheduling_problem& problem,
@@ -1194,7 +1205,7 @@ resource_scheduling_result resource_scheduling_improve(
 #if __INCLUDE_LEVEL__ == 0
 
 
-// Test-only access to private static implementation; absent from ordinary inclusion.
+// 直接コンパイル時だけ非公開実装へアクセスするテスト用定義
 struct resource_scheduling_test_access {
     using implementation = resource_scheduling_problem::implementation;
     using problem_data = implementation::problem_data;
@@ -1930,7 +1941,187 @@ void test_quality_candidates_boundaries() {
 }
 }
 
+namespace {
+
+// 時計の変換限界、加算限界、最大doubleと期限の組合せを実際の探索で確認する
+void test_time_limit_boundaries() {
+    const auto p = make_small_problem();
+    resource_scheduling_options o;
+    o.time_limit_ms = 100000;
+    o.max_iterations = 64;
+    const auto reference = resource_scheduling_solve(p, o);
+    const auto same_result = [&](const resource_scheduling_result& actual) {
+        assert(actual.objective == reference.objective);
+        assert(actual.iterations == reference.iterations);
+        assert(actual.decoded_schedules == reference.decoded_schedules);
+        assert(actual.accepted_moves == reference.accepted_moves);
+        assert(actual.schedule.task_order == reference.schedule.task_order);
+        assert(actual.schedule.mode_of_task == reference.schedule.mode_of_task);
+        assert(actual.schedule.start_time == reference.schedule.start_time);
+    };
+
+    // duration_castの境界付近と、durationは収まってもnowへの加算が溢れる値
+    const double clock_ms = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::duration::max()).count();
+    for (double limit : {std::nextafter(clock_ms, 0.0), clock_ms,
+                         std::nextafter(clock_ms, INFINITY),
+                         std::numeric_limits<double>::max()}) {
+        o.time_limit_ms = limit;
+        o.deadline.reset();
+        same_result(resource_scheduling_solve(p, o));
+        o.deadline = std::chrono::steady_clock::time_point::max();
+        same_result(resource_scheduling_solve(p, o));
+        o.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        same_result(resource_scheduling_solve(p, o));
+        const auto improved = resource_scheduling_improve(p, reference.schedule, o);
+        assert(improved.iterations == o.max_iterations);
+        assert(improved.objective <= reference.objective);
+        assert(resource_scheduling_is_feasible(p, improved.schedule));
+
+        // 過去のdeadlineおよび反復上限0でも、変換自体を安全に行う
+        o.deadline = std::chrono::steady_clock::time_point::min();
+        const auto stopped = resource_scheduling_solve(p, o);
+        assert(stopped.iterations == 0 && stopped.decoded_schedules == 1);
+        o.deadline.reset();
+        o.max_iterations = 0;
+        assert(resource_scheduling_solve(p, o).iterations == 0);
+        o.max_iterations = 64;
+    }
+    for (double limit : {-std::numeric_limits<double>::max(), -1.0, -0.0, 0.0,
+                         std::numeric_limits<double>::denorm_min()}) {
+        o.time_limit_ms = limit;
+        const auto stopped = resource_scheduling_solve(p, o);
+        assert(stopped.iterations == 0 && stopped.decoded_schedules == 1);
+        assert(resource_scheduling_is_feasible(p, stopped.schedule));
+    }
+}
+
+// 組み込み評価でも有限値を要求し、正常な最大値と正負の積和のoverflowを区別する
+void test_builtin_objective_overflow() {
+    const long double maximum = std::numeric_limits<long double>::max();
+    resource_scheduling_problem p;
+    p.tasks.resize(1);
+    p.tasks[0].modes = {{1, {}, 0}};
+    p.makespan_weight = maximum;
+    resource_schedule s{{0}, {0}, {0}};
+    resource_scheduling_options o;
+    o.max_iterations = 0;
+    assert(resource_scheduling_evaluate(p, s) == maximum);
+    assert(resource_scheduling_solve(p, o).objective == maximum);
+
+    const auto rejected = [&](const resource_scheduling_problem& problem) {
+        assert(resource_scheduling_is_feasible(problem, s));
+        int exceptions = 0;
+        try { (void)resource_scheduling_evaluate(problem, s); }
+        catch (const std::invalid_argument&) { ++exceptions; }
+        try { (void)resource_scheduling_solve(problem, o); }
+        catch (const std::invalid_argument&) { ++exceptions; }
+        try { (void)resource_scheduling_improve(problem, s, o); }
+        catch (const std::invalid_argument&) { ++exceptions; }
+        assert(exceptions == 3);
+    };
+    p.tasks[0].modes[0].duration = 2;
+    rejected(p);
+    p.makespan_weight = 0;
+    p.tasks[0].completion_weight = maximum;
+    rejected(p);
+    p.tasks[0].completion_weight = 0;
+    p.tasks[0].due_time = 0;
+    p.tasks[0].tardiness_weight = maximum;
+    rejected(p);
+    p.tasks[0].tardiness_weight = 0;
+    p.mode_cost_weight = 2;
+    p.tasks[0].modes[0].fixed_cost = maximum;
+    rejected(p);
+    p.tasks[0].modes[0].fixed_cost = -maximum;
+    rejected(p);
+    p.mode_cost_weight = 1;
+    assert(resource_scheduling_evaluate(p, s) == -maximum);
+}
+
+// 問題・オプション・解の各検査項目を独立に壊し、検査の抜けを確認する
+void test_invalid_input_matrix() {
+    const auto original = make_small_problem();
+    const auto bad_problem = [&](auto change) {
+        auto p = original;
+        change(p);
+        bool thrown = false;
+        try { resource_scheduling_validate_problem(p); }
+        catch (const std::invalid_argument&) { thrown = true; }
+        assert(thrown);
+    };
+    bad_problem([](auto& p) { p.resources[0].capacity = 0; });
+    bad_problem([](auto& p) { p.tasks[0].release_time = -1; });
+    bad_problem([](auto& p) { p.tasks[0].due_time = -2; });
+    bad_problem([](auto& p) { p.tasks[0].modes.clear(); });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].duration = -1; });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].renewable_uses[0].resource = -1; });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].renewable_uses[0].resource = 2; });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].renewable_uses[0].amount = 0; });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].renewable_uses[0].amount = 3; });
+    bad_problem([](auto& p) { p.tasks[0].modes[0].renewable_uses.push_back({0, 1}); });
+    bad_problem([](auto& p) { p.precedences.push_back({0, 0}); });
+    bad_problem([](auto& p) { p.precedences.push_back({-1, 0}); });
+    bad_problem([](auto& p) { p.precedences.push_back({0, 6}); });
+    bad_problem([](auto& p) { p.precedences.push_back({5, 0}); });
+    for (long double value : {-1.0L, std::numeric_limits<long double>::infinity(),
+                              std::numeric_limits<long double>::quiet_NaN()}) {
+        bad_problem([&](auto& p) { p.makespan_weight = value; });
+        bad_problem([&](auto& p) { p.mode_cost_weight = value; });
+        bad_problem([&](auto& p) { p.tasks[0].completion_weight = value; });
+        bad_problem([&](auto& p) { p.tasks[0].tardiness_weight = value; });
+        if (!std::isfinite(value)) bad_problem([&](auto& p) { p.tasks[0].modes[0].fixed_cost = value; });
+    }
+
+    resource_scheduling_options o;
+    o.max_iterations = 0;
+    const auto valid = resource_scheduling_solve(original, o).schedule;
+    const auto bad_schedule = [&](auto change) {
+        auto s = valid;
+        change(s);
+        assert(!resource_scheduling_is_feasible(original, s));
+        int exceptions = 0;
+        try { (void)resource_scheduling_evaluate(original, s); }
+        catch (const std::invalid_argument&) { ++exceptions; }
+        try { (void)resource_scheduling_improve(original, s, o); }
+        catch (const std::invalid_argument&) { ++exceptions; }
+        assert(exceptions == 2);
+    };
+    bad_schedule([](auto& s) { s.task_order.pop_back(); });
+    bad_schedule([](auto& s) { s.mode_of_task.pop_back(); });
+    bad_schedule([](auto& s) { s.start_time.pop_back(); });
+    bad_schedule([](auto& s) { s.task_order[0] = -1; });
+    bad_schedule([](auto& s) { s.task_order[0] = 6; });
+    bad_schedule([](auto& s) { s.task_order[0] = s.task_order[1]; });
+    bad_schedule([](auto& s) { std::reverse(s.task_order.begin(), s.task_order.end()); });
+    bad_schedule([](auto& s) { s.mode_of_task[0] = -1; });
+    bad_schedule([](auto& s) { s.mode_of_task[0] = 2; });
+    bad_schedule([](auto& s) { s.start_time[0] = -1; });
+    bad_schedule([](auto& s) { s.start_time[5] = 0; });
+    bad_schedule([](auto& s) { s.start_time[0] = LLONG_MAX; });
+    for (double value : {std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::quiet_NaN()}) {
+        o.time_limit_ms = value;
+        bool thrown = false;
+        try { (void)resource_scheduling_solve(original, o); }
+        catch (const std::invalid_argument&) { thrown = true; }
+        assert(thrown);
+    }
+    o.time_limit_ms = 0;
+    o.max_iterations = -2;
+    bool thrown = false;
+    try { (void)resource_scheduling_solve(original, o); }
+    catch (const std::invalid_argument&) { thrown = true; }
+    assert(thrown);
+}
+
+} // namespace
+
 int main() {
+    test_time_limit_boundaries();
+    test_builtin_objective_overflow();
+    test_invalid_input_matrix();
     test_quality_candidates_boundaries();
     test_single_state_against_enumeration();
     test_round3_paths();
@@ -1952,7 +2143,7 @@ int main() {
     test_calendar_memory_boundary_and_zero_objective();
     assert(actual_search_checks > 24000);
     std::cout << "actual search callbacks checked: " << actual_search_checks << "\n";
-    std::cout << "all tests passed: legacy + overflow + actual-search SSGS checks + 30 exact oracles + prefix/boundary tests + 1099 exhaustive uniqueness cases\n";
+    std::cout << "all tests passed: legacy + overflow + actual-search SSGS checks + 30 exact oracles + prefix/boundary tests + 1099 exhaustive uniqueness cases + time/objective/input boundaries\n";
 }
 
 #endif

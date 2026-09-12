@@ -4,7 +4,9 @@
 // 任意の負の対数密度から最良候補を探索し、固定したMH遷移で標本を得る。
 // C++20、単スレッド。評価は有限doubleまたは+inf。NaN/-infは禁止。
 // 有限項の和・温度計算などの中間値もdoubleに収まる範囲で使い、fast-mathは指定しない。
-// 状態はコピー可能、形・次元は固定。同じ状態・目的関数では評価値を固定し、共有データ変更後はrefreshを呼ぶ。
+// 状態はコピー可能、形・次元は固定。同じ状態・目的関数では評価値を固定する。
+// 通常はmake_numeric_session / make_sessionでモデルと提案を所有させる。
+// 下位APIを直接使う場合だけ、共有データ変更後のrefresh等を利用側で管理する。
 struct McmcState {
     std::vector<double> real;
     std::vector<std::int64_t> discrete;
@@ -13,6 +15,7 @@ struct McmcState {
 template<class State = McmcState>
 class McmcEstimator {
 public:
+    template<class Model, class Move> class Session;
     using Clock = std::chrono::steady_clock;
     enum class Phase { Search, Warmup, Sample };
     enum class Stop { Budget, NoFiniteState };
@@ -83,6 +86,8 @@ public:
         std::uint64_t cooling_steps = 0;
         Clock::time_point cooling_deadline = Clock::time_point::max();
         std::size_t observation_check_interval = 32; // 観測項の時計確認間隔。重い項では1を指定。
+        // Session::sampleの準備量。未指定:数値はmax(512,64*可動変数数*鎖数)、全固定は0、独自状態は512*鎖数。
+        std::optional<std::uint64_t> warmup_steps = std::nullopt; // 収束の保証ではない。明示した0で準備を省略する。
     };
     struct Report {
         Stop stop = Stop::Budget;
@@ -113,6 +118,7 @@ public:
     };
 
     class NumericMove {
+        template<class, class> friend class Session;
         Domain domain_;
         MoveParam param_;
         std::vector<int> active_;
@@ -123,6 +129,16 @@ public:
         double last_step_ = 0;
         std::size_t reverse_chain_ = 0;
         bool self_ = false;
+        std::vector<int> next_discrete_;
+        std::uint64_t warmup_size(std::size_t chains) const {
+            return active_.empty() ? 0 : std::max<std::uint64_t>(512,64*active_.size()*chains);
+        }
+        void validate(const State& s) const {
+            assert(s.real.size() == domain_.real.size() && s.discrete.size() == domain_.discrete.size());
+            for (std::size_t i = 0; i < domain_.real.size()+domain_.discrete.size(); ++i)
+                assert(bounded(s,static_cast<int>(i)));
+            (void)s;
+        }
         bool bounded(const State& s, int j) const {
             if (j < static_cast<int>(domain_.real.size())) {
                 const auto& a = domain_.real[static_cast<std::size_t>(j)];
@@ -134,6 +150,7 @@ public:
             return domain_.discrete[k].lower <= s.discrete[k] && s.discrete[k] <= domain_.discrete[k].upper;
         }
     public:
+        static constexpr bool sampling_safe = true;
         // 数値提案を準備する。O(d)。実数scaleは正、固定変数では使用しない。
         explicit NumericMove(Domain domain, MoveParam param = {}) : domain_(std::move(domain)), param_(param) {
             assert(param.difference_probability >= 0 && param.stretch_probability >= 0
@@ -149,14 +166,16 @@ public:
                 if (a.lower != a.upper) active_.push_back(static_cast<int>(scale_.size()));
                 scale_.push_back(std::max(1.0, static_cast<double>(a.upper-a.lower)*0.1));
             }
-            initial_ = scale_;
-            attempts_.resize(scale_.size()); accepts_.resize(scale_.size());
+            if (param_.adapt) {
+                initial_ = scale_;
+                attempts_.resize(scale_.size()); accepts_.resize(scale_.size());
+            }
         }
         // 数値提案を作る。Searchは最適化用、Warmup/Sampleは正しい提案比を返す。座標O(1)、集団操作・改訂直後O(d)。
         double operator()(const State& current, State& candidate, Rng& rng, const MoveContext& ctx) {
             assert(candidate.real.size() == domain_.real.size() && candidate.discrete.size() == domain_.discrete.size());
             if (revision_ != ctx.revision) {
-                revision_ = ctx.revision; reverse_ = -1;
+                revision_ = ctx.revision; reverse_ = -1; next_discrete_.clear();
                 std::fill(attempts_.begin(), attempts_.end(), 0);
                 std::fill(accepts_.begin(), accepts_.end(), 0);
             }
@@ -172,7 +191,7 @@ public:
                 else candidate.discrete[k-candidate.real.size()] += static_cast<std::int64_t>(previous_step);
                 return bounded(candidate,reverse) ? 0 : -INFINITY;
             }
-            if (active_.empty()) return 0;
+            if (active_.empty()) return -INFINITY; // 全固定なら現状態を記録し、同じ評価を繰り返さない。
             const double difference = ctx.phase == Phase::Search ? 0 : param_.difference_probability;
             const double kind = rng.uniform();
             const double stretch = ctx.phase == Phase::Search ? 0 : param_.stretch_probability;
@@ -203,7 +222,15 @@ public:
                 }
                 return 0;
             }
-            touched_ = active_[static_cast<std::size_t>(rng.integer(static_cast<int>(active_.size())))];
+            // 動かす変数がすべて離散ならWarmup/Sampleで鎖ごとに巡回する。
+            int coordinate;
+            if (ctx.phase != Phase::Search && real_count_ == 0) {
+                if (next_discrete_.size() <= ctx.chain) next_discrete_.resize(ctx.chain+1);
+                auto& next = next_discrete_[ctx.chain];
+                coordinate = next;
+                if (++next == static_cast<int>(active_.size())) next = 0;
+            } else coordinate = rng.integer(static_cast<int>(active_.size()));
+            touched_ = active_[static_cast<std::size_t>(coordinate)];
             const auto k = static_cast<std::size_t>(touched_);
             auto step = [&] {
                 double factor = 1;
@@ -260,23 +287,133 @@ public:
         }
     };
 
-    template<class Observation, class Predict, class Loss, class Prior>
+private:
+    struct ZeroPrior { template<class... A> double operator()(const A&...) const { return 0; } };
+    struct NoContext {};
+    template<class Function, bool Symmetric>
+    class SamplingMove {
+        Function function_;
+    public:
+        static constexpr bool sampling_safe = true;
+        explicit SamplingMove(Function function) : function_(std::move(function)) {}
+        double operator()(const State& s, State& next, Rng& rng, const MoveContext& ctx) {
+            if constexpr (Symmetric) {
+                static_assert(std::is_same_v<decltype(function_(s,next,rng,ctx)),bool>);
+                return function_(s,next,rng,ctx) ? 0 : -INFINITY;
+            } else return function_(s,next,rng,ctx);
+        }
+        void feedback(bool accepted, const MoveContext& ctx) {
+            if constexpr (requires { function_.feedback(accepted,ctx); }) function_.feedback(accepted,ctx);
+        }
+    };
+public:
+    // 実数・整数・カテゴリの初期値と範囲を一度に宣言する。追加時O(1)償却。
+    // 戻り値はreal/discreteそれぞれの添字。カテゴリIDは[0,count)。構造変更にはSessionを再構築する。
+    class Parameters {
+        State initial_;
+        Domain domain_;
+    public:
+        std::size_t real(double initial, double lower, double upper, double scale = 0) {
+            assert(std::isfinite(initial) && lower <= initial && initial <= upper);
+            if (scale == 0) {
+                assert(std::isfinite(lower) && std::isfinite(upper));
+                scale = lower == upper ? 1 : (upper-lower)*0.1;
+            }
+            assert(std::isfinite(scale) && scale > 0);
+            initial_.real.push_back(initial); domain_.real.push_back({lower,upper,scale});
+            return initial_.real.size()-1;
+        }
+        std::size_t integer(std::int64_t initial, std::int64_t lower, std::int64_t upper) {
+            assert(lower <= initial && initial <= upper && upper-lower <= 1000000000);
+            initial_.discrete.push_back(initial); domain_.discrete.push_back({lower,upper,false});
+            return initial_.discrete.size()-1;
+        }
+        std::size_t category(std::int64_t initial, int count) {
+            assert(count > 0);
+            const auto i = integer(initial,0,count-1); domain_.discrete.back().categorical = true; return i;
+        }
+        const State& initial() const { return initial_; }
+        const Domain& domain() const { return domain_; }
+    };
+    template<class Input> struct Observation {
+        Input input;
+        double value;
+        double scale = 1; // Gaussian/Huberだけが使用する既知の誤差尺度。
+        double weight = 1; // 尤度の重み。0なら損失0。総和を観測数で自動除算しない。
+    };
+    struct Gaussian {
+    private:
+        mutable double last_scale_ = 0, last_log_scale_ = 0; // 尺度の値が変われば再計算する。
+    public:
+        template<class O> double operator()(const State&, const O& row, double predicted) const {
+            assert(row.weight >= 0 && std::isfinite(row.weight));
+            if (row.weight == 0) return 0;
+            assert(row.scale > 0 && std::isfinite(row.scale));
+            if (row.scale != last_scale_) { last_scale_ = row.scale; last_log_scale_ = std::log(row.scale); }
+            const double z = (row.value-predicted)/row.scale;
+            return row.weight*(0.5*z*z+last_log_scale_);
+        }
+        static double mean(double predicted) { return predicted; }
+    };
+    struct Huber {
+        double threshold = 1.345; // 固定値として使う。推定する場合は正規化定数も独自損失に含める。
+        template<class O> double operator()(const State&, const O& row, double predicted) const {
+            assert(row.weight >= 0 && std::isfinite(row.weight));
+            assert(threshold > 0 && std::isfinite(threshold) && row.scale > 0 && std::isfinite(row.scale));
+            if (row.weight == 0) return 0;
+            const double z = std::abs((row.value-predicted)/row.scale);
+            return row.weight*((z <= threshold ? 0.5*z*z : threshold*(z-0.5*threshold))+std::log(row.scale));
+        }
+        static double mean(double predicted) { return predicted; }
+    };
+    struct BernoulliLogit {
+        template<class O> double operator()(const State&, const O& row, double logit) const {
+            assert((row.value == 0 || row.value == 1) && row.weight >= 0 && std::isfinite(row.weight));
+            assert(std::isfinite(logit));
+            return row.weight == 0 ? 0 : row.weight*((row.value == 0 ? std::max(logit,0.0) : std::max(-logit,0.0))
+                + std::log1p(std::exp(-std::abs(logit))));
+        }
+        static double mean(double logit) {
+            const double e = std::exp(-std::abs(logit)); return logit >= 0 ? 1/(1+e) : e/(1+e);
+        }
+    };
+    struct PoissonLogMean {
+        template<class O> double operator()(const State&, const O& row, double log_mean) const {
+            assert(row.value >= 0 && std::isfinite(row.value) && std::floor(row.value) == row.value);
+            assert(row.weight >= 0 && std::isfinite(row.weight) && std::isfinite(log_mean));
+            return row.weight == 0 ? 0 : row.weight*(std::exp(log_mean)-row.value*log_mean);
+        }
+        static double mean(double log_mean) { return std::exp(log_mean); }
+    };
+
+    template<class Observation, class Predict, class Loss, class Prior, class Context = NoContext>
     class ObservationModel {
         friend class McmcEstimator;
+        template<class, class> friend class Session;
         using ObservationTag = void;
         std::vector<Observation> data_;
         Predict predict_;
         Loss loss_;
         Prior prior_;
+        [[no_unique_address]] Context context_;
+        template<class Self, class Input>
+        static decltype(auto) predict(Self& self, const Input& input, const State& state) {
+            if constexpr (std::is_same_v<Context,NoContext>) return self.predict_(input,state);
+            else return self.predict_(self.context_,input,state);
+        }
         double term(const State& state, std::size_t i) {
-            if (i == 0) return prior_(state);
+            if (i == 0) {
+                if constexpr (std::is_same_v<Context,NoContext>) return prior_(state);
+                else return prior_(context_,state);
+            }
             const auto& row = data_[i-1];
-            return loss_(state, row, predict_(row.input, state));
+            return loss_(state, row, predict(*this,row.input,state));
         }
     public:
         // 独立な観測列と関数を所有する。O(n)、vector移動時はO(1)。
-        ObservationModel(std::vector<Observation> data, Predict predict, Loss loss, Prior prior)
-            : data_(std::move(data)), predict_(std::move(predict)), loss_(std::move(loss)), prior_(std::move(prior)) {}
+        using observation_type = Observation;
+        ObservationModel(std::vector<Observation> data, Predict predictor, Loss loss, Prior prior, Context context = {})
+            : data_(std::move(data)), predict_(std::move(predictor)), loss_(std::move(loss)), prior_(std::move(prior)), context_(std::move(context)) {}
         // 観測全体を評価する。O(全観測の予測・損失計算)
         double operator()(const State& state) {
             double sum = 0;
@@ -290,14 +427,41 @@ public:
         std::size_t size() const { return data_.size(); }
         // 観測の読み取り専用ビューを返す。更新まで有効。O(1)
         std::span<const Observation> observations() const { return data_; }
+        // 生の予測値と、標準損失のリンク変換後の平均。モデルを変更しない予測関数で使う。
+        template<class Input> decltype(auto) prediction(const Input& input, const State& state) const { return predict(*this,input,state); }
+        template<class Input> auto mean_prediction(const Input& input, const State& state) const
+            requires requires { loss_.mean(prediction(input,state)); } { return loss_.mean(prediction(input,state)); }
+        // 所有Contextを更新する場合はSession::update_modelのコールバック内でのみ変更する。
+        Context& context() { return context_; }
+        const Context& context() const { return context_; }
     };
 
     // 数値提案の補助を作る。O(d)
     static NumericMove make_numeric_move(Domain domain, MoveParam param = {}) { return NumericMove(std::move(domain), param); }
     // 独立観測の評価関数を合成する。O(n)、観測vectorの移動時はO(1)。
-    template<class O, class P, class L, class R>
-    static auto make_observation_model(std::vector<O> data, P predict, L loss, R prior) {
+    template<class O, class P, class L = Gaussian, class R = ZeroPrior>
+    static auto make_observation_model(std::vector<O> data, P predict, L loss = {}, R prior = {}) {
         return ObservationModel<O,P,L,R>(std::move(data),std::move(predict),std::move(loss),std::move(prior));
+    }
+    // Contextも値として所有する。予測は(context,input,state)、事前項は(context,state)。
+    template<class O, class C, class P, class L = Gaussian, class R = ZeroPrior>
+    static auto make_context_model(std::vector<O> data, C context, P predict, L loss = {}, R prior = {}) {
+        return ObservationModel<O,P,L,R,C>(std::move(data),std::move(predict),std::move(loss),std::move(prior),std::move(context));
+    }
+    // 対称性は利用側が保証する。関数はboolを返す(true:候補を評価、false:棄却)。
+    // 独自提案のfeedback等はSample中に提案分布を適応させないこと。
+    template<class F> static auto symmetric_move(F move) { return SamplingMove<F,true>(std::move(move)); }
+    // 関数はlog(q(旧|新)/q(新|旧))を返す。提案比の正しさは利用側が保証する。
+    template<class F> static auto hastings_move(F move) { return SamplingMove<F,false>(std::move(move)); }
+    template<class Model, class Move>
+    static auto make_session(std::vector<State> initial, Model model, Move move, Param param = {}) {
+        return Session<Model,Move>(std::move(initial),std::move(model),std::move(move),param);
+    }
+    // chains個の鎖を同じ初期値で開始する。異なる初期値はrestartまたはmake_sessionで指定する。
+    template<class Model>
+    static auto make_numeric_session(const Parameters& parameters, Model model, Param param = {}, MoveParam move = {}, std::size_t chains = 1) {
+        assert(chains > 0);
+        return make_session(std::vector<State>(chains,parameters.initial()),std::move(model),make_numeric_move(parameters.domain(),move),param);
     }
     // 正規観測の負の対数尤度を定数項を除いて返す。O(1)。sigma>0。
     static double gaussian_loss(double observed, double predicted, double sigma) {
@@ -316,11 +480,7 @@ public:
     template<class Evaluate>
     Report reset(std::span<const State> initial, Evaluate&& evaluate, Budget& budget) {
         const auto start = Clock::now();
-        assert(!initial.empty());
-        states_.assign(initial.begin(), initial.end());
-        energy_.assign(initial.size(), INFINITY); samples_.assign(initial.size(),0);
-        best_.reset(); priority_.reset(); trial_.reset(); next_chain_ = 0;
-        rng_ = Rng(param_.seed); invalidate();
+        initialize(std::vector<State>(initial.begin(),initial.end()));
         Report report; synchronize(evaluate,budget,report);
         return finish(report,start);
     }
@@ -340,8 +500,8 @@ public:
         return finish(report,start);
     }
     // 観測を一度だけ追加。空なら履歴を保つ。償却O(batchサイズ+(C+1)*追加評価時間)、必要時は全評価。
-    template<class O, class P, class L, class R>
-    Report observe(ObservationModel<O,P,L,R>& model, std::vector<O> batch, Budget& budget) {
+    template<class Model>
+    Report observe(Model& model, std::vector<typename Model::observation_type> batch, Budget& budget) {
         const auto start = Clock::now(); assert(!states_.empty());
         if (!batch.empty()) {
             const bool can_add = synced() && best_.has_value();
@@ -353,27 +513,27 @@ public:
         return finish(report,start);
     }
     // 観測を置換し全再評価する。O(n+C*評価時間)。
-    template<class O, class P, class L, class R>
-    Report replace_observations(ObservationModel<O,P,L,R>& model, std::vector<O> data, Budget& budget) {
+    template<class Model>
+    Report replace_observations(Model& model, std::vector<typename Model::observation_type> data, Budget& budget) {
         const auto start = Clock::now(); assert(!states_.empty());
         model.data_ = std::move(data); invalidate();
         Report report; synchronize(model,budget,report);
         return finish(report,start);
     }
-    // 現行の目的関数で評価済みの最良候補を返す。次の更新まで有効。O(1)。
-    Best best() const { return {best_ ? &*best_ : nullptr,best_ ? best_energy_ : INFINITY}; }
+    // 現行の目的関数で評価済みの最良候補を返す。次の実行・更新まで有効。O(1)。
+    Best best() const { return {best_ ? &*best_ : nullptr,best_energy_}; }
 
     // 指定区間を継続実行する。O(m*(状態コピー+提案+評価)+出力)。未完了時は同じモデル・提案を再度渡す。
     template<class Evaluate, class Propose, class Emit>
     Report run(Phase phase, Evaluate&& evaluate, Propose&& propose, Budget& budget, Emit&& emit) {
         const auto start = Clock::now(); assert(!states_.empty());
-        Report report;
-        if (!phase_ || *phase_ != phase) {
-            phase_ = phase; trial_pending_ = false; trial_progress_ = {}; emit_pending_ = false;
+        Report report; synchronize(evaluate,budget,report);
+        // 実行しないモード変更で未完了の試行・出力を捨てない。
+        if (!synced() || !best_ || (phase_ != phase && !budget.available())) return finish(report,start);
+        if (phase_ != phase) {
+            phase_ = phase; trial_pending_ = false; emit_pending_ = false;
             if (phase == Phase::Sample) std::fill(samples_.begin(),samples_.end(),0);
         }
-        synchronize(evaluate,budget,report);
-        if (!synced() || !best_) return finish(report,start);
         if (phase == Phase::Search && !search_started_ && budget.available()) {
             search_started_ = true; search_start_ = start;
             search_end_ = param_.cooling_deadline;
@@ -410,9 +570,8 @@ public:
                 candidate_energy = trial_progress_.sum;
             }
             update_best(*trial_,candidate_energy);
-            const double log_alpha = std::isfinite(candidate_energy)
-                ? -(candidate_energy-energy_[i])/trial_temperature_ + trial_ratio_ : -INFINITY;
-            const bool accepted = trial_log_u_ <= std::min(0.0,log_alpha);
+            const double log_alpha = -(candidate_energy-energy_[i])/trial_temperature_ + trial_ratio_;
+            const bool accepted = trial_log_u_ <= log_alpha;
             if (accepted) { std::swap(states_[i],*trial_); energy_[i] = candidate_energy; ++report.accepted; }
             const MoveContext ctx{phase,trial_temperature_,i,states_,revision_};
             if constexpr (requires { propose.feedback(accepted,ctx); }) propose.feedback(accepted,ctx);
@@ -450,32 +609,39 @@ private:
     double trial_temperature_ = 1, trial_ratio_ = 0, trial_log_u_ = 0;
     Clock::time_point search_start_, search_end_;
 
+    void initialize(std::vector<State> initial) {
+        assert(!initial.empty()); states_ = std::move(initial);
+        energy_.assign(states_.size(),INFINITY); samples_.assign(states_.size(),0);
+        best_.reset(); priority_.reset(); trial_.reset(); next_chain_ = 0;
+        rng_ = Rng(param_.seed); invalidate();
+    }
+
     static void check_energy(double value) { assert(!std::isnan(value) && value != -INFINITY); (void)value; }
     bool synced() const { return sync_pos_ == static_cast<std::ptrdiff_t>(states_.size()); }
+    // best_が空ならbest_energy_は+inf。評価の-inf/NaNは契約外。
     void update_best(const State& s, double e) {
-        if (std::isfinite(e) && (!best_ || e < best_energy_)) { best_ = s; best_energy_ = e; }
+        if (e < best_energy_) { best_ = s; best_energy_ = e; }
     }
     void invalidate() {
         if (best_) { priority_ = std::move(best_); priority_energy_ = best_energy_; }
         best_.reset(); best_energy_ = INFINITY;
         sync_pos_ = priority_ ? -1 : 0; append_begin_.reset();
-        sync_progress_ = {}; trial_progress_ = {}; trial_pending_ = emit_pending_ = false;
+        sync_progress_ = {}; trial_pending_ = emit_pending_ = false;
         search_started_ = false; search_done_ = 0; phase_.reset(); ++revision_;
     }
     template<class Evaluate>
     bool evaluate_some(Evaluate& eval, const State& s, Budget& b, Report& r, Progress& p) {
         if (!b.available()) return false;
         if constexpr (requires { typename std::remove_cvref_t<Evaluate>::ObservationTag; }) {
-            std::size_t left = param_.observation_check_interval;
             while (p.next <= eval.data_.size()) {
-                if (left == 0) {
-                    if (!b.available()) return false;
-                    left = param_.observation_check_interval;
-                }
-                --left;
-                const double value = eval.term(s,p.next++); ++r.terms; check_energy(value);
-                p.sum += value; check_energy(p.sum);
-                if (!std::isfinite(p.sum)) break;
+                const auto end = p.next+std::min(param_.observation_check_interval,eval.data_.size()+1-p.next);
+                do {
+                    const double value = eval.term(s,p.next++); ++r.terms; check_energy(value);
+                    p.sum += value; check_energy(p.sum);
+                    if (!std::isfinite(p.sum)) break;
+                } while (p.next < end);
+                if (!std::isfinite(p.sum) || p.next > eval.data_.size()) break;
+                if (!b.available()) return false;
             }
         } else {
             p.sum = eval(s); ++r.terms; check_energy(p.sum);
@@ -520,6 +686,167 @@ private:
     }
 };
 
+// 値所有の通常API。コールバックの参照キャプチャ先まで所有するものではない。
+// 更新は即時に登録し、評価は次のsolve/sampleの予算で行う。単スレッド、実行中の再入・更新は禁止。
+template<class State>
+template<class Model, class Move>
+class McmcEstimator<State>::Session {
+    McmcEstimator engine_;
+    Model model_;
+    Move move_;
+    std::uint64_t warmup_target_ = 0, warmup_left_ = 0;
+    bool queued_ = false;
+    static constexpr bool can_sample = [] {
+        if constexpr (requires { Move::sampling_safe; }) return Move::sampling_safe;
+        else return false;
+    }();
+    void changed(bool append = false, std::size_t first = 0) {
+        if (!queued_) {
+            const bool incremental = append && engine_.synced() && engine_.best_.has_value();
+            engine_.invalidate();
+            if (incremental) engine_.append_begin_ = first;
+        } else {
+            ++engine_.revision_;
+            // 追加以外の変更では、開始済みの部分和も破棄する。
+            if (!append) { engine_.append_begin_.reset(); engine_.sync_progress_ = {}; }
+        }
+        queued_ = true; warmup_left_ = warmup_target_;
+    }
+public:
+    struct Result {
+        std::optional<State> state; // 今の目的関数で評価済みの最良候補を所有する。未評価ならnullopt。
+        double energy = INFINITY;
+        Report report;
+        std::uint64_t revision = 0;
+    };
+    // double / array<double,N> / vector<double>の逐次集計。標本自体は保存しない。
+    // varianceはn-1で割った標本分散。平均の推定誤差や独立標本数ではない。
+    template<class Value> class Moments {
+        std::uint64_t count_ = 0;
+        std::optional<Value> mean_, m2_;
+        static std::size_t size(const Value& value) {
+            if constexpr (std::is_same_v<Value,double>) { (void)value; return 1; }
+            else { static_assert(std::is_same_v<typename Value::value_type,double>); return value.size(); }
+        }
+        template<class V> static decltype(auto) at(V& value, std::size_t i) {
+            if constexpr (std::is_same_v<Value,double>) { (void)i; return (value); }
+            else return (value[i]);
+        }
+    public:
+        void add(const Value& value) {
+            if (count_ == 0) {
+                mean_ = m2_ = value;
+                for (std::size_t i = 0; i < size(value); ++i) { assert(std::isfinite(at(value,i))); at(*m2_,i) = 0; }
+            } else {
+                assert(size(value) == size(*mean_));
+                const double reciprocal = 1/static_cast<double>(count_+1);
+                for (std::size_t i = 0; i < size(value); ++i) {
+                    const double x = at(value,i), delta = x-at(*mean_,i); assert(std::isfinite(x));
+                    at(*mean_,i) += delta*reciprocal;
+                    at(*m2_,i) += delta*(x-at(*mean_,i));
+                }
+            }
+            ++count_;
+        }
+        std::uint64_t count() const { return count_; }
+        const std::optional<Value>& mean() const { return mean_; }
+        std::optional<Value> variance() const {
+            if (count_ < 2) return std::nullopt;
+            auto v = *m2_;
+            for (std::size_t i = 0; i < size(v); ++i) at(v,i) /= static_cast<double>(count_-1);
+            return v;
+        }
+    };
+    template<class Value> struct SampleResult {
+        Moments<Value> summary;
+        Report report;
+        std::uint64_t revision, warmup_remaining;
+    };
+
+    // 初期状態を所有する。目的関数の初回評価はsolve/sampleまで実行しない。
+    Session(std::vector<State> initial, Model model, Move move, Param param = {})
+        : engine_(param), model_(std::move(model)), move_(std::move(move)) {
+        restart(std::move(initial));
+    }
+    // 同じ構造の初期状態・鎖数を変更し、乱数と探索履歴を初期化する。数値提案の学習済み尺度は保持。
+    // 次元・カテゴリの意味が変わる場合は、モデルと提案を含めてSessionを作り直す。
+    void restart(std::vector<State> initial) {
+        if constexpr (requires (const State& s) { move_.validate(s); })
+            for (const auto& s : initial) move_.validate(s);
+        engine_.initialize(std::move(initial)); queued_ = true;
+        if (engine_.param_.warmup_steps) warmup_target_ = *engine_.param_.warmup_steps;
+        else if constexpr (requires { std::as_const(move_).warmup_size(engine_.states_.size()); })
+            warmup_target_ = std::as_const(move_).warmup_size(engine_.states_.size());
+        else warmup_target_ = 512*engine_.states_.size();
+        warmup_left_ = warmup_target_;
+    }
+    const Model& model() const { return model_; }
+    Best best() const { return engine_.best(); } // 次の実行・変更まで有効なビュー。
+    std::uint64_t revision() const { return engine_.revision_; }
+    std::uint64_t warmup_remaining() const { return warmup_left_; }
+
+    // コールバックでモデル/所有Contextを編集し、全候補の評価を自動的に無効化する。
+    // 観測内の過去の環境は利用側が値または不変IDで保持する。現在Contextへの自動置換は行わない。
+    template<class Edit> void update_model(Edit&& edit) { edit(model_); changed(); }
+    template<class M = Model> requires std::is_same_v<M,Model>
+    void add_observations(std::vector<typename M::observation_type> batch) {
+        if (batch.empty()) return;
+        const auto first = model_.data_.size()+1;
+        model_.data_.insert(model_.data_.end(),std::make_move_iterator(batch.begin()),std::make_move_iterator(batch.end()));
+        changed(true,first);
+    }
+    template<class M = Model> requires std::is_same_v<M,Model>
+    void replace_observations(std::vector<typename M::observation_type> data) { model_.data_ = std::move(data); changed(); }
+    void retain_last(std::size_t count) requires requires { typename Model::observation_type; } {
+        if (count >= model_.data_.size()) return;
+        model_.data_.erase(model_.data_.begin(),model_.data_.end()-static_cast<std::ptrdiff_t>(count)); changed();
+    }
+    // Budgetは値渡し。同期・探索を同じ期限内で実行する。旧最良候補も現行モデルで再評価する。
+    // Reportはこの呼び出しの総計。stepsは完了遷移数で、初期評価/再評価を含めない。
+    Report solve_view(Budget budget) {
+        if (!budget.available()) return engine_.finish({},Clock::now());
+        queued_ = false;
+        auto report = engine_.run(Phase::Search,model_,move_,budget);
+        if (report.steps != 0) warmup_left_ = warmup_target_;
+        return report;
+    }
+    Result solve(Budget budget) {
+        const auto start = Clock::now();
+        auto report = solve_view(budget);
+        Result result{engine_.best_,engine_.best_energy_,report,revision()};
+        result.report.elapsed_us = std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-start).count();
+        return result;
+    }
+    // 準備遷移は目的関数ごとに通算し、複数回の小予算でも先に進む。Search実行後は再準備する。
+    // emit(state,energy,chain)はSampleの標本だけを受け取る。棄却時も現状態を記録する。
+    // 外部に累積する場合、目的関数revisionと予測条件の異なる集計を混ぜないこと。
+    // 実行時コールバックはコピー・保存しない。参照先の寿命は呼び出し中だけ必要。
+    template<class Emit> Report sample_each(Budget budget, Emit&& emit) requires(can_sample) {
+        const auto start = Clock::now(); Report report;
+        if (budget.available()) {
+            queued_ = false;
+            if (warmup_left_ != 0) {
+                auto warm = budget; warm.remaining_steps = std::min(warm.remaining_steps,warmup_left_);
+                report = engine_.run(Phase::Warmup,model_,move_,warm);
+                warmup_left_ -= report.steps; budget.remaining_steps -= report.steps;
+            }
+        }
+        if (warmup_left_ == 0) {
+            const auto part = engine_.run(Phase::Sample,model_,move_,budget,emit);
+            report.steps += part.steps; report.accepted += part.accepted; report.evaluations += part.evaluations;
+            report.terms += part.terms; report.emitted += part.emitted;
+        }
+        return engine_.finish(report,start);
+    }
+    // 集計は呼び出しごとに新規。project(state)はdouble/array/vectorを返す。
+    // 非線形予測は状態ごとにprojectで計算する。標本0件ならmean/varianceはnullopt。
+    template<class Project> auto sample(Budget budget, Project&& project) requires(can_sample) {
+        using Value = std::remove_cvref_t<std::invoke_result_t<Project&,const State&>>;
+        Moments<Value> summary;
+        const auto report = sample_each(budget,[&](const State& state,double,int) { summary.add(project(state)); });
+        return SampleResult<Value>{std::move(summary),report,revision(),warmup_left_};
+    }
+};
 #if __INCLUDE_LEVEL__ == 0
 // 単体コンパイル時だけ実行するテスト。提出コードには含まれない。
 struct McmcEstimatorTests {
@@ -611,7 +938,7 @@ struct McmcEstimatorTests {
         domain={{{2,2,1}},{{3,3,true}}}; move=S::make_numeric_move(domain);
         initial={{{2},{3}}}; budget=S::Budget::for_steps(23); solver.reset(initial,mixed,budget);
         auto report=solver.run(S::Phase::Sample,mixed,move,budget);
-        check(report.accepted==23 && report.emitted==23,"all fixed self transitions");
+        check(report.accepted==0 && report.emitted==23 && report.evaluations==0,"all fixed self transitions without reevaluation");
     }
     void continuation() {
         S::Domain domain{{{-8,8,2},{-8,8,0.1}}, {}};

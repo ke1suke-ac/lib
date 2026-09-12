@@ -1,5 +1,5 @@
 /*
- * rectangle_packing v09: AHC・競技プログラミング向けの直交矩形packing solver。
+ * rectangle_packing v10: AHC・競技プログラミング向けの直交矩形packing solver。
  *
  * 対応する問題:
  *   - 固定された 1 個のビンへ、必須矩形を優先しつつ利益の高い矩形を詰める
@@ -19,7 +19,10 @@
  *   全メソッドは90度単位の回転だけを扱い、座標と寸法は整数とする。
  *
  * 注意:
- *   - 幅、高さ、面積、profit の演算結果は long long に収まるものとする
+ *   - 座標・寸法・面積・目的値の演算結果と、配置済みprofitの合計は long long に収める
+ *     strip・外接矩形では探索用の幅と高さの積もこの範囲に収める
+ *   - strip・複数ビン・外接矩形では全入力をrequired=trueとする
+ *   - ヘッダー単体のコンパイルでは末尾の自己テストを実行できる
  *   - 計算量表記の N は矩形数、K は試行構築数、F は最大空き矩形数、B はビン数
  *   - 任意角度回転、多角形、任意形状の障害物、guillotine 切断制約は扱わない
  *     （矩形障害物は部分repairの固定配置として表現できる）
@@ -587,6 +590,8 @@ struct rectangle_pack_result::engine {
         result.placed_count = 0;
         result.missing_required_count = 0;
         result.bin_count = 0;
+        // 正負のprofitが相殺する場合も、途中の合計を溢れさせない
+        __int128_t profit = 0;
 
         for (std::size_t i = 0; i < items.size(); ++i) {
             const rectangle_pack_placement& p = placements[i];
@@ -596,20 +601,26 @@ struct rectangle_pack_result::engine {
             }
             result.used_width = std::max(result.used_width, p.x + p.width);
             result.used_height = std::max(result.used_height, p.y + p.height);
-            result.placed_profit += items[i].profit;
+            profit += items[i].profit;
             result.placed_area += p.width * p.height;
             ++result.placed_count;
             result.bin_count = std::max(result.bin_count, p.bin + 1);
         }
+        assert(std::numeric_limits<long long>::min() <= profit &&
+               profit <= std::numeric_limits<long long>::max());
+        result.placed_profit = static_cast<long long>(profit);
     }
 
     static bool better_fixed(const rectangle_pack_result& lhs,
                              const rectangle_pack_result& rhs) {
         if (rhs.placements.empty()) return true;
-        return std::tuple(lhs.missing_required_count, -lhs.placed_profit, -lhs.placed_area,
-                          lhs.used_width * lhs.used_height, lhs.used_height, lhs.used_width) <
-               std::tuple(rhs.missing_required_count, -rhs.placed_profit, -rhs.placed_area,
-                          rhs.used_width * rhs.used_height, rhs.used_height, rhs.used_width);
+        // 必須欠落数を最小化し、利益と面積は符号を反転せず降順に比較する
+        if (lhs.missing_required_count != rhs.missing_required_count)
+            return lhs.missing_required_count < rhs.missing_required_count;
+        if (lhs.placed_profit != rhs.placed_profit) return lhs.placed_profit > rhs.placed_profit;
+        if (lhs.placed_area != rhs.placed_area) return lhs.placed_area > rhs.placed_area;
+        return std::tuple(lhs.used_width * lhs.used_height, lhs.used_height, lhs.used_width) <
+               std::tuple(rhs.used_width * rhs.used_height, rhs.used_height, rhs.used_width);
     }
 
     static bool better_strip(const rectangle_pack_result& lhs,
@@ -851,7 +862,7 @@ struct rectangle_pack_result::engine {
             if (height == std::numeric_limits<long long>::max()) return height;
             item_bound = std::max(item_bound, height);
         }
-        return std::max(item_bound, (total_area + width - 1) / width);
+        return std::max(item_bound, total_area / width + (total_area % width != 0));
     }
 
     // 完成したstrip・外接配置を、現在の外接枠内で右・下・左・上へ2巡詰める。
@@ -1051,41 +1062,6 @@ struct rectangle_pack_result::engine {
 
         std::optional<contact_point_state> locked_contact;
         std::vector<contact_point_state::edge_index::slot_change> changes;
-        // 大きな局所lambdaのアウトライン化で旧decoderより呼出負荷が増えないようにする。
-        const auto decode_contact = [&](std::span<const int> order) __attribute__((always_inline)) {
-            rectangle_pack_result result = base;
-            auto& state = *locked_contact;
-            // 固定状態は使い回し、今回追加した空き領域・辺だけを呼出し後に戻す。
-            maxrects_state original_space = state.space;
-            const std::size_t edge_count = state.contacts.edges.size();
-            const std::size_t bucket_count = state.contacts.bucket_count;
-            auto& contacts = state.contacts;
-            const std::size_t maximum_new_edges = order.size() * 4;
-            while ((contacts.bucket_count + maximum_new_edges) * 2 > contacts.slots.size()) contacts.grow();
-            contacts.edges.reserve(contacts.edges.size() + maximum_new_edges);
-            changes.clear();
-            changes.reserve(maximum_new_edges);
-
-            for (int id : order) {
-                const candidate position = state.find_position(items[id]);
-                if (!position.valid) continue;
-                state.space.occupy(position.rect);
-                state.add_contacts<true>(position.rect, &changes);
-                result.placements[id] = {position.rect.x, position.rect.y,
-                                         position.rect.width, position.rect.height,
-                                         0, position.rotated};
-            }
-            summarize(items, result, result.placements);
-            state.space = std::move(original_space);
-            for (auto iterator = changes.rbegin(); iterator != changes.rend(); ++iterator) {
-                auto& changed = contacts.slots[iterator->index];
-                changed.head = iterator->old_head;
-                changed.used = iterator->old_head >= 0;
-            }
-            contacts.edges.resize(edge_count);
-            contacts.bucket_count = bucket_count;
-            return result;
-        };
         for (int iteration = 0; iteration < restarts; ++iteration) {
             std::vector<int> order = orders[rng.index(orders.size())];
             perturb_order(order, rng, 1 + iteration % 5);
@@ -1101,7 +1077,37 @@ struct rectangle_pack_result::engine {
                             placement.width, placement.height});
                     }
                 }
-                result = decode_contact(order);
+                result = base;
+                auto& state = *locked_contact;
+                // 固定状態は使い回し、今回追加した空き領域・辺だけを呼出し後に戻す。
+                maxrects_state original_space = state.space;
+                const std::size_t edge_count = state.contacts.edges.size();
+                const std::size_t bucket_count = state.contacts.bucket_count;
+                auto& contacts = state.contacts;
+                const std::size_t maximum_new_edges = order.size() * 4;
+                while ((contacts.bucket_count + maximum_new_edges) * 2 > contacts.slots.size()) contacts.grow();
+                contacts.edges.reserve(contacts.edges.size() + maximum_new_edges);
+                changes.clear();
+                changes.reserve(maximum_new_edges);
+
+                for (int id : order) {
+                    const candidate position = state.find_position(items[id]);
+                    if (!position.valid) continue;
+                    state.space.occupy(position.rect);
+                    state.add_contacts<true>(position.rect, &changes);
+                    result.placements[id] = {position.rect.x, position.rect.y,
+                                             position.rect.width, position.rect.height,
+                                             0, position.rotated};
+                }
+                summarize(items, result, result.placements);
+                state.space = std::move(original_space);
+                for (auto iterator = changes.rbegin(); iterator != changes.rend(); ++iterator) {
+                    auto& changed = contacts.slots[iterator->index];
+                    changed.head = iterator->old_head;
+                    changed.used = iterator->old_head >= 0;
+                }
+                contacts.edges.resize(edge_count);
+                contacts.bucket_count = bucket_count;
             } else {
                 result = decode_from_state(
                     items, order, base, locked_space,
@@ -1471,10 +1477,9 @@ inline rectangle_pack_result improve_rectangles_fixed_bin(
         items, bin_width, bin_height, options, &initial_solution);
 }
 
-// 固定ビンの既存解からmovable_item_idsだけを取り除いて再配置する。
+// 固定ビンの可動矩形だけを再配置する。固定数L、可動数Mとして O(L F^2 + K M(F^2+MF))
 // それ以外の配置は座標・回転を含めて固定する。初期解との比較は行わないため、
 // 問題固有スコアを呼出側で評価して採否を決める用途に使う。
-// Lを固定配置数、Mを可動矩形数とすると、概ねO(L F^2 + K M(F^2+MF))。
 inline rectangle_pack_result repack_rectangles_fixed_bin(
     std::span<const rectangle_pack_item> items,
     const rectangle_pack_result& initial_solution,
@@ -1490,8 +1495,7 @@ inline rectangle_pack_result repack_rectangles_fixed_bin(
         bin_width, bin_height, options, false);
 }
 
-// repackと同じ部分再配置を行い、固定ビンの比較規則で初期解より悪ければ
-// initial_solutionを返す。Lを固定数、Mを可動数としてO(L F^2 + K M(F^2+MF))
+// 初期解より悪化させず部分再配置する。固定数L、可動数Mとして O(L F^2 + K M(F^2+MF))
 inline rectangle_pack_result repair_rectangles_fixed_bin(
     std::span<const rectangle_pack_item> items,
     const rectangle_pack_result& initial_solution,
@@ -1507,9 +1511,8 @@ inline rectangle_pack_result repair_rectangles_fixed_bin(
         bin_width, bin_height, options, true);
 }
 
-// 幅固定stripへ全矩形を詰め、使用高さを最小化する。
-// 辺座標ごとの要素数を定数とみなす期待計算量 O(K N F^2)、最悪 O(K N(F^2+NF))
-// 最終隙間詰めに O(N^2+N log N) 時間、O(N) 領域が別途必要。
+// 幅固定stripへ全矩形を詰め、使用高さを最小化する。最悪 O(K N(F^2+NF) + N^2 + N log N)
+// 辺座標ごとの要素数を定数とみなす構築の期待計算量は O(K N F^2)。隙間詰めは O(N) 領域を使う。
 inline rectangle_pack_result pack_rectangles_strip(
     std::span<const rectangle_pack_item> items,
     long long strip_width,
@@ -1519,9 +1522,8 @@ inline rectangle_pack_result pack_rectangles_strip(
     return rectangle_pack_result::engine::construct_strip(items, strip_width, options);
 }
 
-// 妥当な初期解より悪化させずstrip packingを再探索する。
-// 辺座標ごとの要素数を定数とみなす期待計算量 O(K N F^2)、最悪 O(K N(F^2+NF))
-// 最終隙間詰めに O(N^2+N log N) 時間、O(N) 領域が別途必要。
+// 妥当な初期解より悪化させずstrip packingを再探索する。最悪 O(K N(F^2+NF) + N^2 + N log N)
+// 辺座標ごとの要素数を定数とみなす構築の期待計算量は O(K N F^2)。隙間詰めは O(N) 領域を使う。
 inline rectangle_pack_result improve_rectangles_strip(
     std::span<const rectangle_pack_item> items,
     const rectangle_pack_result& initial_solution,
@@ -1537,8 +1539,8 @@ inline rectangle_pack_result improve_rectangles_strip(
     return candidate;
 }
 
-// 同一サイズの複数ビンへ全矩形を詰め、使用ビン数を最小化する。
-// 構築の期待計算量 O(K N(BF+F^2))。pair-merge repairは最悪 O(B^2 N(F^2+NF))
+// 同一サイズの複数ビンへ全矩形を詰め、使用ビン数を最小化する。最悪 O(K N(BNF+F^2) + B^2 N(F^2+NF))
+// 構築の期待計算量は辺座標ごとの要素数を定数とみなすと O(K N(BF+F^2))
 inline rectangle_pack_result pack_rectangles_multiple_bins(
     std::span<const rectangle_pack_item> items,
     long long bin_width,
@@ -1550,8 +1552,8 @@ inline rectangle_pack_result pack_rectangles_multiple_bins(
         items, bin_width, bin_height, options);
 }
 
-// 妥当な初期解より悪化させず複数ビンpackingを再探索する。
-// 構築の期待計算量 O(K N(BF+F^2))。pair-merge repairは最悪 O(B^2 N(F^2+NF))
+// 妥当な初期解より悪化させず複数ビンpackingを再探索する。最悪 O(K N(BNF+F^2) + B^2 N(F^2+NF))
+// 構築の期待計算量は辺座標ごとの要素数を定数とみなすと O(K N(BF+F^2))
 inline rectangle_pack_result improve_rectangles_multiple_bins(
     std::span<const rectangle_pack_item> items,
     const rectangle_pack_result& initial_solution,
@@ -1568,9 +1570,8 @@ inline rectangle_pack_result improve_rectangles_multiple_bins(
     return candidate;
 }
 
-// 全矩形を囲む外接矩形の指定目的値を最小化する。
-// 辺座標ごとの要素数を定数とみなす期待計算量 O(K N F^2)、最悪 O(K N(F^2+NF))
-// 最終隙間詰めに O(N^2+N log N) 時間、O(N) 領域が別途必要。
+// 全矩形を囲む外接矩形の指定目的値を最小化する。最悪 O(K N(F^2+NF) + N^2 + N log N)
+// 辺座標ごとの要素数を定数とみなす構築の期待計算量は O(K N F^2)。隙間詰めは O(N) 領域を使う。
 inline rectangle_pack_result pack_rectangles_bounding_box(
     std::span<const rectangle_pack_item> items,
     const rectangle_bounding_objective& objective = {},
@@ -1579,9 +1580,8 @@ inline rectangle_pack_result pack_rectangles_bounding_box(
     return rectangle_pack_result::engine::construct_bounding(items, objective, options);
 }
 
-// 妥当な初期解より悪化させず外接矩形packingを再探索する。
-// 辺座標ごとの要素数を定数とみなす期待計算量 O(K N F^2)、最悪 O(K N(F^2+NF))
-// 最終隙間詰めに O(N^2+N log N) 時間、O(N) 領域が別途必要。
+// 妥当な初期解より悪化させず外接矩形packingを再探索する。最悪 O(K N(F^2+NF) + N^2 + N log N)
+// 辺座標ごとの要素数を定数とみなす構築の期待計算量は O(K N F^2)。隙間詰めは O(N) 領域を使う。
 inline rectangle_pack_result improve_rectangles_bounding_box(
     std::span<const rectangle_pack_item> items,
     const rectangle_pack_result& initial_solution,
@@ -1611,16 +1611,22 @@ inline bool validate_rectangle_packing(
         return false;
     };
     if (result.placements.size() != items.size()) return fail("placements の要素数が不正");
+    if (items.size() > static_cast<std::size_t>(std::numeric_limits<int>::max()))
+        return fail("矩形数がintの範囲を超過");
 
     rectangle_pack_result summary;
-    rectangle_pack_result::engine::summarize(items, summary, result.placements);
+    __int128_t profit = 0;
+    constexpr long long maximum = std::numeric_limits<long long>::max();
 
+    // 不正な入力を集計へ渡さず、各配置の演算が安全だと確認してから加算する
     for (std::size_t i = 0; i < items.size(); ++i) {
         const rectangle_pack_item& item = items[i];
         const rectangle_pack_placement& p = result.placements[i];
+        if (item.width <= 0 || item.height <= 0) return fail("入力矩形の寸法が不正");
         if (!p.placed()) {
             if (require_all_items || (item.required && !allow_missing_required))
                 return fail("必須矩形が未配置");
+            if (item.required) ++summary.missing_required_count;
             continue;
         }
         if (p.x < 0 || p.y < 0 || p.width <= 0 || p.height <= 0)
@@ -1629,10 +1635,26 @@ inline bool validate_rectangle_packing(
         const bool rotated = item.rotatable && p.width == item.height &&
                              p.height == item.width && p.rotated;
         if (!normal && !rotated) return fail("入力矩形と配置寸法が一致しない");
+        if (p.x > maximum - p.width || p.y > maximum - p.height)
+            return fail("配置の右端または下端がlong longの範囲を超過");
+        if (p.bin == std::numeric_limits<int>::max()) return fail("ビン数がintの範囲を超過");
         if (bin_width > 0 && p.x + p.width > bin_width) return fail("ビン幅を超過");
         if (bin_height > 0 && p.y + p.height > bin_height) return fail("ビン高さを超過");
-    }
 
+        const __int128_t area = static_cast<__int128_t>(p.width) * p.height;
+        if (area > maximum - summary.placed_area) return fail("配置面積合計がlong longの範囲を超過");
+        summary.placed_area += static_cast<long long>(area);
+        profit += item.profit;
+        summary.used_width = std::max(summary.used_width, p.x + p.width);
+        summary.used_height = std::max(summary.used_height, p.y + p.height);
+        summary.bin_count = std::max(summary.bin_count, p.bin + 1);
+        ++summary.placed_count;
+    }
+    if (profit < std::numeric_limits<long long>::min() || profit > maximum)
+        return fail("profit合計がlong longの範囲を超過");
+    summary.placed_profit = static_cast<long long>(profit);
+
+    // 端点の加算が安全な配置だけを使い、同じビン内での重なりを調べる
     for (std::size_t i = 0; i < items.size(); ++i) {
         const rectangle_pack_placement& a = result.placements[i];
         if (!a.placed()) continue;
@@ -1656,3 +1678,697 @@ inline bool validate_rectangle_packing(
         return fail("集計値が配置と一致しない");
     return true;
 }
+
+#if __INCLUDE_LEVEL__ == 0
+
+// 自己テストからのみ非公開の構築状態を検査する
+struct rectangle_packing_test_access : rectangle_pack_result::engine {
+    static bool contains(const box& a, const box& b) {
+        return a.x <= b.x && a.y <= b.y && b.right() <= a.right() && b.bottom() <= a.bottom();
+    }
+    static long long right(const box& b) { return b.right(); }
+    static long long bottom(const box& b) { return b.bottom(); }
+    static bool better_candidate(const candidate& a, const candidate& b) { return a.better_than(b); }
+};
+
+int main() {
+    using access = rectangle_packing_test_access;
+    const auto fail = [&](const std::string& label) {
+        std::cerr << "FAILED: " << label << '\n';
+        std::abort();
+    };
+    const auto require = [&](bool condition, const std::string& label) {
+        if (!condition) fail(label);
+    };
+    const auto require_valid = [&](std::span<const rectangle_pack_item> items,
+                   const rectangle_pack_result& result,
+                   long long width,
+                   long long height,
+                   bool require_all,
+                   const std::string& label) {
+        std::string error;
+        if (!validate_rectangle_packing(items, result, width, height, require_all, &error))
+            fail(label + ": " + error);
+    };
+    const auto fast_options = [&](std::uint64_t seed = 1) {
+        rectangle_pack_options options;
+        options.seed = seed;
+        options.restart_limit = 4;
+        options.search_iteration_limit = 8;
+        return options;
+    };
+    const auto same_placements = [&](const rectangle_pack_result& a, const rectangle_pack_result& b) {
+        if (a.placements.size() != b.placements.size()) return false;
+        for (std::size_t i = 0; i < a.placements.size(); ++i) {
+            const rectangle_pack_placement& x = a.placements[i];
+            const rectangle_pack_placement& y = b.placements[i];
+            if (std::tie(x.x, x.y, x.width, x.height, x.bin, x.rotated) !=
+                std::tie(y.x, y.y, y.width, y.height, y.bin, y.rotated))
+                return false;
+        }
+        return true;
+    };
+    // fixed_bin の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {5, 5, 1, false, true}, {5, 5, 1, false, true},
+            {5, 5, 1, false, true}, {5, 5, 1, false, true}};
+        rectangle_pack_result result = pack_rectangles_fixed_bin(items, 10, 10, fast_options());
+        require(result.feasible(), "fixed feasible");
+        require(result.placed_count == 4, "fixed count");
+        require_valid(items, result, 10, 10, true, "fixed validate");
+    }();
+    // rotation_and_impossible の検証
+    [&] {
+        const std::vector<rectangle_pack_item> rotatable{{7, 4, 1, true, true}};
+        rectangle_pack_result rotated = pack_rectangles_fixed_bin(rotatable, 4, 7, fast_options());
+        require(rotated.feasible() && rotated.placements[0].rotated, "rotation");
+        require_valid(rotatable, rotated, 4, 7, true, "rotation validate");
+
+        const std::vector<rectangle_pack_item> fixed{{7, 4, 1, false, true}};
+        rectangle_pack_result impossible = pack_rectangles_fixed_bin(fixed, 4, 7, fast_options());
+        require(!impossible.feasible(), "impossible");
+        require(!validate_rectangle_packing(fixed, impossible, 4, 7, true),
+                "impossible require all");
+    }();
+    // optional_profit の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {10, 10, 5, false, false},
+            {5, 10, 8, false, false},
+            {5, 10, 7, false, false}};
+        rectangle_pack_result result = pack_rectangles_fixed_bin(items, 10, 10, fast_options());
+        require(result.feasible(), "optional feasible");
+        require(result.placed_profit == 15, "optional profit");
+        require_valid(items, result, 10, 10, false, "optional validate");
+    }();
+    // required_priority_and_negative_profit の検証
+    [&] {
+        const std::vector<rectangle_pack_item> priority_items{
+            {10, 10, 1, false, true},
+            {10, 10, 1000, false, false}};
+        rectangle_pack_result priority = pack_rectangles_fixed_bin(
+            priority_items, 10, 10, fast_options());
+        require(priority.feasible() && priority.placements[0].placed(), "required priority");
+        require(!priority.placements[1].placed(), "optional after required");
+        require_valid(priority_items, priority, 10, 10, false, "required priority validate");
+
+        const std::vector<rectangle_pack_item> negative_items{
+            {5, 10, 5, false, true},
+            {5, 10, -10, false, false}};
+        rectangle_pack_result negative = pack_rectangles_fixed_bin(
+            negative_items, 10, 10, fast_options());
+        require(negative.placed_profit == 5 && !negative.placements[1].placed(),
+                "negative optional skipped");
+        require_valid(negative_items, negative, 10, 10, false, "negative validate");
+    }();
+    // strip の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {4, 3, 1, false, true}, {6, 3, 1, false, true},
+            {5, 2, 1, false, true}, {5, 2, 1, false, true}};
+        rectangle_pack_result result = pack_rectangles_strip(items, 10, fast_options());
+        require(result.feasible() && result.placed_count == 4, "strip feasible");
+        require(result.used_height == 5, "strip height");
+        require_valid(items, result, 10, 0, true, "strip validate");
+    }();
+    // contact_point_and_single_strip_iteration の検証
+    [&] {
+        const std::vector<rectangle_pack_item> squares{
+            {5, 5, 1, false, true}, {5, 5, 1, false, true},
+            {5, 5, 1, false, true}, {5, 5, 1, false, true}};
+        const std::array<int, 4> order{0, 1, 2, 3};
+        const rectangle_pack_result contact =
+            access::decode_contact_point(squares, order, 10, 10);
+        require(contact.feasible() && contact.placed_count == 4, "contact point feasible");
+        require_valid(squares, contact, 10, 10, true, "contact point validate");
+
+        rectangle_pack_options options = fast_options();
+        options.search_iteration_limit = 1;
+        const rectangle_pack_result strip = pack_rectangles_strip(squares, 10, options);
+        require(strip.feasible(), "single strip iteration feasible");
+        require_valid(squares, strip, 10, 0, true, "single strip iteration validate");
+    }();
+    // contact_edge_index_growth の検証
+    [&] {
+        // 実際の辺登録・候補評価を通し、grow後の4種の辺と同一座標の連結を検査する。
+        access::contact_point_state state(10000, 10000, 0);
+        for (int i = 0; i < 100; ++i)
+            state.add_contacts({10LL * i + 10, 20LL * i + 10, 3, 10});
+        require(state.contacts.slots.size() > 8, "contact edge grew");
+        const auto query = [&](access::box b, long long expected) {
+            state.space.free_rectangles = {b};
+            const auto answer = state.find_position({b.width,b.height,1,false,true});
+            require(answer.valid && answer.score1 == -expected, "contact edge rehash/query");
+        };
+        for (int i = 0; i < 100; ++i) {
+            const long long x = 10LL * i + 10, y = 20LL * i + 10;
+            query({x-2,y+3,2,4},4);
+            query({x+3,y+3,2,4},4);
+            query({x+1,y-2,1,2},1);
+            query({x+1,y+10,1,2},1);
+        }
+        query({9000,9000,3,4},0);
+        state.add_contacts({180,3000,3,10});
+        query({178,3002,2,6},6);
+        query({178,353,2,4},4);  // 同一座標の旧辺も残る。
+    }();
+    // 公開APIからContact Pointのrollbackを複数回通し、固定配置と再現性を確認する
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {4,4,1,false,true}, {3,4,1,false,true}, {3,2,1,false,true},
+            {5,3,1,true,true}, {2,4,1,true,true}, {3,3,1,false,true},
+            {11,11,1,false,true}};
+        rectangle_pack_result base;
+        base.placements = {{0,0,4,4,0,false}, {4,0,3,4,0,false}, {7,0,3,2,0,false}, {}, {}, {}, {}};
+        recompute_rectangle_packing_summary(items, base);
+        const std::array<int,4> movable{3,4,5,6};
+        auto options = fast_options(743);
+        options.restart_limit = 40;
+        const auto first = repack_rectangles_fixed_bin(items,base,movable,10,10,options);
+        const auto second = repack_rectangles_fixed_bin(items,base,movable,10,10,options);
+        require(same_placements(first,second), "public rollback deterministic");
+        require(validate_rectangle_packing(items,first,10,10,false,nullptr,true), "public rollback valid");
+        for (int i = 0; i < 3; ++i) {
+            const auto& a = base.placements[i]; const auto& b = first.placements[i];
+            require(std::tie(a.x,a.y,a.width,a.height,a.bin,a.rotated) ==
+                    std::tie(b.x,b.y,b.width,b.height,b.bin,b.rotated), "public rollback keeps locked");
+        }
+    }();
+    // multiple_bins の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {6, 6, 1, false, true}, {6, 6, 1, false, true},
+            {4, 4, 1, false, true}, {4, 4, 1, false, true}};
+        rectangle_pack_result result = pack_rectangles_multiple_bins(items, 10, 10, fast_options());
+        require(result.feasible() && result.bin_count == 2, "multiple bins");
+        require_valid(items, result, 10, 10, true, "multiple validate");
+    }();
+    // 複数ビンの追加探索・pair-mergeを公開APIで検証する
+    [&] {
+        std::mt19937_64 random(59131);
+        for (int trial = 0; trial < 64; ++trial) {
+            std::vector<rectangle_pack_item> items;
+            for (int i = 0; i < 20; ++i)
+                items.push_back({1 + static_cast<long long>(random()%9),
+                                 1 + static_cast<long long>(random()%9),1,true,true});
+            auto options = fast_options(random());
+            options.search_iteration_limit = 0;
+            const auto before = pack_rectangles_multiple_bins(items,16,16,options);
+            options.search_iteration_limit = 16;
+            const auto after = pack_rectangles_multiple_bins(items,16,16,options);
+            require_valid(items,after,16,16,true,"public multi repair valid");
+            require(!access::better_multiple_bins(before,after), "public multi repair nondegradation");
+        }
+    }();
+    // bounding_box の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {4, 3, 1, true, true}, {4, 3, 1, true, true}};
+        rectangle_pack_options options = fast_options();
+        rectangle_bounding_objective perimeter;
+        perimeter.type = rectangle_bounding_objective_type::perimeter;
+        rectangle_pack_result result = pack_rectangles_bounding_box(items, perimeter, options);
+        require(result.feasible() && result.placed_count == 2, "bounding feasible");
+        require(perimeter.evaluate(result.used_width, result.used_height) <= 11,
+                "bounding perimeter");
+        require_valid(items, result, 0, 0, true, "bounding validate");
+    }();
+    // fixed_partial_repair の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {5, 5, 1, false, true}, {5, 5, 1, false, true},
+            {5, 5, 1, false, true}, {5, 5, 1, false, true}};
+        rectangle_pack_result damaged;
+        damaged.placements = {
+            {0, 0, 5, 5, 0, false}, {5, 0, 5, 5, 0, false},
+            {0, 5, 5, 5, 0, false}, {}};
+        recompute_rectangle_packing_summary(items, damaged);
+        require(damaged.missing_required_count == 1, "repair damaged summary");
+        std::string damaged_error;
+        require(validate_rectangle_packing(
+                    items, damaged, 10, 10, false, &damaged_error, true),
+                "repair damaged geometry");
+
+        const std::array<int, 1> movable{3};
+        const rectangle_pack_result repacked = repack_rectangles_fixed_bin(
+            items, damaged, movable, 10, 10, fast_options(123));
+        require(repacked.feasible() && repacked.placed_count == 4,
+                "partial repack restores item");
+        require_valid(items, repacked, 10, 10, true, "partial repack validate");
+        const rectangle_pack_result repaired = repair_rectangles_fixed_bin(
+            items, damaged, movable, 10, 10, fast_options(123));
+        require(repaired.feasible() && repaired.placed_count == 4,
+                "partial repair restores item");
+        require_valid(items, repaired, 10, 10, true, "partial repair validate");
+        for (int id = 0; id < 3; ++id) {
+            const rectangle_pack_placement& before = damaged.placements[id];
+            const rectangle_pack_placement& after = repaired.placements[id];
+            require(std::tie(before.x, before.y, before.width, before.height,
+                             before.bin, before.rotated) ==
+                    std::tie(after.x, after.y, after.width, after.height,
+                             after.bin, after.rotated),
+                    "partial repair keeps locked item");
+        }
+
+        const std::span<const int> none;
+        const rectangle_pack_result unchanged = repair_rectangles_fixed_bin(
+            items, repaired, none, 10, 10, fast_options(456));
+        require(same_placements(repaired, unchanged), "empty repair is unchanged");
+    }();
+    // improve_and_determinism の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {6, 4, 3, true, true}, {5, 7, 2, true, true},
+            {4, 4, 1, false, true}, {3, 8, 4, true, true},
+            {2, 9, 5, true, true}, {7, 3, 2, true, true}};
+        const rectangle_pack_options options = fast_options(998244353);
+
+        rectangle_pack_result fixed = pack_rectangles_fixed_bin(items, 15, 15, options);
+        rectangle_pack_result fixed_again = pack_rectangles_fixed_bin(items, 15, 15, options);
+        require(same_placements(fixed, fixed_again), "deterministic fixed");
+        rectangle_pack_result improved_fixed = improve_rectangles_fixed_bin(
+            items, fixed, 15, 15, fast_options(2));
+        require(!access::better_fixed(fixed, improved_fixed),
+                "improve fixed does not worsen");
+
+        rectangle_pack_result strip = pack_rectangles_strip(items, 15, options);
+        rectangle_pack_result improved_strip = improve_rectangles_strip(
+            items, strip, 15, fast_options(3));
+        require(!access::better_strip(strip, improved_strip),
+                "improve strip does not worsen");
+
+        rectangle_pack_result multi = pack_rectangles_multiple_bins(items, 10, 10, options);
+        rectangle_pack_result improved_multi = improve_rectangles_multiple_bins(
+            items, multi, 10, 10, fast_options(4));
+        require(!access::better_multiple_bins(multi, improved_multi),
+                "improve multi does not worsen");
+
+        const rectangle_bounding_objective objective;
+        rectangle_pack_result bounding = pack_rectangles_bounding_box(items, objective, options);
+        rectangle_pack_result improved_bounding = improve_rectangles_bounding_box(
+            items, bounding, objective, fast_options(5));
+        require(!access::better_bounding(
+                    bounding, improved_bounding, objective),
+                "improve bounding does not worsen");
+    }();
+    // empty の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items;
+        rectangle_pack_result fixed = pack_rectangles_fixed_bin(items, 10, 10, fast_options());
+        rectangle_pack_result strip = pack_rectangles_strip(items, 10, fast_options());
+        rectangle_pack_result multi = pack_rectangles_multiple_bins(items, 10, 10, fast_options());
+        rectangle_pack_result bounding = pack_rectangles_bounding_box(items, {}, fast_options());
+        require(fixed.placements.empty() && strip.placements.empty() &&
+                multi.placements.empty() && bounding.placements.empty(), "empty");
+    }();
+    // expired_deadline の検証
+    [&] {
+        const std::vector<rectangle_pack_item> items{
+            {9, 7, 1, true, true}, {8, 6, 1, true, true},
+            {7, 5, 1, true, true}, {6, 4, 1, true, true}};
+        rectangle_pack_options options;
+        options.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        options.restart_limit = 1000000;
+        options.search_iteration_limit = 1000000;
+        options.time_check_interval = 1;
+
+        const rectangle_pack_result fixed = pack_rectangles_fixed_bin(items, 20, 20, options);
+        const rectangle_pack_result strip = pack_rectangles_strip(items, 20, options);
+        const rectangle_pack_result multi = pack_rectangles_multiple_bins(items, 20, 20, options);
+        const rectangle_pack_result bounding = pack_rectangles_bounding_box(items, {}, options);
+        require_valid(items, fixed, 20, 20, true, "deadline fixed");
+        require_valid(items, strip, 20, 0, true, "deadline strip");
+        require_valid(items, multi, 20, 20, true, "deadline multi");
+        require_valid(items, bounding, 0, 0, true, "deadline bounding");
+    }();
+    // random_validity の検証
+    [&] {
+        std::mt19937_64 rng(123456789);
+        for (int test = 0; test < 300; ++test) {
+            const int n = 1 + static_cast<int>(rng() % 40);
+            std::vector<rectangle_pack_item> items;
+            items.reserve(static_cast<std::size_t>(n));
+            for (int i = 0; i < n; ++i) {
+                const long long w = 1 + static_cast<long long>(rng() % 30);
+                const long long h = 1 + static_cast<long long>(rng() % 30);
+                items.push_back({w, h, 1, (rng() & 1U) != 0U, true});
+            }
+            rectangle_pack_options options = fast_options(rng());
+            rectangle_pack_result strip = pack_rectangles_strip(items, 60, options);
+            require_valid(items, strip, 60, 0, true, "random strip");
+            rectangle_pack_result multi = pack_rectangles_multiple_bins(items, 60, 60, options);
+            require_valid(items, multi, 60, 60, true, "random multi");
+            rectangle_pack_result bounding = pack_rectangles_bounding_box(items, {}, options);
+            require_valid(items, bounding, 0, 0, true, "random bounding");
+
+            for (rectangle_pack_item& item : items) item.required = false;
+            rectangle_pack_result fixed = pack_rectangles_fixed_bin(items, 60, 60, options);
+            require_valid(items, fixed, 60, 60, false, "random fixed");
+
+            std::vector<int> movable;
+            std::vector<unsigned char> movable_mask(items.size(), 0);
+            for (int id = 0; id < n; ++id) {
+                if ((rng() & 3U) != 0U) continue;
+                movable.push_back(id);
+                movable_mask[id] = 1;
+            }
+            rectangle_pack_result repaired = repair_rectangles_fixed_bin(
+                items, fixed, movable, 60, 60, options);
+            std::string repair_error;
+            require(validate_rectangle_packing(
+                        items, repaired, 60, 60, false, &repair_error, true),
+                    "random repair validate: " + repair_error);
+            require(!access::better_fixed(fixed, repaired),
+                    "random repair does not worsen");
+            for (std::size_t id = 0; id < items.size(); ++id) {
+                if (movable_mask[id]) continue;
+                const rectangle_pack_placement& before = fixed.placements[id];
+                const rectangle_pack_placement& after = repaired.placements[id];
+                require(std::tie(before.x, before.y, before.width, before.height,
+                                 before.bin, before.rotated) ==
+                        std::tie(after.x, after.y, after.width, after.height,
+                                 after.bin, after.rotated),
+                        "random repair keeps locked item");
+            }
+        }
+    }();
+    // maxrects_grid_oracle の検証
+    [&] {
+        using maxrects_state = access::maxrects_state;
+        const auto contains = access::contains;
+        std::mt19937_64 rng(0x102030405060ULL);
+        for (int trial = 0; trial < 160; ++trial) {
+            constexpr int side = 8;
+            maxrects_state state(side, side);
+            bool occupied[side][side]{};
+            const auto empty = [&](int x, int y, int w, int h) {
+                for (int yy = y; yy < y + h; ++yy)
+                    for (int xx = x; xx < x + w; ++xx) if (occupied[yy][xx]) return false;
+                return true;
+            };
+            for (int step = 0; step < 16; ++step) {
+                // 候補探索で得た位置に限らず、自由な内部座標へ障害物を追加する
+                const int x = static_cast<int>(rng() % side), y = static_cast<int>(rng() % side);
+                const int w = 1 + static_cast<int>(rng() % static_cast<unsigned int>(side - x));
+                const int h = 1 + static_cast<int>(rng() % static_cast<unsigned int>(side - y));
+                if (empty(x, y, w, h)) {
+                    state.occupy({x, y, w, h});
+                    for (int yy = y; yy < y + h; ++yy)
+                        for (int xx = x; xx < x + w; ++xx) occupied[yy][xx] = true;
+                }
+                for (std::size_t a = 0; a < state.free_rectangles.size(); ++a) {
+                    const auto& f = state.free_rectangles[a];
+                    require(empty(static_cast<int>(f.x), static_cast<int>(f.y),
+                                  static_cast<int>(f.width), static_cast<int>(f.height)), "oracle free rectangle");
+                    for (std::size_t b = 0; b < state.free_rectangles.size(); ++b)
+                        if (a != b) require(!contains(f, state.free_rectangles[b]), "oracle noncontainment");
+                }
+                for (int y0 = 0; y0 < side; ++y0) for (int x0 = 0; x0 < side; ++x0)
+                    for (int y1 = y0 + 1; y1 <= side; ++y1) for (int x1 = x0 + 1; x1 <= side; ++x1) {
+                        const bool vacant = empty(x0, y0, x1 - x0, y1 - y0);
+                        bool covered = false;
+                        for (const auto& f : state.free_rectangles)
+                            if (contains(f, {x0, y0, x1 - x0, y1 - y0})) covered = true;
+                        require(vacant == covered, "oracle all empty rectangles covered");
+                    }
+            }
+        }
+    }();
+    // contact_naive_oracle の検証
+    [&] {
+        using contact_point_state = access::contact_point_state;
+        using box = access::box;
+        using candidate = access::candidate;
+        const auto right = access::right;
+        const auto bottom = access::bottom;
+        const auto better_candidate = access::better_candidate;
+        std::mt19937_64 rng(0x99887766ULL);
+        for (int trial = 0; trial < 200; ++trial) {
+            contact_point_state state(37, 29, 0);
+            std::vector<box> placed;
+            for (int step = 0; step < 24; ++step) {
+                const rectangle_pack_item item{1 + static_cast<long long>(rng() % 12),
+                    1 + static_cast<long long>(rng() % 12), 1, (rng() & 1U) != 0U, true};
+                candidate naive;
+                for (const auto& f : state.space.free_rectangles) for (int r = 0; r < 2; ++r) {
+                    if (r && (!item.rotatable || item.width == item.height)) continue;
+                    const long long w = r ? item.height : item.width, h = r ? item.width : item.height;
+                    if (w > f.width || h > f.height) continue;
+                    for (int corner = 0; corner < 4; ++corner) {
+                        const box b{f.x + ((corner & 1) ? f.width - w : 0),
+                                    f.y + ((corner & 2) ? f.height - h : 0), w, h};
+                        long long score = b.x == 0 || right(b) == state.width ? h : 0;
+                        if (b.y == 0 || bottom(b) == state.height) score += w;
+                        for (const auto& p : placed) {
+                            if (b.x == right(p) || right(b) == p.x)
+                                score += std::max(0LL, std::min(bottom(b), bottom(p)) - std::max(b.y, p.y));
+                            if (b.y == bottom(p) || bottom(b) == p.y)
+                                score += std::max(0LL, std::min(right(b), right(p)) - std::max(b.x, p.x));
+                        }
+                        candidate c{b, r != 0, true, -score, f.width * f.height - w * h,
+                                    std::min(f.width - w, f.height - h), b.y + h};
+                        if (better_candidate(c, naive)) naive = c;
+                    }
+                }
+                const candidate actual = state.find_position(item);
+                require(actual.valid == naive.valid && !better_candidate(actual, naive) && !better_candidate(naive, actual),
+                        "contact indexed vs naive");
+                if (actual.valid) { placed.push_back(actual.rect); state.occupy(actual.rect); }
+            }
+        }
+    }();
+    // extended_contracts の検証
+    [&] {
+        const std::vector<rectangle_pack_item> impossible{{11, 1, 1, false, true}, {2, 2, 1, false, true}};
+        const auto partial = pack_rectangles_fixed_bin(impossible, 10, 10, fast_options());
+        require(partial.missing_required_count == 1, "oversized partial count");
+        require(validate_rectangle_packing(impossible, partial, 10, 10, false, nullptr, true), "oversized partial geometry");
+        auto corrupt = partial; corrupt.placements[1].x = 20;
+        recompute_rectangle_packing_summary(impossible, corrupt);
+        require(!validate_rectangle_packing(impossible, corrupt, 10, 10, false, nullptr, true), "invalid partial rejected");
+        require(!validate_rectangle_packing(impossible, partial, 10, 10, true, nullptr, true), "require all precedence");
+
+        const std::vector<rectangle_pack_item> items{{9, 3, 1, true, true}, {7, 4, 1, false, true}, {5, 6, 1, true, true}};
+        for (int k = 0; k < 4; ++k) {
+            const rectangle_bounding_objective objective{
+                k == 0 ? rectangle_bounding_objective_type::area : k == 1
+                    ? rectangle_bounding_objective_type::perimeter : rectangle_bounding_objective_type::weighted_sum,
+                k == 2 ? 9 : 1, k == 3 ? 9 : 1};
+            const auto first = pack_rectangles_bounding_box(items, objective, fast_options(1));
+            const auto again = improve_rectangles_bounding_box(items, first, objective, fast_options(2));
+            require_valid(items, again, 0, 0, true, "all bounding objectives");
+            require(!access::better_bounding(first, again, objective), "weighted improve nondegradation");
+        }
+        const std::vector<rectangle_pack_item> negative{{3, 3, -1, true, false}, {3, 3, 0, false, false}, {3, 3, 7, false, false}};
+        const auto selected = pack_rectangles_fixed_bin(negative, 6, 3, fast_options());
+        require(!selected.placements[0].placed() && selected.placed_profit == 7 && selected.placed_area == 18,
+                "signed profit and zero profit area tie");
+        const std::vector<rectangle_pack_item> large{{1000000, 3000000, 1, true, true}, {2000000, 2000000, 1, false, true}};
+        require_valid(large, pack_rectangles_fixed_bin(large, 4000000, 4000000, fast_options()),
+                      4000000, 4000000, true, "large integer coordinates");
+    }();
+    // compaction_contracts の検証
+    [&] {
+        const auto compact_result = access::compact_result;
+        const std::vector<rectangle_pack_item> empty_items;
+        require_valid(empty_items, compact_result(empty_items, access::empty_result(0), {}),
+                      0, 0, true, "compact empty");
+        const std::vector<rectangle_pack_item> line_items{
+            {2, 2, 3, false, true}, {2, 2, 5, false, true}, {1, 2, 7, false, true}};
+        auto line = access::empty_result(3);
+        line.placements = {{3,4,2,2,0,false},{8,4,2,2,0,false},{12,4,1,2,0,false}};
+        recompute_rectangle_packing_summary(line_items, line);
+        rectangle_pack_options expired;
+        expired.deadline = std::chrono::steady_clock::now() - std::chrono::seconds(1);
+        require(same_placements(line, compact_result(line_items, line, expired)), "compact expired deadline");
+        const auto packed_line = compact_result(line_items, line, {});
+        require_valid(line_items, packed_line, 5, 2, true, "compact known row");
+        require(packed_line.used_width == 5 && packed_line.used_height == 2, "compact known dimensions");
+
+        std::mt19937_64 rng(761928341);
+        for (int trial = 0; trial < 300; ++trial) {
+            const int n = 1 + static_cast<int>(rng() % 80);
+            const long long scale = trial % 7 == 0 ? 1000000 : 1;
+            std::vector<rectangle_pack_item> items;
+            auto initial = access::empty_result(static_cast<std::size_t>(n));
+            std::vector<int> cells(static_cast<std::size_t>(n));
+            std::iota(cells.begin(), cells.end(), 0);
+            std::shuffle(cells.begin(), cells.end(), rng);
+            for (int i = 0; i < n; ++i) {
+                const long long w = (1 + static_cast<long long>(rng() % 8)) * scale;
+                const long long h = (1 + static_cast<long long>(rng() % 8)) * scale;
+                const bool rotatable = (rng() & 1U) != 0;
+                items.push_back({w, h, static_cast<long long>(rng() % 17) - 8, rotatable, (rng() & 1U) != 0});
+                if (rng() % 5 == 0) continue;
+                const bool rotated = rotatable && (rng() & 1U) != 0;
+                const long long x = (cells[i] % 10 * 17 + 3 + static_cast<long long>(rng() % 5)) * scale;
+                const long long y = (cells[i] / 10 * 17 + 3 + static_cast<long long>(rng() % 5)) * scale;
+                initial.placements[i] = {x,y,rotated?h:w,rotated?w:h,static_cast<int>(rng()%3),rotated};
+            }
+            recompute_rectangle_packing_summary(items, initial);
+            require(validate_rectangle_packing(items, initial, 0, 0, false, nullptr, true), "compact input geometry");
+            const auto result = compact_result(items, initial, {});
+            require(validate_rectangle_packing(items, result, initial.used_width, initial.used_height,
+                                              false, nullptr, true), "compact output geometry");
+            require(result.used_width <= initial.used_width && result.used_height <= initial.used_height,
+                    "compact nonincreasing bounding dimensions");
+            require(result.placed_profit == initial.placed_profit && result.placed_area == initial.placed_area &&
+                    result.placed_count == initial.placed_count && result.bin_count == initial.bin_count &&
+                    result.missing_required_count == initial.missing_required_count, "compact summary invariants");
+            for (int i = 0; i < n; ++i) {
+                const auto& a = initial.placements[i]; const auto& b = result.placements[i];
+                require(std::tie(a.width,a.height,a.bin,a.rotated) == std::tie(b.width,b.height,b.bin,b.rotated),
+                        "compact shape and assignment invariants");
+                if (!a.placed()) require(a.x == b.x && a.y == b.y, "compact unplaced unchanged");
+            }
+            require(same_placements(result, compact_result(items, initial, {})), "compact deterministic");
+        }
+    }();
+    // 利益の最小値と、途中だけ64bitを超える正負の相殺を公開APIで確認する
+    [&] {
+        constexpr long long hi = std::numeric_limits<long long>::max();
+        constexpr long long lo = std::numeric_limits<long long>::min();
+        for (const auto& profits : std::vector<std::vector<long long>>{
+                 {lo}, {hi,1,-hi}, {lo,-1,hi}, {hi,-hi}, {lo,hi,1}}) {
+            std::vector<rectangle_pack_item> items;
+            __int128_t expected = 0;
+            for (long long profit : profits) {
+                items.push_back({1,1,profit,false,true});
+                expected += profit;
+            }
+            const long long width = static_cast<long long>(items.size());
+            const auto result = pack_rectangles_fixed_bin(items,width,1,fast_options(11));
+            require(result.placed_profit == expected, "extreme profit summary");
+            require_valid(items,result,width,1,true,"extreme profit valid");
+            const auto improved = improve_rectangles_fixed_bin(items,result,width,1,fast_options(12));
+            require(improved.placed_profit == expected && improved.feasible(), "extreme profit improve");
+            std::vector<int> ids(items.size());
+            std::iota(ids.begin(),ids.end(),0);
+            const auto repaired = repair_rectangles_fixed_bin(items,result,ids,width,1,fast_options(13));
+            const auto repacked = repack_rectangles_fixed_bin(items,result,ids,width,1,fast_options(14));
+            require_valid(items,repaired,width,1,true,"extreme profit repair");
+            require_valid(items,repacked,width,1,true,"extreme profit repack");
+        }
+        // 負の利益の任意矩形を固定したまま、別の矩形だけを動かす
+        const std::vector<rectangle_pack_item> items{{1,1,lo,false,false},{1,1,0,false,true}};
+        rectangle_pack_result base;
+        base.placements = {{0,0,1,1,0,false},{}};
+        recompute_rectangle_packing_summary(items,base);
+        const std::array<int,1> movable{1};
+        const auto repaired = repair_rectangles_fixed_bin(items,base,movable,2,1,fast_options());
+        require(repaired.placed_profit == lo && repaired.feasible(), "extreme locked optional profit");
+        require_valid(items,repaired,2,1,true,"extreme locked valid");
+
+        // 面積下界の切上げは、面積合計に幅-1を足さずに計算する
+        const std::vector<rectangle_pack_item> tall{
+            {1,hi/2,1,false,true}, {1,hi/2,1,false,true}, {1,1,1,false,true}};
+        require(access::strip_height_lower_bound(tall,2) == hi/2+1, "overflow-free ceiling");
+    }();
+
+    // 検証関数は極端な不正配置をfalseで返し、未定義動作を起こさない
+    [&] {
+        constexpr long long hi = std::numeric_limits<long long>::max();
+        for (int kind = 0; kind < 9; ++kind) {
+            std::vector<rectangle_pack_item> items{{2,2,1,false,true}};
+            rectangle_pack_result result;
+            result.placements = {{0,0,2,2,0,false}};
+            if (kind == 0) result.placements[0].x = hi;
+            if (kind == 1) result.placements[0].y = hi;
+            if (kind == 2) result.placements[0].width = hi;
+            if (kind == 3) result.placements[0].height = hi;
+            if (kind == 4) result.placements[0].bin = std::numeric_limits<int>::max();
+            if (kind == 5) {
+                items[0] = {0,1,1,false,false};
+                result.placements[0] = {};
+            }
+            if (kind == 6) {
+                items[0].width = result.placements[0].width = hi;
+            }
+            if (kind >= 7) {
+                const long long value = kind == 7 ? hi : std::numeric_limits<long long>::min();
+                items = {{1,1,value,false,true},{1,1,kind == 7 ? 1 : -1,false,true}};
+                result.placements = {{0,0,1,1,0,false},{1,0,1,1,0,false}};
+            }
+            std::string error;
+            require(!validate_rectangle_packing(items,result,0,0,false,&error,true) && !error.empty(),
+                    "invalid extreme input rejected");
+        }
+        // 表現可能な端点・ビン数の最大値は、境界ぎりぎりでも受理する
+        const std::vector<rectangle_pack_item> items{{1,1,1,false,true}};
+        rectangle_pack_result result;
+        result.placements = {{hi-1,hi-1,1,1,std::numeric_limits<int>::max()-1,false}};
+        recompute_rectangle_packing_summary(items,result);
+        require_valid(items,result,hi,hi,true,"maximum representable endpoint and bin");
+    }();
+
+    // 小さな座標格子で、検証関数をセル占有表と128bit集計の独立実装に照合する
+    [&] {
+        std::mt19937_64 random(0x37101a571ULL);
+        std::size_t accepted = 0, rejected = 0;
+        constexpr long long hi = std::numeric_limits<long long>::max();
+        constexpr long long lo = std::numeric_limits<long long>::min();
+        const std::array<long long,7> profits{lo,lo+1,-1,0,1,hi-1,hi};
+        for (int trial = 0; trial < 20000; ++trial) {
+            const int n = 1 + static_cast<int>(random()%5);
+            std::vector<rectangle_pack_item> items;
+            rectangle_pack_result result;
+            bool expected = true;
+            bool occupied[2][8][8]{};
+            __int128_t profit_sum = 0;
+            const bool require_all = (random()&1U) != 0;
+            const bool allow_missing = (random()&1U) != 0;
+            for (int id = 0; id < n; ++id) {
+                const long long w = 1 + static_cast<long long>(random()%3);
+                const long long h = 1 + static_cast<long long>(random()%3);
+                const long long profit = profits[random()%profits.size()];
+                const bool rotatable = (random()&1U) != 0;
+                const bool required = (random()&1U) != 0;
+                items.push_back({w,h,profit,rotatable,required});
+                const bool rotated = rotatable && (random()&1U) != 0;
+                const long long pw = rotated ? h : w, ph = rotated ? w : h;
+                const int bin = static_cast<int>(random()%3)-1;
+                const long long x = static_cast<long long>(random()%8);
+                const long long y = static_cast<long long>(random()%8);
+                result.placements.push_back({x,y,pw,ph,bin,rotated});
+                if (bin < 0) {
+                    if (required) ++result.missing_required_count;
+                    if (require_all || (required && !allow_missing)) expected = false;
+                    continue;
+                }
+                profit_sum += profit;
+                result.placed_area += w*h;
+                result.used_width = std::max(result.used_width,x+pw);
+                result.used_height = std::max(result.used_height,y+ph);
+                ++result.placed_count;
+                result.bin_count = std::max(result.bin_count,bin+1);
+                if (x+pw > 8 || y+ph > 8) {
+                    expected = false;
+                    continue;
+                }
+                for (long long yy = y; yy < y+ph; ++yy) {
+                    for (long long xx = x; xx < x+pw; ++xx) {
+                        if (occupied[bin][yy][xx]) expected = false;
+                        occupied[bin][yy][xx] = true;
+                    }
+                }
+            }
+            if (profit_sum < lo || profit_sum > hi) expected = false;
+            else result.placed_profit = static_cast<long long>(profit_sum);
+            if (trial%7 == 0) {
+                ++result.placed_area;
+                expected = false;
+            }
+            const bool actual = validate_rectangle_packing(items,result,8,8,require_all,nullptr,allow_missing);
+            require(actual == expected, "validator grid and wide sum oracle");
+            if (actual) ++accepted;
+            else ++rejected;
+        }
+        require(accepted > 100 && rejected > 100, "validator oracle includes both outcomes");
+        std::cout << "Validator oracle: " << accepted << " accepted, " << rejected << " rejected.\n";
+    }();
+
+    std::cout << "All rectangle_packing v10 tests passed.\n";
+}
+
+#endif
