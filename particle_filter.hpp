@@ -195,6 +195,7 @@ public:
     }
 
     // 元粒子のコピーに提案を適用し、返された対数補正と一括確定する O(N × (コピー＋提案コスト))
+    // 対数重み-infの粒子は提案しない。増分-infの候補は元の状態を残し、重みだけ0にする。
     template<class Proposal, class Rng>
     UpdateResult propose_update_log(Proposal&& proposal, Rng& rng) {
         assert(size() > 0);
@@ -204,8 +205,11 @@ public:
         scratch_.resize(n);
         for (int i = 0; i < n; ++i) {
             copy_to(buffer_, i, particles_[i]);
+            scratch_[i] = log_weights_[i];
+            if (scratch_[i] == neg_inf) continue;
             const double increment = proposal(std::as_const(particles_[i]), buffer_[i], rng);
-            scratch_[i] = log_weights_[i] + increment;
+            scratch_[i] += increment;
+            if (increment == neg_inf) buffer_[i] = particles_[i];
         }
         const UpdateResult result = normalize();
         if (result.ok) {
@@ -258,6 +262,7 @@ public:
     }
 
     // 全履歴を反映したtargetに対するMH再探索を行う O(N × (評価＋steps × (コピー＋提案＋評価コスト)))
+    // 提案補正-infは確実棄却とし、候補のtargetは呼ばない。受理判定用RNGは通常どおり消費する。
     template<class LogTarget, class Propose, class Rng>
     MoveResult rejuvenate(int steps, LogTarget&& log_target, Propose&& propose, Rng& rng) {
         assert(size() > 0 && steps >= 0);
@@ -273,7 +278,7 @@ public:
                 candidate = particles_[i];
                 const double correction = propose(candidate, rng);
                 assert(std::isfinite(correction) || correction == neg_inf);
-                const double next = log_target(std::as_const(candidate));
+                const double next = correction == neg_inf ? neg_inf : log_target(std::as_const(candidate));
                 assert(std::isfinite(next) || next == neg_inf);
                 ++result.attempted;
                 // 補正はlog q(旧|新) - log q(新|旧)。棄却時は元粒子を変更しない
@@ -306,7 +311,7 @@ public:
                 auto proposal = propose(particles_[i], rng);
                 const double correction = proposal.log_correction;
                 assert(std::isfinite(correction) || correction == neg_inf);
-                const double next = log_target(std::as_const(particles_[i]));
+                const double next = correction == neg_inf ? neg_inf : log_target(std::as_const(particles_[i]));
                 assert(std::isfinite(next) || next == neg_inf);
                 ++result.attempted;
                 if (std::log(uniform(rng)) < next - current + correction) {
@@ -594,8 +599,9 @@ private:
     typename Cloud::MoveResult move(Cloud& cloud, int steps,
                                     const Observation* observation = nullptr, double beta = 0) {
         const auto target = [](const Entry& entry) { return entry.target; };
-        auto evaluate = [&](Entry& entry) {
-            entry.target = full_target(entry.value);
+        auto evaluate = [&](Entry& entry, double correction) {
+            // 逆向き提案の確率が0なら棄却確定。候補の事前・尤度は評価しない。
+            entry.target = correction == neg_inf ? neg_inf : full_target(entry.value);
             if (observation && beta > 0 && entry.target != neg_inf)
                 entry.target += beta * log_likelihood(entry.value, *observation);
         };
@@ -603,7 +609,7 @@ private:
             return cloud.rejuvenate(steps, target, [&](Entry& entry, Rng& rng) {
                 const double old_target = entry.target;
                 auto proposal = model_.propose_in_place(entry.value, rng);
-                evaluate(entry);
+                evaluate(entry, proposal.log_correction);
                 using Token = std::pair<decltype(proposal.undo), double>;
                 return typename Cloud::template MoveProposal<Token>{
                     {std::move(proposal.undo), old_target}, proposal.log_correction};
@@ -619,7 +625,7 @@ private:
                         model_.propose(entry.value, rng); // voidは対称提案
                     else correction = model_.propose(entry.value, rng);
                 } else entry.value = model_.sample(rng);
-                evaluate(entry);
+                evaluate(entry, correction);
                 return correction;
             }, rng_);
     }
@@ -2696,6 +2702,177 @@ struct UpgradeTests {
     }
 };
 
+struct ReviewTests : ManagedTests {
+    struct Calls {
+        int transition = 0, likelihood = 0, prior = 0, undo = 0, history = 0;
+    };
+    struct PartialGuided {
+        using Particle = std::vector<int>;
+        using Observation = int;
+        std::shared_ptr<Calls> calls;
+        int index = 0;
+        Particle sample(Rng&) { return {index++ % 3}; }
+        double propose_transition(Particle& next, const Particle& old, int, Rng&) {
+            ++calls->transition;
+            require(old.size() == 1, "invalid old proposal must not reach next transition");
+            if (old[0] == 0) {
+                next.clear();
+                return -inf;
+            }
+            next[0] += 3;
+            return 0;
+        }
+        double likelihood(const Particle& p, int) const {
+            ++calls->likelihood;
+            require(p.size() == 1, "invalid proposal must not reach likelihood");
+            return 1;
+        }
+    };
+    static void partial_guided() {
+        for (double ratio : {0.0, 0.5, 1.0}) {
+            auto calls = std::make_shared<Calls>();
+            ParticleFilter<PartialGuided> filter(PartialGuided{calls}, {.count=6, .ess_ratio=ratio});
+            auto first = filter.observe(0);
+            require(first.ok && !first.resampled, "partial invalid update succeeds");
+            near(first.log_predictive, std::log(2.0 / 3));
+            require(calls->transition == 6 && calls->likelihood == 4, "only valid proposals use likelihood");
+            for (int i = 0; i < 6; ++i) {
+                require(filter.particles()[i].size() == 1, "invalid proposal leaves original state readable");
+                if (i % 3 == 0) {
+                    require(filter.particles()[i][0] == 0 && filter.log_weights()[i] == -inf,
+                            "rejected proposal retains original value with zero weight");
+                }
+            }
+            near(filter.estimate().mean[0], 4.5);
+            auto second = filter.observe(1);
+            require(second.ok && second.resampled == (ratio == 1), "next turn works with or without resampling");
+            const int live = ratio == 1 ? 6 : 4;
+            require(calls->transition == 6 + live && calls->likelihood == 4 + live,
+                    "true zero particles are not transitioned again");
+            near(second.log_predictive, 0);
+            if (ratio == 1) {
+                const double mean = filter.estimate().mean[0];
+                require(mean >= 7 && mean <= 8, "resampled prediction stays in valid support");
+            } else near(filter.estimate().mean[0], 7.5);
+        }
+    }
+    static void dead_and_underflow() {
+        ParticleCloud<int> cloud;
+        cloud.assign({0, 1, 2, 3}, std::array{-inf, -1000.0, 0.0, 0.0});
+        Rng rng(32);
+        std::array<int, 32> sampled;
+        cloud.sample_indices(sampled, rng); // Populate CDF and top-k caches before the update.
+        cloud.estimate([](int p) { return p; }, 1);
+        int calls = 0;
+        auto result = cloud.propose_update_log([&](const int& old, int& next, Rng&) {
+            ++calls;
+            require(old != 0, "true zero skips proposal callback");
+            next = old == 2 ? -99 : old + 10;
+            return old == 2 ? -inf : (old == 1 ? 1000.0 : 0.0);
+        }, rng);
+        require(result.ok && calls == 3, "finite log weight is explored despite normal underflow");
+        require(std::ranges::equal(cloud.particles(), std::array{0, 11, 2, 13}),
+                "partial rejection commits only valid proposal states");
+        near(cloud.weights()[1], 0.5); near(cloud.weights()[3], 0.5);
+        near(cloud.estimate([](int p) { return p; }).mean, 12);
+        cloud.sample_indices(sampled, rng);
+        for (int i : sampled) require(i == 1 || i == 3, "sampling cache excludes rejected proposals");
+        const auto before = cloud;
+        calls = 0;
+        result = cloud.propose_update_log([&](const int& old, int& next, Rng&) {
+            ++calls;
+            require(old == 11 || old == 13, "only surviving particles reach later proposals");
+            next = -100;
+            return -inf;
+        }, rng);
+        require(!result.ok && calls == 2, "all surviving proposals invalid means atomic failure");
+        require(std::ranges::equal(cloud.particles(), before.particles()) &&
+                std::ranges::equal(cloud.log_weights(), before.log_weights()), "failure preserves old population");
+    }
+    static void impossible_cloud_moves() {
+        for (bool in_place : {false, true}) {
+            ParticleCloud<int> cloud;
+            cloud.assign({1, 1, 1, 1});
+            Rng rng(13), reference = rng;
+            int targets = 0, undone = 0;
+            const auto target = [&](int p) {
+                ++targets;
+                require(p == 1, "zero reverse probability skips candidate target");
+                return 0.0;
+            };
+            ParticleCloud<int>::MoveResult moved;
+            if (in_place) {
+                moved = cloud.rejuvenate(3, target, [](int& p, Rng&) {
+                    const int old = p;
+                    p = -7;
+                    return ParticleCloud<int>::MoveProposal<int>{old, -inf};
+                }, [&](int& p, const int& old) { ++undone; p = old; }, rng);
+            } else {
+                moved = cloud.rejuvenate(3, target, [](int& p, Rng&) { p = -7; return -inf; }, rng);
+            }
+            for (int j = 0; j < 12; ++j) uniform(reference);
+            require(rng == reference, "certain rejection keeps acceptance RNG consumption");
+            require(targets == 4 && moved.attempted == 12 && moved.accepted == 0, "certain rejection statistics");
+            require(undone == (in_place ? 12 : 0), "each in-place rejection invokes undo");
+            for (int p : cloud.particles()) require(p == 1, "certain rejection preserves particle");
+        }
+    }
+    struct RejectCopy {
+        using Particle = int;
+        using Observation = int;
+        std::shared_ptr<Calls> calls;
+        int sample(Rng&) { return 1; }
+        double log_prior(int p) const {
+            ++calls->prior;
+            require(p == 1, "certain rejection skips user prior");
+            return 0;
+        }
+        double likelihood(int p, int) const {
+            ++calls->likelihood;
+            require(p == 1, "certain rejection skips user likelihood");
+            return 1;
+        }
+        double propose(int& p, Rng&) { p = -7; return -inf; }
+    };
+    struct RejectDelta : RejectCopy {
+        auto propose_in_place(int& p, Rng&) {
+            const int old = p; p = -7;
+            return ParticleCloud<int>::MoveProposal<int>{old, -inf};
+        }
+        void undo(int& p, const int& old) { ++calls->undo; p = old; }
+    };
+    template<class Base> struct RejectHistory : Base {
+        double log_likelihood_history(int p, std::span<const int> history) const {
+            ++this->calls->history;
+            require(p == 1, "certain rejection skips aggregate history");
+            return double(history.size()) * 0;
+        }
+    };
+    template<class Model> static void impossible_managed_moves() {
+        auto calls = std::make_shared<Calls>();
+        Model model; model.calls = calls;
+        ParticleFilter<Model> filter(model, {.count=7, .move_steps=0});
+        filter.observe(0);
+        *calls = {};
+        auto result = filter.refine(5);
+        require(result.attempted == 35 && result.accepted == 0, "managed certain rejection statistics");
+        require(calls->prior == 0 && calls->likelihood == 0 && calls->history == 0,
+                "managed certain rejection avoids model evaluation");
+        if constexpr (requires(Model& m, int& p, Rng& r) { m.propose_in_place(p, r); })
+            require(calls->undo == 35, "managed undo restores state and cached target");
+        near(filter.estimate().mean, 1);
+        require(filter.observe(0).ok && filter.observation_count() == 2, "later update retains correct cache");
+    }
+    static void run() {
+        const int start = checks;
+        partial_guided(); dead_and_underflow(); impossible_cloud_moves();
+        impossible_managed_moves<RejectCopy>(); impossible_managed_moves<RejectDelta>();
+        impossible_managed_moves<RejectHistory<RejectCopy>>();
+        impossible_managed_moves<RejectHistory<RejectDelta>>();
+        std::cout << "PASS: review 7 suites, " << checks - start << " checks\n";
+    }
+};
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string_view(argv[1]) == "--death") return ParticleCloudTests::death_test(argv[2]);
     ParticleCloudTests::run();
@@ -2704,6 +2881,7 @@ int main(int argc, char** argv) {
     OptimizationTests::run();
     ImprovementTests::run();
     UpgradeTests::run();
+    ReviewTests::run();
     return 0;
 }
 
