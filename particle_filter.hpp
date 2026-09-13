@@ -3,6 +3,7 @@
 // 粒子数・総試行回数はintの範囲内、有限対数値の加減算はdoubleの範囲内とする
 // コールバック中の再入・構造変更は禁止。戻り値のviewは次の変更まで有効
 // -infを無効な尤度に使うため、-ffast-math / Ofastは使用しない
+// bool粒子・観測はParticleFilterで利用できる。ParticleCloudの直接操作ではboolを含むstruct等を使う
 #pragma once
 #include <bits/stdc++.h>
 
@@ -576,9 +577,9 @@ private:
     double full_target(const Particle& p) const {
         double value = initial_target(p);
         if (value == neg_inf) return value;
-        if constexpr (requires { model_.log_likelihood_history(p, std::span<const Observation>(history_)); }) {
+        if constexpr (requires { model_.log_likelihood_history(p, history()); }) {
             // 任意の高速化経路。各観測の対数尤度の総和と、共通定数も含めて一致させる
-            return value + checked_log(model_.log_likelihood_history(p, std::span<const Observation>(history_)));
+            return value + checked_log(model_.log_likelihood_history(p, history()));
         } else {
             for (const Observation& observation : history_) {
                 // 確率のゼロは対数変換前に判定する。残りの履歴は評価しない
@@ -850,7 +851,12 @@ public:
             return entry.value;
         });
     }
-    std::span<const Observation> history() const requires (!dynamic) { return history_; }
+    // 通常はspan。boolはvector<bool>が非連続のため読み取り専用rangeを返す。
+    // log_likelihood_historyは同じviewを受け取る。const auto&なら両方に対応できる。
+    auto history() const requires (!dynamic) {
+        if constexpr (std::is_same_v<Observation, bool>) return std::views::all(history_);
+        else return std::span<const Observation>(history_);
+    }
 };
 
 #if __INCLUDE_LEVEL__ == 0
@@ -2873,6 +2879,142 @@ struct ReviewTests : ManagedTests {
     }
 };
 
+struct BooleanHistoryTests : ManagedTests {
+    template<class O, bool Discrete> struct Base {
+        using Particle = std::conditional_t<Discrete, bool, double>;
+        using Observation = O;
+        Particle sample(Rng& rng) const {
+            if constexpr (Discrete) return std::bernoulli_distribution(0.3)(rng);
+            else return 0.05 + 0.9 * uniform(rng);
+        }
+        static double probability(Particle p, Observation o) {
+            const double chance = Discrete ? (p ? 0.8 : 0.1) : double(p);
+            return o ? chance : 1 - chance;
+        }
+    };
+    template<class O, bool Discrete> struct Normal : Base<O, Discrete> {
+        double likelihood(typename Base<O, Discrete>::Particle p, O o) const {
+            return this->probability(p, o);
+        }
+    };
+    template<class O, bool Discrete> struct Logarithmic : Base<O, Discrete> {
+        double log_likelihood(typename Base<O, Discrete>::Particle p, O o) const {
+            return std::log(this->probability(p, o));
+        }
+    };
+    template<class Model> struct Aggregate : Model {
+        std::shared_ptr<int> calls = std::make_shared<int>(0);
+        double log_likelihood_history(typename Model::Particle p, const auto& history) const {
+            ++*calls;
+            double sum = 0;
+            for (auto observed : history) sum += std::log(this->probability(p, observed));
+            return sum;
+        }
+    };
+    static void compare(const auto& a, const auto& b) {
+        require(a.size() == b.size() && a.observation_count() == b.observation_count(), "history state sizes");
+        require(std::ranges::equal(a.history(), b.history()), "history view values");
+        for (int i = 0; i < a.size(); ++i) {
+            near(double(a.particles()[i]), double(b.particles()[i]), 0);
+            require(a.log_weights()[i] == b.log_weights()[i], "equal finite or zero log weights");
+        }
+    }
+    template<template<class, bool> class Model, bool Discrete> static void scenario() {
+        using Slow = ParticleFilter<Model<bool, Discrete>>;
+        using Fast = ParticleFilter<Aggregate<Model<bool, Discrete>>>;
+        using Int = ParticleFilter<Aggregate<Model<int, Discrete>>>;
+        static_assert(std::is_same_v<decltype(std::declval<const Int&>().history()), std::span<const int>>);
+        using View = decltype(std::declval<const Fast&>().history());
+        static_assert(std::ranges::random_access_range<View> && std::ranges::sized_range<View>);
+        static_assert(!std::indirectly_writable<std::ranges::iterator_t<View>, bool>);
+        for (int seed : {0, 7, 19}) {
+            Aggregate<Model<bool, Discrete>> model;
+            const auto calls = model.calls;
+            Fast fast(model, {.count=17}, Rng(seed));
+            Slow slow({}, {.count=17}, Rng(seed));
+            Int ints({}, {.count=17}, Rng(seed));
+            require(fast.history().empty(), "empty boolean history");
+            fast.refine(2); slow.refine(2); ints.refine(2);
+            require(*calls > 0, "boolean aggregate path is selected for empty history");
+            for (int turn = 0; turn < 137; ++turn) {
+                const bool observed = turn % 7 < 4;
+                const auto a = fast.observe(observed);
+                const auto b = slow.observe(observed);
+                const auto c = ints.observe(int(observed));
+                require(a.ok && b.ok && c.ok, "boolean observations succeed");
+                near(a.log_predictive, b.log_predictive, 0); near(a.log_predictive, c.log_predictive, 0);
+                compare(fast, slow); compare(fast, ints);
+                const auto h = fast.history();
+                require(h.size() == std::size_t(turn + 1) && h.back() == observed, "history crosses bit storage boundaries");
+                require(h.front(), "history front read");
+            }
+            *calls = 0;
+            const auto a = fast.refine(3);
+            const auto b = slow.refine(3);
+            const auto c = ints.refine(3);
+            require(*calls > 0, "boolean aggregate fast path is used");
+            require(a.accepted == b.accepted && a.accepted == c.accepted, "aggregate MH equivalence");
+            compare(fast, slow); compare(fast, ints);
+            auto branch = fast;
+            branch.observe(false);
+            require(branch.history().size() == 138 && fast.history().size() == 137, "boolean history copy isolation");
+            branch = fast;
+            compare(branch, fast);
+            auto param = branch.param(); param.count = 31;
+            branch.set_param(param);
+            require(branch.history().size() == 137 && branch.size() == 31, "resize keeps boolean history");
+            branch.reset();
+            require(branch.history().empty() && branch.observation_count() == 0, "reset clears boolean history");
+            require(branch.observe(true).ok && branch.history()[0], "reuse cleared boolean history");
+        }
+    }
+    struct Deterministic {
+        using Particle = bool; using Observation = bool;
+        bool sample(Rng& rng) { return std::bernoulli_distribution(0.5)(rng); }
+        double likelihood(bool p, bool o) const { return p == o ? 1.0 : 0.0; }
+    };
+    struct CopyBoolean : Normal<bool, true> {
+        double log_prior(bool p) const { return std::log(p ? 0.3 : 0.7); }
+        void propose(bool& p, Rng&) const { p = !p; }
+    };
+    struct DeltaBoolean : CopyBoolean {
+        auto propose_in_place(bool& p, Rng&) const {
+            const bool old = p; p = !p;
+            return ParticleCloud<bool>::MoveProposal<bool>{old, 0.0};
+        }
+        void undo(bool& p, const bool& saved) const { p = saved; }
+    };
+    static void boolean_delta() {
+        ParticleFilter<Aggregate<CopyBoolean>> copied({}, {.count=31});
+        ParticleFilter<Aggregate<DeltaBoolean>> delta({}, {.count=31});
+        for (int turn = 0; turn < 20; ++turn) {
+            const bool observation = turn % 3 != 0;
+            require(copied.observe(observation).ok && delta.observe(observation).ok, "bool delta observation");
+            compare(copied, delta);
+            const auto a = copied.refine(3);
+            const auto b = delta.refine(3);
+            require(a.attempted == b.attempted && a.accepted == b.accepted, "bool copy and delta acceptance");
+            compare(copied, delta);
+        }
+    }
+    static void failed_update() {
+        ParticleFilter<Deterministic> f({}, {.count=64, .ess_ratio=0, .move_steps=0});
+        require(f.observe(false).ok, "deterministic first observation");
+        const auto before = f;
+        require(!f.observe(true).ok, "contradictory observation fails");
+        compare(f, before);
+        require(f.history().size() == 1 && !f.history()[0], "failure preserves boolean history");
+        near(f.estimate().mean, 0);
+    }
+    static void run() {
+        const int start = checks;
+        scenario<Normal, false>(); scenario<Normal, true>();
+        scenario<Logarithmic, false>(); scenario<Logarithmic, true>();
+        failed_update(); boolean_delta();
+        std::cout << "PASS: bool history 6 suites, " << checks - start << " checks\n";
+    }
+};
+
 int main(int argc, char** argv) {
     if (argc == 3 && std::string_view(argv[1]) == "--death") return ParticleCloudTests::death_test(argv[2]);
     ParticleCloudTests::run();
@@ -2882,6 +3024,7 @@ int main(int argc, char** argv) {
     ImprovementTests::run();
     UpgradeTests::run();
     ReviewTests::run();
+    BooleanHistoryTests::run();
     return 0;
 }
 
