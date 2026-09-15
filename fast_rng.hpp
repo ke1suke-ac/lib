@@ -1,39 +1,27 @@
 #pragma once
-
-#include <algorithm>
-#include <cassert>
-#include <cmath>
-#include <cstdint>
-#include <limits>
-
+#include <bits/stdc++.h>
 using namespace std;
 
-// ============================================================
-// 高速乱数生成器 FastRng
-//
-// - 本体は splitmix64
-// - C++20 / gcc 12.2 前提
-// - UniformRandomBitGenerator 準拠
-// - 競技プログラミング向けに速度を優先
-// - 範囲乱数は厳密な無偏り性より軽さを重視
-// ============================================================
+// FastRng: splitmix64 を使う、状態 64bit の競技プログラミング用 RNG
+// uniform は半開区間、uniform_closed は整数の閉区間を返す
+// uniform_closed_delta は整数の閉区間から 0 を除いた差分を返す
+// 対応型は bool を除く 64bit 以下の整数と double、2 引数は同じ型を指定
+// 範囲縮小は速度優先で厳密な無偏り性を保証しない、暗号用途には使わない
 struct FastRng {
     using result_type = uint64_t;
-
-    // 内部状態は 64bit 1語だけ持つ
     static constexpr result_type default_seed = 0;
     result_type state = default_seed;
 
-    // 構築と seed 設定
+    // 構築と seed 設定、コピーすると内部状態もそのまま複製する
     constexpr FastRng() noexcept = default;
     constexpr explicit FastRng(result_type seed_value) noexcept : state(seed_value) {}
     constexpr void seed(result_type seed_value) noexcept { state = seed_value; }
 
-    // UniformRandomBitGenerator 用の境界値
+    // UniformRandomBitGenerator 用の出力範囲
     static constexpr result_type min() noexcept { return 0; }
     static constexpr result_type max() noexcept { return numeric_limits<result_type>::max(); }
 
-    // splitmix64 本体。64bit 乱数を 1 個返す
+    // splitmix64 本体、64bit の生乱数を 1 個返す
     inline result_type operator()() noexcept {
         auto z = state += 0x9e3779b97f4a7c15ULL;
         z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -41,14 +29,19 @@ struct FastRng {
         return z ^ (z >> 31);
     }
 
-    // 生の乱数取得
+    // 生乱数の取得、32bit と bool は上位 bit を使う
     inline result_type next_u64() noexcept { return (*this)(); }
     inline uint32_t next_u32() noexcept { return (uint32_t)((*this)() >> 32); }
     inline bool next_bool() noexcept { return (bool)((*this)() >> 63); }
 
-    // [0, n) の符号なし整数乱数
-    // n == 0 は full range とみなし、そのまま 64bit 乱数を返す
-    inline result_type uniform_u64(result_type n) noexcept {
+private:
+    // GCC の整数型から bool と 128bit 型を除外する
+    template<class T>
+    static constexpr bool integer_type = integral<T> && !same_as<remove_cv_t<T>, bool>
+                                      && numeric_limits<T>::digits <= 64;
+
+    // 整数を [0, n) に縮小する共通処理、内部でのみ n == 0 を要素数 2^64 と解釈
+    inline result_type bounded(result_type n) noexcept {
         if (!n) return next_u64();
         auto x = (*this)();
         if ((n & (n - 1)) == 0) return x & (n - 1);
@@ -57,66 +50,432 @@ struct FastRng {
         return (result_type)(((__uint128_t)x * n) >> 64);
     }
 
-    // [0, n) の 32bit 版
-    inline uint32_t uniform_u32(uint32_t n) noexcept {
-        if (!n) return next_u32();
-        return (uint32_t)uniform_u64(n);
-    }
-
-    // 閉区間 [l, r] の 32bit 整数乱数
-    inline int32_t uniform_int(int32_t l, int32_t r) noexcept {
-        assert(l <= r);
-        return (int32_t)uniform_ll(l, r);
-    }
-
-    // 閉区間 [l, r] の 64bit 符号付き整数乱数
-    inline int64_t uniform_ll(int64_t l, int64_t r) noexcept {
-        assert(l <= r);
-        auto ul = (uint64_t)l;
-        return (int64_t)(ul + uniform_u64((uint64_t)r - ul + 1));
-    }
-
-    // 閉区間 [l, r] の 64bit 符号なし整数乱数
-    inline result_type uniform_u64(result_type l, result_type r) noexcept {
-        assert(l <= r);
-        return l + uniform_u64(r - l + 1);
-    }
-
-    // [0, 1) の double を返す。53bit を使って作る
-    inline double uniform_double() noexcept {
+public:
+    // [0, 1) の double を返す、上位 53bit を使う
+    inline double uniform() noexcept {
         return (double)((*this)() >> 11) * 0x1.0p-53;
     }
 
-    // [l, r) の double を返す
-    // 丸めで r 以上になったときは、r 未満の隣接値に寄せる
-    inline double uniform_double(double l, double r) noexcept {
-        assert(l <= r);
-        if (l == r) return l;
-        auto x = l + (r - l) * uniform_double();
-        return x < r ? x : nextafter(r, l);
+    // 半開区間 [0, r)、r > 0 が前提、戻り値は引数と同じ型
+    template<class T> requires (integer_type<T> || same_as<remove_cv_t<T>, double>)
+    inline T uniform(T r) noexcept { return uniform(T{0}, r); }
+
+    // 半開区間 [l, r)、l < r が前提、double は端点と r - l が有限の範囲のみ
+    template<class T> requires (integer_type<T> || same_as<remove_cv_t<T>, double>)
+    inline T uniform(T l, T r) noexcept {
+        assert(l < r);
+        if constexpr (same_as<remove_cv_t<T>, double>) {
+            // 上端への丸めだけを補正する、通常の浮動小数点演算を前提とする
+            auto width = r - l;
+            assert(isfinite(width));
+            auto x = l + width * uniform();
+            return x < r ? x : nextafter(r, l);
+        } else {
+            // 幅とオフセットは unsigned で計算し、符号付きの桁あふれを避ける
+            return (T)((uint64_t)l + bounded((uint64_t)r - (uint64_t)l));
+        }
     }
 
-    // 確率 p で true を返す
+    // 整数の閉区間 [0, r]、r >= 0 が前提
+    template<class T> requires integer_type<T>
+    inline T uniform_closed(T r) noexcept { return uniform_closed(T{0}, r); }
+
+    // 整数の閉区間 [l, r]、l <= r が前提、同値端点と型の全域にも対応
+    template<class T> requires integer_type<T>
+    inline T uniform_closed(T l, T r) noexcept {
+        assert(l <= r);
+        auto ul = (uint64_t)l;
+        return (T)(ul + bounded((uint64_t)r - ul + 1));
+    }
+
+    // 整数の閉区間 [l, r] から 0 を除いた差分、l <= r かつ [0, 0] 以外が前提
+    template<class T> requires integer_type<T>
+    inline T uniform_closed_delta(T l, T r) noexcept {
+        assert(l <= r && (l != 0 || r != 0));
+        // 0 を含むときは候補を 1 個減らし、非負の結果を 1 ずらす（再抽選なし）
+        auto skip_zero = l <= 0 && r >= 0;
+        auto x = uniform_closed(l, (T)(r - skip_zero));
+        return (T)(x + (skip_zero && x >= 0));
+    }
+
+    // 確率 p で true、0 <= p <= 1 が前提、端点確率では乱数を消費しない
     inline bool bernoulli(double p) noexcept {
         assert(0.0 <= p && p <= 1.0);
-        return p > 0.0 && (p >= 1.0 || uniform_double() < p);
+        return p > 0.0 && (p >= 1.0 || uniform() < p);
     }
 };
 
 #if __INCLUDE_LEVEL__ == 0
-// ============================================================
-// 単体実行時のみ有効なテスト / ベンチマーク
-// ============================================================
-#include <array>
-#include <chrono>
-#include <concepts>
-#include <cstdlib>
-#include <iomanip>
-#include <iostream>
-#include <random>
-#include <vector>
-
+// 単体コンパイル時だけ、テストとベンチマークを有効にする
 namespace {
+struct Tester {
+    uint64_t checks = 0;
+    void require(bool ok, const char* message) {
+        ++checks;
+        if (!ok) {
+            cerr << "[TEST FAILED] " << message << '\n';
+            exit(1);
+        }
+    }
+};
+
+// 型制約を、関数本体ではなく呼び出し可能性として検査する
+// cv 付きの明示指定も bool を許可しない
+struct Convertible { operator int() const { return 1; } };
+enum PlainEnum { enum_value };
+enum class ScopedEnum { value };
+template<class T> concept HasUniform = requires(FastRng& rng, T x) {
+    rng.uniform(x); rng.uniform(x, x);
+};
+template<class T> concept HasClosed = requires(FastRng& rng, T x) {
+    rng.uniform_closed(x); rng.uniform_closed(x, x);
+};
+template<class T> concept HasClosedDelta = requires(FastRng& rng, T x) {
+    rng.uniform_closed_delta(x, x);
+};
+template<class T> concept ExplicitClosedDelta = requires(FastRng& rng) { rng.uniform_closed_delta<T>(0, 1); };
+template<class T, class U> concept MixedClosedDelta = requires(FastRng& rng, T l, U r) {
+    rng.uniform_closed_delta(l, r);
+};
+template<class T> concept ExplicitUniform = requires(FastRng& rng) { rng.uniform<T>(1); };
+template<class T, class U> concept MixedUniform = requires(FastRng& rng, T l, U r) { rng.uniform(l, r); };
+template<class T, class U> concept MixedClosed = requires(FastRng& rng, T l, U r) { rng.uniform_closed(l, r); };
+template<class R> concept OldApi = requires(R& rng) { rng.uniform_u64(10); };
+template<class R> concept ExposedBounded = requires(R& rng) { rng.bounded(10); };
+
+static_assert(uniform_random_bit_generator<FastRng>);
+static_assert(sizeof(FastRng) == sizeof(uint64_t));
+static_assert(same_as<decltype(FastRng{}.uniform()), double>);
+static_assert(!HasUniform<bool> && !ExplicitUniform<const bool> && !HasClosed<bool>);
+static_assert(!HasUniform<float> && !HasUniform<long double> && !HasClosed<double>);
+static_assert(!HasUniform<__int128_t> && !HasUniform<__uint128_t>);
+static_assert(!HasUniform<PlainEnum> && !HasUniform<ScopedEnum> && !HasUniform<Convertible>);
+static_assert(!HasUniform<void*> && !HasUniform<string>);
+static_assert(!MixedUniform<int, long long> && !MixedUniform<int, unsigned int>);
+static_assert(!MixedUniform<int, double> && !MixedClosed<int, long long>);
+static_assert(!OldApi<FastRng> && !ExposedBounded<FastRng>);
+static_assert(same_as<decltype(FastRng{}.uniform<long long>(0, 10)), long long>);
+static_assert(same_as<decltype(FastRng{}.uniform<double>(0, 1)), double>);
+
+static_assert(!HasClosedDelta<bool> && !ExplicitClosedDelta<const bool>);
+static_assert(!HasClosedDelta<double> && !HasClosedDelta<float> && !HasClosedDelta<long double>);
+static_assert(!HasClosedDelta<__int128_t> && !HasClosedDelta<__uint128_t>);
+static_assert(!HasClosedDelta<PlainEnum> && !HasClosedDelta<ScopedEnum> && !HasClosedDelta<Convertible>);
+static_assert(!HasClosedDelta<void*> && !HasClosedDelta<string>);
+static_assert(!MixedClosedDelta<int, long long> && !MixedClosedDelta<int, unsigned int>);
+static_assert(same_as<decltype(FastRng{}.uniform_closed_delta<long long>(-1, 1)), long long>);
+
+// 本体とは独立に幅を 128bit で計算し、境界値と縮小結果の一致を確かめる
+uint64_t reference_raw(uint64_t& state) {
+    state += 0x9e3779b97f4a7c15ULL;
+    auto x = state;
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    return x ^ (x >> 31);
+}
+uint64_t reference_reduce(uint64_t x, __uint128_t width) {
+    if (width == ((__uint128_t)1 << 64)) return x;
+    auto n = (uint64_t)width;
+    if ((n & (n - 1)) == 0) return x % n;
+    if (n <= UINT32_MAX) return (uint64_t)((__uint128_t)(uint32_t)x * n / ((__uint128_t)1 << 32));
+    if (n <= (1ULL << 53)) return (uint64_t)((double)n * (double)(x >> 11) * 0x1.0p-53);
+    return (uint64_t)((__uint128_t)x * n / ((__uint128_t)1 << 64));
+}
+
+// 欲しい生乱数が次の 1 回で出る seed を逆算し、稀な丸めも確実に発生させる
+uint64_t seed_for_raw(uint64_t x) {
+    auto undo = [](uint64_t y, int shift) {
+        auto z = y;
+        for (auto k = shift; k < 64; k += shift) z ^= y >> k;
+        return z;
+    };
+    x = undo(x, 31) * 0x319642b2d24d8ec3ULL;
+    x = undo(x, 27) * 0x96de1b173f119089ULL;
+    return undo(x, 30) - 0x9e3779b97f4a7c15ULL;
+}
+constexpr array<uint64_t, 10> raw_edges = {
+    0, 1, 2, UINT32_MAX, 1ULL << 32, (1ULL << 53) - 1,
+    1ULL << 63, UINT64_MAX - 2047, UINT64_MAX - 1, UINT64_MAX
+};
+
+// 負区間と正区間の候補数を別々に数え、0 を除く差分と状態消費を検査する
+template<class T>
+void check_delta_interval(Tester& t, T l, T r, uint64_t seed_value) {
+    if (l == 0 && r == 0) return;
+    auto left = (__int128_t)l, right = (__int128_t)r;
+    auto negatives = left < 0 ? min(right, (__int128_t)-1) - left + 1 : 0;
+    auto positives = right > 0 ? right - max(left, (__int128_t)1) + 1 : 0;
+    auto ref_state = seed_value;
+    auto rank = (__int128_t)reference_reduce(reference_raw(ref_state), (__uint128_t)(negatives + positives));
+    auto expected = rank < negatives ? left + rank : max(left, (__int128_t)1) + rank - negatives;
+
+    // 端点が 0 の場合と型の全域でも、常に生乱数を 1 個だけ消費する
+    FastRng rng(seed_value);
+    auto x = rng.uniform_closed_delta(l, r);
+    t.require(l <= x && x <= r && x != 0, "delta closed range excludes zero");
+    t.require((__int128_t)x == expected, "delta independent reference");
+    t.require(rng.state == ref_state, "delta consumes one word");
+}
+
+// 整数 1 区間の出力と消費状態を確認する、期待値の加算も 128bit で行う
+// 半開区間と閉区間は同じ生乱数から比較する
+// l == r の場合は、閉区間だけが有効
+// 生成結果からテスト用の区間を作らず、検証対象との循環を避ける
+// T への変換前に期待値が範囲内であることも確かめる
+template<class T>
+void check_interval(Tester& t, T l, T r, uint64_t seed_value) {
+    check_delta_interval(t, l, r, seed_value);
+    auto width = (__int128_t)r - (__int128_t)l;
+    auto ref_state = seed_value;
+    auto raw = reference_raw(ref_state);
+    FastRng closed(seed_value);
+    auto expected = (__int128_t)l + (__int128_t)reference_reduce(raw, (__uint128_t)(width + 1));
+    auto x = closed.uniform_closed(l, r);
+    t.require(l <= x && x <= r, "integer closed range");
+    t.require((__int128_t)x == expected, "integer closed reference");
+    t.require(closed.state == ref_state, "closed consumes one word");
+
+    if (l < r) {
+        FastRng half(seed_value);
+        expected = (__int128_t)l + (__int128_t)reference_reduce(raw, (__uint128_t)width);
+        x = half.uniform(l, r);
+        t.require(l <= x && x < r, "integer half-open range");
+        t.require((__int128_t)x == expected, "integer half-open reference");
+        t.require(half.state == ref_state, "half-open consumes one word");
+    }
+}
+
+// 各整数型で、極値・幅の分岐点・ランダム区間を調べる
+template<class T>
+void test_integer(Tester& t, mt19937_64& data) {
+    static_assert(HasUniform<T> && HasClosed<T>);
+    static_assert(HasClosedDelta<T>);
+    static_assert(same_as<decltype(FastRng{}.uniform_closed_delta(T{0}, T{1})), T>);
+    static_assert(noexcept(FastRng{}.uniform_closed_delta(T{0}, T{1})));
+    static_assert(same_as<decltype(FastRng{}.uniform(T{1})), T>);
+    static_assert(same_as<decltype(FastRng{}.uniform(T{0}, T{1})), T>);
+    static_assert(same_as<decltype(FastRng{}.uniform_closed(T{1})), T>);
+    static_assert(same_as<decltype(FastRng{}.uniform_closed(T{0}, T{1})), T>);
+    static_assert(noexcept(FastRng{}.uniform(T{1})));
+    constexpr auto low = numeric_limits<T>::lowest();
+    constexpr auto high = numeric_limits<T>::max();
+
+    // 型の端点と 2 の冪付近を列挙し、全組合せを検証する
+    vector<T> edges{low, (T)(low + 1), T{0}, T{1}, (T)(high - 1), high};
+    if constexpr (is_signed_v<T>) edges.push_back((T)-1);
+    for (auto k : {8, 16, 31, 32, 33, 52, 53, 54, 62, 63}) {
+        for (auto d : {-1, 0, 1}) {
+            auto v = ((__int128_t)1 << k) + d;
+            if (v <= (__int128_t)high) edges.push_back((T)v);
+            if (-v >= (__int128_t)low) edges.push_back((T)-v);
+        }
+    }
+    sort(edges.begin(), edges.end());
+    edges.erase(unique(edges.begin(), edges.end()), edges.end());
+    for (auto l : edges) for (auto r : edges) if (l <= r) {
+        for (auto raw : raw_edges) check_interval(t, l, r, seed_for_raw(raw));
+    }
+
+    // 1 引数版と 0 始まりの 2 引数版の系列を比較する
+    for (auto r : edges) if (r >= 0) {
+        FastRng a(data()), b = a;
+        t.require(a.uniform_closed(r) == b.uniform_closed(T{0}, r), "closed one/two argument match");
+        if (r > 0) t.require(a.uniform(r) == b.uniform(T{0}, r), "half-open one/two argument match");
+    }
+
+    // 独立 RNG で作った区間を、複数の生乱数で検証する
+    for (auto i = 0; i < 12000; ++i) {
+        auto l = (T)data(), r = (T)data();
+        if (l > r) swap(l, r);
+        for (auto j = 0; j < 4; ++j) check_interval(t, l, r, data());
+    }
+}
+
+// 小さい整数型は全ての有効な端点組を列挙する
+template<class T>
+void test_all_8bit_intervals(Tester& t) {
+    for (auto l = (int)numeric_limits<T>::lowest(); l <= (int)numeric_limits<T>::max(); ++l) {
+        for (auto r = l; r <= (int)numeric_limits<T>::max(); ++r) {
+            for (auto raw : {0ULL, 0x123456789abcdef0ULL, 1ULL << 63, UINT64_MAX - 1ULL, UINT64_MAX + 0ULL}) {
+                check_interval(t, (T)l, (T)r, seed_for_raw(raw));
+            }
+        }
+    }
+}
+
+// 8bit 整数の全有効端点組で、全ての出力候補が 1 対 1 に対応することを確認する
+template<class T>
+void test_all_8bit_deltas(Tester& t) {
+    for (auto l = (int)numeric_limits<T>::lowest(); l <= (int)numeric_limits<T>::max(); ++l) {
+        vector<T> allowed;
+        for (auto r = l; r <= (int)numeric_limits<T>::max(); ++r) {
+            if (r != 0) allowed.push_back((T)r);
+            auto n = (uint64_t)allowed.size();
+            for (auto k = uint64_t{0}; k < n; ++k) {
+                // 縮小後の順位が k になる生乱数を選び、列挙した候補と比較する
+                auto raw = has_single_bit(n) ? k : ((k << 32) + n - 1) / n;
+                auto seed_value = seed_for_raw(raw);
+                FastRng rng(seed_value);
+                t.require(rng.uniform_closed_delta((T)l, (T)r) == allowed[(size_t)k], "delta exhaustive 8bit rank");
+                t.require(rng.state == seed_value + 0x9e3779b97f4a7c15ULL, "delta exhaustive one word");
+            }
+        }
+    }
+}
+
+// 対称・非対称・0 が端点の小区間を検査し、0 を含まない区間では既存系列も維持する
+void test_delta_sequences(Tester& t) {
+    for (auto [l, r] : {pair{-1, 1}, {-4, 2}, {-2, 7}, {-3, 0}, {0, 5}, {-9, -3}, {3, 9}, {-1, -1}, {1, 1}}) {
+        FastRng rng(123456789);
+        vector<int> allowed;
+        for (auto x = l; x <= r; ++x) if (x != 0) allowed.push_back(x);
+        vector<int> counts(allowed.size());
+        for (auto i = 0; i < 200000; ++i) {
+            auto before = rng;
+            auto x = rng.uniform_closed_delta(l, r);
+            auto it = find(allowed.begin(), allowed.end(), x);
+            t.require(it != allowed.end(), "delta sequence range");
+            ++counts[(size_t)(it - allowed.begin())];
+            t.require(rng.state == before.state + 0x9e3779b97f4a7c15ULL, "delta sequence one word");
+            if (l > 0 || r < 0) t.require(x == before.uniform_closed(l, r), "nonzero interval keeps closed sequence");
+        }
+        // 頻度検査は実装ミス検出用であり、厳密な無偏り性の検証ではない
+        auto expected = 200000.0 / (double)counts.size();
+        for (auto count : counts) t.require(abs(count - expected) < 8.0 * sqrt(expected), "delta frequency smoke test");
+    }
+}
+
+// double の通常区間・隣接値・非正規化数・極大値と、上端への丸めを調べる
+void test_double(Tester& t, mt19937_64& data) {
+    auto check = [&](double l, double r, uint64_t seed_value) {
+        FastRng rng(seed_value);
+        auto x = rng.uniform(l, r);
+        t.require(isfinite(x) && l <= x && x < r, "double half-open range");
+        t.require(rng.state == seed_value + 0x9e3779b97f4a7c15ULL, "double consumes one word");
+        if (l == 0.0) {
+            FastRng other(seed_value);
+            t.require(x == other.uniform(r), "double one/two argument match");
+        }
+    };
+
+    // 生乱数の最大値を使い、確率に頼らず境界を確認する
+    auto tiny = numeric_limits<double>::denorm_min();
+    auto large = numeric_limits<double>::max();
+    vector<pair<double, double>> intervals = {
+        {0.0, 1.0}, {1.0, 2.0}, {-3.5, 7.25}, {-2.0, -1.0},
+        {0.0, tiny}, {-tiny, 0.0}, {-tiny, tiny}, {tiny, 2 * tiny},
+        {1.0, nextafter(1.0, 2.0)}, {nextafter(-1.0, -2.0), -1.0},
+        {0.0, large}, {-large, 0.0}, {-large / 2, large / 2},
+        {nextafter(large, 0.0), large}, {-large, nextafter(-large, 0.0)},
+        {0.0, numeric_limits<double>::min()}, {-1.0e-300, 1.0e-300}
+    };
+    for (auto [l, r] : intervals) for (auto raw : raw_edges) check(l, r, seed_for_raw(raw));
+    FastRng regression(0x31628af67b2131abULL);
+    auto x = regression.uniform(1.0, 2.0);
+    t.require(x == nextafter(2.0, 1.0), "upper-end rounding regression");
+
+    // 乱数を double のビット列として解釈し、多様な指数の有効区間を作る
+    auto accepted = 0;
+    while (accepted < 50000) {
+        auto l = bit_cast<double>(data()), r = bit_cast<double>(data());
+        if (l > r) swap(l, r);
+        if (!(isfinite(l) && isfinite(r) && l < r && isfinite(r - l))) continue;
+        ++accepted;
+        check(l, r, seed_for_raw(0));
+        check(l, r, seed_for_raw(UINT64_MAX));
+        for (auto j = 0; j < 4; ++j) check(l, r, data());
+    }
+
+    // 引数なしの範囲と式を確認し、簡易統計と確率端点も確認する
+    FastRng rng(3141592653589793ULL), raw = rng;
+    auto sum = 0.0;
+    auto successes = 0;
+    for (auto i = 0; i < 300000; ++i) {
+        auto u = rng.uniform();
+        t.require(0.0 <= u && u < 1.0, "unit double range");
+        t.require(u == (double)(raw() >> 11) * 0x1.0p-53, "unit double reference");
+        sum += u;
+    }
+    t.require(abs(sum / 300000.0 - 0.5) < 0.005, "unit double mean");
+    for (auto i = 0; i < 300000; ++i) successes += rng.bernoulli(0.3);
+    t.require(abs((double)successes / 300000.0 - 0.3) < 0.01, "bernoulli mean");
+    auto state = rng.state;
+    t.require(!rng.bernoulli(0.0) && rng.bernoulli(1.0), "bernoulli endpoints");
+    t.require(rng.state == state, "bernoulli endpoints consume no words");
+}
+
+// 全テストを実行する、検査は NDEBUG に依存せず有効
+void run_tests() {
+    Tester t;
+    mt19937_64 data(0x5b74d03ace197fa2ULL);
+
+    // 既知の出力と独立実装、seed 再設定とコピーの再現性を確認する
+    constexpr array<uint64_t, 3> known{0xe220a8397b1dcdafULL, 0x6e789e6aa1b965f4ULL, 0x06c45d188009454fULL};
+    FastRng first;
+    for (auto expected : known) t.require(first() == expected, "known splitmix64 sequence");
+    for (auto raw : raw_edges) t.require(FastRng(seed_for_raw(raw))() == raw, "inverse seed");
+    for (auto i = 0; i < 4096; ++i) {
+        auto seed_value = data(), state = seed_value;
+        FastRng rng(seed_value), copied = rng, reseeded;
+        reseeded.seed(seed_value);
+        for (auto j = 0; j < 32; ++j) {
+            auto expected = reference_raw(state);
+            t.require(rng() == expected, "raw reference");
+            t.require(copied.next_u64() == expected && reseeded() == expected, "copy/reseed reference");
+        }
+    }
+    FastRng raw(42), u32 = raw, bit = raw;
+    for (auto i = 0; i < 20000; ++i) {
+        auto x = raw();
+        t.require(u32.next_u32() == (uint32_t)(x >> 32), "raw u32 extraction");
+        t.require(bit.next_bool() == (bool)(x >> 63), "raw bool extraction");
+    }
+    t.require(FastRng::min() == 0 && FastRng::max() == UINT64_MAX, "URBG limits");
+
+    // 組み込み整数型を網羅する、typedef の違いにも依存しない
+    [&]<class... Ts>(tuple<Ts...>) { (test_integer<Ts>(t, data), ...); }
+        (tuple<signed char, unsigned char, short, unsigned short, int, unsigned int,
+               long, unsigned long, long long, unsigned long long,
+               char, wchar_t, char8_t, char16_t, char32_t>{});
+    test_all_8bit_intervals<int8_t>(t);
+    test_all_8bit_intervals<uint8_t>(t);
+    test_all_8bit_deltas<int8_t>(t);
+    test_all_8bit_deltas<uint8_t>(t);
+    test_delta_sequences(t);
+    test_double(t, data);
+
+    // 小区間の頻度が極端に崩れていないかを確認する、品質の完全な検証ではない
+    for (auto n : {2, 3, 5, 7, 16, 31}) {
+        FastRng rng(1234 + (uint64_t)n);
+        vector<int> counts((size_t)n);
+        for (auto i = 0; i < 200000; ++i) ++counts[(size_t)rng.uniform(n)];
+        auto expected = 200000.0 / n;
+        for (auto count : counts) t.require(abs(count - expected) < 8.0 * sqrt(expected), "frequency smoke test");
+    }
+
+    // 標準ライブラリの利用も維持する、メンバーの shuffle は追加しない
+    FastRng rng(987654321);
+    uniform_int_distribution<int> dist(-17, 31);
+    uniform_real_distribution<double> real(-5.0, 2.0);
+    bernoulli_distribution bern(0.7);
+    auto sum = 0;
+    for (auto i = 0; i < 100000; ++i) {
+        auto x = dist(rng);
+        auto y = real(rng);
+        t.require(-17 <= x && x <= 31, "standard integer distribution");
+        t.require(-5.0 <= y && y < 2.0, "standard real distribution");
+        sum += bern(rng);
+    }
+    t.require(abs(sum - 70000) < 2000, "standard Bernoulli distribution");
+    array<int, 128> permutation{};
+    iota(permutation.begin(), permutation.end(), 0);
+    shuffle(permutation.begin(), permutation.end(), rng);
+    sort(permutation.begin(), permutation.end());
+    for (auto i = 0; i < 128; ++i) t.require(permutation[(size_t)i] == i, "standard shuffle");
+    cout << "All tests passed. checks = " << t.checks << '\n';
+}
 
 // 比較用の軽量 RNG。生成速度の比較に使う
 struct WyRand {
@@ -173,581 +532,199 @@ struct Xoshiro256PlusPlus {
     }
 };
 
-struct Tester {
-    size_t checks = 0;
 
-    void require(bool ok, const char* message) {
-        ++checks;
-        if (!ok) {
-            cerr << "[TEST FAILED] " << message << '\n';
-            exit(1);
+// 結果は計測後に消費する、ホットループでは volatile を使わない
+volatile uint64_t bench_sink = 0;
+struct Sample { double ms; uint64_t checksum; };
+
+// バッチ単位で呼び出し境界を保つ、RNG と API 自体は通常通り最適化する
+// double は 4 本の和に畳み、整数への変換をループに混ぜない
+template<class R, class F>
+[[gnu::noinline]] uint64_t benchmark_kernel(uint64_t seed_value, uint64_t count, F fn) {
+    asm volatile("" : "+r"(seed_value), "+r"(count) : : "memory");
+    R rng(seed_value);
+    if constexpr (same_as<invoke_result_t<F, R&, uint64_t>, double>) {
+        auto a = 0.0, b = 0.0, c = 0.0, d = 0.0;
+        auto i = uint64_t{0};
+        for (; i + 4 <= count; i += 4) {
+            a += fn(rng, i); b += fn(rng, i + 1);
+            c += fn(rng, i + 2); d += fn(rng, i + 3);
         }
-    }
-};
-
-struct BenchResult {
-    const char* name;
-    double run_ms;
-    double ns_per_op;
-    uint64_t checksum;
-};
-
-struct BenchSummary {
-    const char* name;
-    double avg_run_ms = 0.0;
-    double worst_run_ms = 0.0;
-    double avg_ns_per_op = 0.0;
-    double worst_ns_per_op = 0.0;
-    uint64_t checksum_xor = 0;
-};
-
-// ベンチ中の計算が消されないように吸い込む
-volatile uint64_t g_sink = 0;
-
-// 1 回 seed してから大量生成するケース
-template <class RNG>
-BenchResult bench_bulk(const char* name, uint64_t seed_value, uint64_t count) {
-    RNG rng(seed_value);
-    uint64_t checksum = 0;
-    auto t0 = chrono::steady_clock::now();
-    for (uint64_t i = 0; i < count; ++i) checksum ^= rng();
-    auto t1 = chrono::steady_clock::now();
-    auto run_ms = chrono::duration<double, milli>(t1 - t0).count();
-    g_sink ^= checksum;
-    return {name, run_ms, run_ms * 1.0e6 / (double)count, checksum};
-}
-
-// seed + 1 回生成を何度も繰り返すケース
-template <class RNG>
-BenchResult bench_reseed(const char* name, uint64_t base_seed, uint64_t count) {
-    RNG rng;
-    uint64_t checksum = 0;
-    auto t0 = chrono::steady_clock::now();
-    for (uint64_t i = 0; i < count; ++i) {
-        rng.seed(base_seed + i);
-        checksum ^= rng();
-    }
-    auto t1 = chrono::steady_clock::now();
-    auto run_ms = chrono::duration<double, milli>(t1 - t0).count();
-    g_sink ^= checksum;
-    return {name, run_ms, run_ms * 1.0e6 / (double)count, checksum};
-}
-
-// 同じ条件の複数 run をまとめる
-BenchSummary summarize(const vector<BenchResult>& runs) {
-    BenchSummary out{runs.front().name};
-    for (auto& run : runs) {
-        out.avg_run_ms += run.run_ms;
-        out.worst_run_ms = max(out.worst_run_ms, run.run_ms);
-        out.avg_ns_per_op += run.ns_per_op;
-        out.worst_ns_per_op = max(out.worst_ns_per_op, run.ns_per_op);
-        out.checksum_xor ^= run.checksum;
-    }
-    out.avg_run_ms /= (double)runs.size();
-    out.avg_ns_per_op /= (double)runs.size();
-    return out;
-}
-
-// RNG 間比較の結果を表形式で出す
-void print_table(const char* title, uint64_t ops_per_run, const vector<BenchSummary>& rows) {
-    cout << "\n=== " << title << " ===\n";
-    cout << "ops per run = " << ops_per_run << "\n\n";
-    cout << left << setw(28) << "RNG"
-         << right << setw(14) << "avg_run_ms"
-         << setw(16) << "worst_run_ms"
-         << setw(16) << "avg_ns/op"
-         << setw(16) << "worst_ns/op"
-         << setw(24) << "checksum_xor" << '\n';
-    cout << string(28 + 14 + 16 + 16 + 16 + 24, '-') << '\n';
-    for (auto& row : rows) {
-        cout << left << setw(28) << row.name
-             << right << setw(14) << fixed << setprecision(3) << row.avg_run_ms
-             << setw(16) << row.worst_run_ms
-             << setw(16) << row.avg_ns_per_op
-             << setw(16) << row.worst_ns_per_op
-             << setw(24) << row.checksum_xor << '\n';
+        for (; i < count; ++i) a += fn(rng, i);
+        return bit_cast<uint64_t>((a + b) + (c + d));
+    } else {
+        auto checksum = uint64_t{0};
+        for (auto i = uint64_t{0}; i < count; ++i) checksum ^= (uint64_t)fn(rng, i);
+        return checksum;
     }
 }
 
-// 境界値とランダムケースをまとめて検証する
-void run_tests() {
-    Tester t;
-
-    static_assert(uniform_random_bit_generator<FastRng>);
-    static_assert(same_as<FastRng::result_type, uint64_t>);
-    t.require(FastRng::min() == 0, "min() must be 0");
-    t.require(FastRng::max() == numeric_limits<uint64_t>::max(), "max() must be UINT64_MAX");
-    t.require(sizeof(FastRng) == sizeof(uint64_t), "FastRng must keep 64bit state only");
-
-    // seed の再現性と系列の分岐を確認する
-    {
-        FastRng a(123456789), b(123456789), c(987654321);
-        for (int i = 0; i < 10000; ++i) t.require(a() == b(), "same seed must match");
-        bool differ = false;
-        for (int i = 0; i < 64; ++i) if (a() != c()) differ = true;
-        t.require(differ, "different seeds should diverge quickly");
-
-        FastRng d(1);
-        array<uint64_t, 1024> s1{}, s2{};
-        for (auto& x : s1) x = d();
-        d.seed(1);
-        for (auto& x : s2) x = d();
-        t.require(s1 == s2, "seed() must reset sequence");
-    }
-
-    // 生の乱数 API が operator() と整合するかを見る
-    {
-        FastRng a(42), b(42), c(42);
-        for (int i = 0; i < 20000; ++i) {
-            auto x = a();
-            t.require((uint32_t)(x >> 32) == b.next_u32(), "next_u32() mismatch");
-            t.require((bool)(x >> 63) == c.next_bool(), "next_bool() mismatch");
-        }
-    }
-
-    // [0, n) 系の範囲外が出ないことを確認する
-    {
-        FastRng rng(777);
-        constexpr array<uint64_t, 12> u64_cases = {
-            1ULL, 2ULL, 3ULL, 7ULL, 8ULL, 9ULL,
-            (1ULL << 32) - 1, (1ULL << 32),
-            (1ULL << 63) - 1, (1ULL << 63),
-            numeric_limits<uint64_t>::max() - 1,
-            numeric_limits<uint64_t>::max()
-        };
-        for (auto n : u64_cases) {
-            for (int i = 0; i < 5000; ++i) t.require(rng.uniform_u64(n) < n, "uniform_u64(n) out of range");
-        }
-
-        constexpr array<uint32_t, 8> u32_cases = {
-            1U, 2U, 3U, 7U, 8U, 65535U, 65536U, numeric_limits<uint32_t>::max()
-        };
-        for (auto n : u32_cases) {
-            for (int i = 0; i < 5000; ++i) t.require(rng.uniform_u32(n) < n, "uniform_u32(n) out of range");
-        }
-
-        for (int i = 0; i < 10000; ++i) {
-            t.require(rng.uniform_u64(1) == 0, "uniform_u64(1) must be 0");
-            t.require(rng.uniform_u32(1) == 0, "uniform_u32(1) must be 0");
-        }
-
-        FastRng a(123), b(123);
-        for (int i = 0; i < 10000; ++i) t.require(a.uniform_u64(0) == b.next_u64(), "uniform_u64(0) must match next_u64");
-    }
-
-    // 閉区間版の整数乱数を境界値つきで確認する
-    {
-        FastRng rng(888);
-        for (int i = 0; i < 10000; ++i) {
-            t.require(rng.uniform_int(5, 5) == 5, "uniform_int(l,l) must return l");
-            t.require(rng.uniform_ll(-7, -7) == -7, "uniform_ll(l,l) must return l");
-            t.require(rng.uniform_u64(9, 9) == 9, "uniform_u64(l,l) must return l");
-        }
-        for (int i = 0; i < 30000; ++i) {
-            auto x1 = rng.uniform_int(-100, 100);
-            auto x2 = rng.uniform_int(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-            auto x3 = rng.uniform_ll(numeric_limits<int64_t>::min(), numeric_limits<int64_t>::max());
-            auto x4 = rng.uniform_u64(123456789ULL, 123456789ULL + (1ULL << 40));
-            t.require(-100 <= x1 && x1 <= 100, "uniform_int small range out of bounds");
-            t.require(numeric_limits<int32_t>::min() <= x2 && x2 <= numeric_limits<int32_t>::max(), "uniform_int full range out of bounds");
-            t.require(numeric_limits<int64_t>::min() <= x3 && x3 <= numeric_limits<int64_t>::max(), "uniform_ll full range out of bounds");
-            t.require(123456789ULL <= x4 && x4 <= 123456789ULL + (1ULL << 40), "uniform_u64(l,r) out of bounds");
-        }
-
-        FastRng a(999), b(999);
-        for (int i = 0; i < 10000; ++i) {
-            t.require(a.uniform_u64(0, numeric_limits<uint64_t>::max()) == b.next_u64(), "uniform_u64 full range should match next_u64");
-        }
-    }
-
-    // 実数乱数と Bernoulli の簡易統計を確認する
-    {
-        FastRng rng(3141592653589793ULL);
-        constexpr int samples = 300000;
-        double sum01 = 0.0;
-        double sumlr = 0.0;
-        int bern = 0;
-        for (int i = 0; i < samples; ++i) {
-            auto x = rng.uniform_double();
-            auto y = rng.uniform_double(-3.5, 7.25);
-            t.require(0.0 <= x && x < 1.0, "uniform_double() out of range");
-            t.require(-3.5 <= y && y < 7.25, "uniform_double(l,r) out of range");
-            sum01 += x;
-            sumlr += y;
-            bern += (int)rng.bernoulli(0.3);
-        }
-        t.require(abs(sum01 / samples - 0.5) <= 0.005, "uniform_double() mean looks wrong");
-        t.require(abs((double)bern / samples - 0.3) <= 0.015, "bernoulli(0.3) looks wrong");
-        t.require(abs(sumlr / samples - 1.875) <= 0.02, "uniform_double(l,r) mean looks wrong");
-        {
-            FastRng rng2(0x31628af67b2131abULL);
-            auto x = rng2.uniform_double(1.0, 2.0);
-            t.require(x < 2.0, "uniform_double(l,r) returned r");
-        }
-        for (int i = 0; i < 10000; ++i) {
-            t.require(!rng.bernoulli(0.0), "bernoulli(0) must be false");
-            t.require(rng.bernoulli(1.0), "bernoulli(1) must be true");
-        }
-    }
-
-    // 小さい n では頻度が極端に崩れていないかを軽く見る
-    {
-        constexpr int samples = 200000;
-        for (int n : {2, 3, 5, 7, 16, 31}) {
-            FastRng rng(1234 + (uint64_t)n);
-            vector<int> freq((size_t)n);
-            for (int i = 0; i < samples; ++i) ++freq[rng.uniform_u64((uint64_t)n)];
-            auto expected = (double)samples / n;
-            for (int count : freq) {
-                auto diff = abs(count - expected);
-                auto tol = max(8.0 * sqrt(expected), expected * 0.08);
-                t.require(diff <= tol, "simple frequency check failed");
-            }
-        }
-    }
-
-    // 標準 distribution とそのまま組み合わせられるかを確認する
-    {
-        FastRng rng(987654321);
-        uniform_int_distribution<int32_t> int_dist(-17, 31);
-        uniform_real_distribution<double> real_dist(-5.0, 2.0);
-        bernoulli_distribution bern_dist(0.7);
-        for (int i = 0; i < 200000; ++i) {
-            auto xi = int_dist(rng);
-            auto xd = real_dist(rng);
-            auto xb = bern_dist(rng);
-            t.require(-17 <= xi && xi <= 31, "uniform_int_distribution out of range");
-            t.require(-5.0 <= xd && xd < 2.0, "uniform_real_distribution out of range");
-            t.require(xb == false || xb == true, "bernoulli_distribution must return bool");
-        }
-    }
-
-    // ランダムに作った区間でも範囲外を出さないことを確認する
-    {
-        FastRng rng(135791357913579ULL);
-        for (int tc = 0; tc < 30000; ++tc) {
-            auto li = rng.uniform_int(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-            auto ri = rng.uniform_int(li, numeric_limits<int32_t>::max());
-            auto xi = rng.uniform_int(li, ri);
-            t.require(li <= xi && xi <= ri, "randomized uniform_int failed");
-
-            auto ll = rng.uniform_ll(numeric_limits<int64_t>::min(), numeric_limits<int64_t>::max());
-            auto rr = rng.uniform_ll(ll, numeric_limits<int64_t>::max());
-            auto xl = rng.uniform_ll(ll, rr);
-            t.require(ll <= xl && xl <= rr, "randomized uniform_ll failed");
-
-            auto lu = rng.next_u64();
-            auto ru = rng.uniform_u64(lu, numeric_limits<uint64_t>::max());
-            auto xu = rng.uniform_u64(lu, ru);
-            t.require(lu <= xu && xu <= ru, "randomized uniform_u64(l,r) failed");
-
-            auto n = rng.uniform_u64(1, numeric_limits<uint64_t>::max());
-            t.require(rng.uniform_u64(n) < n, "randomized uniform_u64(n) failed");
-
-            auto l = -1000.0 + 2000.0 * rng.uniform_double();
-            auto r = l + 1000.0 * rng.uniform_double();
-            auto xd = rng.uniform_double(l, r);
-            t.require((l == r) ? (xd == l) : (l <= xd && xd < r), "randomized uniform_double failed");
-        }
-    }
-
-    cout << "All tests passed. checks = " << t.checks << '\n';
+template<class R, class F>
+Sample measure(uint64_t seed_value, uint64_t count, F fn) {
+    auto start = chrono::steady_clock::now();
+    auto checksum = benchmark_kernel<R>(seed_value, count, fn);
+    asm volatile("" : "+r"(checksum) : : "memory");
+    auto end = chrono::steady_clock::now();
+    bench_sink = bench_sink ^ checksum;
+    return {chrono::duration<double, milli>(end - start).count(), checksum};
 }
 
-// 他の RNG と生の生成速度を比較する
-void run_rng_benchmark() {
-    constexpr int repeat = 4;
-    constexpr uint64_t bulk = 10'000'000ULL;
-    constexpr uint64_t reseed = 5'000'000ULL;
-    constexpr uint64_t base_seed = 123456789ULL;
+// worst_batch_ns/op は最も遅いバッチの平均、個別の 1 操作の最大時間ではない
+void benchmark_heading(const char* name) {
+    cout << "\n=== " << name << " ===\n";
+    cout << left << setw(30) << "operation" << right << setw(12) << "ops/run"
+         << setw(14) << "avg_run_ms" << setw(16) << "worst_run_ms"
+         << setw(14) << "avg_ns/op" << setw(20) << "worst_batch_ns/op"
+         << setw(23) << "checksum_xor" << '\n';
+}
 
-    // ウォームアップして初回のぶれを減らす
-    {
-        FastRng a(base_seed);
-        WyRand b(base_seed);
-        Xoshiro256PlusPlus c(base_seed);
-        mt19937_64 d(base_seed);
-        uint64_t tmp = 0;
-        for (int i = 0; i < 200000; ++i) {
-            tmp ^= a();
-            tmp ^= b();
-            tmp ^= c();
-            tmp ^= d();
-        }
-        g_sink ^= tmp;
+template<class R, class F>
+void benchmark_row(const char* name, uint64_t count, int repeat, F fn) {
+    bench_sink = bench_sink ^ benchmark_kernel<R>(123, min(count, uint64_t{50000}), fn);
+    auto sum = 0.0, worst = 0.0;
+    auto checksum = uint64_t{0};
+    for (auto rep = 0; rep < repeat; ++rep) {
+        auto sample = measure<R>((uint64_t)(1000 + rep), count, fn);
+        sum += sample.ms;
+        worst = max(worst, sample.ms);
+        checksum ^= sample.checksum;
     }
+    auto average = sum / repeat;
+    cout << left << setw(30) << name << right << setw(12) << count
+         << fixed << setprecision(3) << setw(14) << average << setw(16) << worst
+         << setw(14) << average * 1e6 / (double)count << setw(20) << worst * 1e6 / (double)count
+         << setw(23) << checksum << '\n';
+}
 
-    vector<BenchResult> a_splitmix, a_wyrand, a_xoshiro, a_mt;
-    vector<BenchResult> b_splitmix, b_wyrand, b_xoshiro, b_mt;
-    a_splitmix.reserve(repeat); a_wyrand.reserve(repeat); a_xoshiro.reserve(repeat); a_mt.reserve(repeat);
-    b_splitmix.reserve(repeat); b_wyrand.reserve(repeat); b_xoshiro.reserve(repeat); b_mt.reserve(repeat);
+// 初期化の少ない用途と多い用途を、同じ回数で比較する
+void run_rng_benchmark(uint64_t count, int repeat) {
+    auto raw = [](auto& rng, uint64_t) { return rng(); };
+    auto reseed = [](auto& rng, uint64_t i) { rng.seed(123456789 + i); return rng(); };
+    benchmark_heading("Case A: single seed + bulk generation");
+    benchmark_row<FastRng>("FastRng", count, repeat, raw);
+    benchmark_row<WyRand>("WyRand", count, repeat, raw);
+    benchmark_row<Xoshiro256PlusPlus>("xoshiro256++", count, repeat, raw);
+    benchmark_row<mt19937_64>("mt19937_64", count, repeat, raw);
+    benchmark_heading("Case B: reseed + one generation");
+    auto trials = min(count, uint64_t{100000});
+    benchmark_row<FastRng>("FastRng", trials, repeat, reseed);
+    benchmark_row<WyRand>("WyRand", trials, repeat, reseed);
+    benchmark_row<Xoshiro256PlusPlus>("xoshiro256++", trials, repeat, reseed);
+    benchmark_row<mt19937_64>("mt19937_64", trials, repeat, reseed);
+}
 
-    for (int rep = 0; rep < repeat; ++rep) {
-        auto seed = base_seed + (uint64_t)rep * (uint64_t)1'000'000'007ULL;
-        a_splitmix.push_back(bench_bulk<FastRng>("FastRng", seed, bulk));
-        a_wyrand.push_back(bench_bulk<WyRand>("WyRand", seed, bulk));
-        a_xoshiro.push_back(bench_bulk<Xoshiro256PlusPlus>("xoshiro256++", seed, bulk));
-        a_mt.push_back(bench_bulk<mt19937_64>("mt19937_64", seed, bulk));
+// 型・端点・幅の分岐ごとに計測する、定数引数だけでなく可変幅も含める
+void run_api_benchmark(uint64_t count, int repeat) {
+    benchmark_heading("FastRng API benchmark");
+    auto row = [&](const char* name, auto fn) { benchmark_row<FastRng>(name, count, repeat, fn); };
+    row("next_u64", [](FastRng& rng, uint64_t) { return rng.next_u64(); });
+    row("next_u32", [](FastRng& rng, uint64_t) { return rng.next_u32(); });
+    row("next_bool", [](FastRng& rng, uint64_t) { return rng.next_bool(); });
+    row("uniform<u32> pow2", [](FastRng& rng, uint64_t) { return rng.uniform(1U << 20); });
+    row("uniform<u32> general", [](FastRng& rng, uint64_t) { return rng.uniform(1000000007U); });
+    row("uniform<u64> pow2", [](FastRng& rng, uint64_t) { return rng.uniform(1ULL << 40); });
+    row("uniform<u64> small", [](FastRng& rng, uint64_t) { return rng.uniform(1000000007ULL); });
+    row("uniform<u64> medium", [](FastRng& rng, uint64_t) { return rng.uniform((1ULL << 40) + 12345); });
+    row("uniform<u64> large", [](FastRng& rng, uint64_t) { return rng.uniform((1ULL << 63) + 12345); });
+    row("uniform<int> r", [](FastRng& rng, uint64_t) { return rng.uniform(2001); });
+    row("uniform<int> l,r", [](FastRng& rng, uint64_t) { return rng.uniform(-1000, 1001); });
+    row("uniform<i64> l,r", [](FastRng& rng, uint64_t) { return rng.uniform(-1000000000000LL, 1000000000001LL); });
+    row("uniform<u64> l,r", [](FastRng& rng, uint64_t) { return rng.uniform(123456789ULL, 1123456797ULL); });
+    row("closed<int> small", [](FastRng& rng, uint64_t) { return rng.uniform_closed(-1000, 1000); });
+    row("closed<int> wide", [](FastRng& rng, uint64_t) { return rng.uniform_closed(-1000000000, 1000000000); });
+    row("closed<int> full", [](FastRng& rng, uint64_t) { return rng.uniform_closed(INT32_MIN, INT32_MAX); });
+    row("closed<i64> medium", [](FastRng& rng, uint64_t) { return rng.uniform_closed(-1000000000000LL, 1000000000000LL); });
+    row("closed<i64> full", [](FastRng& rng, uint64_t) { return rng.uniform_closed(INT64_MIN, INT64_MAX); });
+    row("closed<u64> small", [](FastRng& rng, uint64_t) { return rng.uniform_closed(123456789ULL, 1123456796ULL); });
+    row("closed<u64> large", [](FastRng& rng, uint64_t) { return rng.uniform_closed(1ULL << 63, UINT64_MAX - 12345ULL); });
+    row("closed<u64> full", [](FastRng& rng, uint64_t) { return rng.uniform_closed<uint64_t>(0, UINT64_MAX); });
+    row("closed<int> r", [](FastRng& rng, uint64_t) { return rng.uniform_closed(1000); });
+    row("uniform()", [](FastRng& rng, uint64_t) { return rng.uniform(); });
+    row("uniform<double> r", [](FastRng& rng, uint64_t) { return rng.uniform(7.25); });
+    row("uniform<double> l,r", [](FastRng& rng, uint64_t) { return rng.uniform(-3.5, 7.25); });
+    row("bernoulli(0.3)", [](FastRng& rng, uint64_t) { return rng.bernoulli(0.3); });
 
-        b_splitmix.push_back(bench_reseed<FastRng>("FastRng", seed, reseed));
-        b_wyrand.push_back(bench_reseed<WyRand>("WyRand", seed, reseed));
-        b_xoshiro.push_back(bench_reseed<Xoshiro256PlusPlus>("xoshiro256++", seed, reseed));
-        b_mt.push_back(bench_reseed<mt19937_64>("mt19937_64", seed, reseed));
+    // 差分生成は非ゼロ候補への写像と単純な再抽選を比較する（生成列は異なる）
+    row("delta<int> +/-1", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(-1, 1); });
+    row("retry<int> +/-1", [](FastRng& rng, uint64_t) {
+        auto x = 0;
+        do { x = rng.uniform_closed(-1, 1); } while (x == 0);
+        return x;
+    });
+    row("delta<int> +/-1000", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(-1000, 1000); });
+    row("retry<int> +/-1000", [](FastRng& rng, uint64_t) {
+        auto x = 0;
+        do { x = rng.uniform_closed(-1000, 1000); } while (x == 0);
+        return x;
+    });
+    row("delta<int> positive", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(1, 1000); });
+    row("delta<int> negative", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(-1000, -1); });
+    row("delta<int> zero-left", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(0, 1000); });
+    row("delta<int> zero-right", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(-1000, 0); });
+    row("delta<i64> medium", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(-1000000000000LL, 1000000000000LL); });
+    row("delta<i64> full", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta(INT64_MIN, INT64_MAX); });
+    row("delta<u64> full", [](FastRng& rng, uint64_t) { return rng.uniform_closed_delta<uint64_t>(0, UINT64_MAX); });
+
+    // 混在する幅で、定数畳み込みされない実行時分岐も測る
+    array<uint64_t, 1024> widths{};
+    mt19937_64 data(9173);
+    for (auto i = size_t{0}; i < widths.size(); ++i) {
+        auto x = data();
+        if (i % 3 == 0) widths[i] = 1 + x % UINT32_MAX;
+        else if (i % 3 == 1) widths[i] = (1ULL << 32) + x % (1ULL << 51);
+        else widths[i] = (1ULL << 54) + x % (1ULL << 62);
     }
+    row("uniform<u64> runtime-mixed", [&](FastRng& rng, uint64_t i) { return rng.uniform(widths[i & 1023]); });
 
-    print_table("Case A: single seed + bulk generation", bulk,
-                {summarize(a_splitmix), summarize(a_wyrand), summarize(a_xoshiro), summarize(a_mt)});
-    print_table("Case B: reseed + one generation", reseed,
-                {summarize(b_splitmix), summarize(b_wyrand), summarize(b_xoshiro), summarize(b_mt)});
-}
-
-// FastRng の各 API を個別に計測する
-void run_api_benchmark() {
-    constexpr int repeat = 4;
-    constexpr uint64_t samples = 5'000'000ULL;
-
-    auto print_row = [](const char* name, uint64_t ops_per_run, double avg_run_ms, double worst_run_ms,
-                        double avg_ns, double worst_ns, uint64_t checksum) {
-        cout << left << setw(28) << name
-             << right << setw(14) << ops_per_run
-             << setw(14) << fixed << setprecision(3) << avg_run_ms
-             << setw(16) << worst_run_ms
-             << setw(16) << avg_ns
-             << setw(16) << worst_ns
-             << setw(24) << checksum << '\n';
-    };
-
-    cout << "\n=== FastRng API benchmark ===\n";
-    cout << left << setw(28) << "operation"
-         << right << setw(14) << "ops/run"
-         << setw(14) << "avg_run_ms"
-         << setw(16) << "worst_run_ms"
-         << setw(16) << "avg_ns/op"
-         << setw(16) << "worst_ns/op"
-         << setw(24) << "checksum_xor" << '\n';
-    cout << string(28 + 14 + 14 + 16 + 16 + 16 + 24, '-') << '\n';
-    auto bench_op = [&](const char* name, auto fn, uint64_t ops_per_run) {
-        double sum_run_ms = 0.0, worst_run_ms = 0.0, sum_ns = 0.0, worst_ns = 0.0;
-        uint64_t checksum_xor = 0;
-        for (int rep = 0; rep < repeat; ++rep) {
-            FastRng rng((uint64_t)(1000 + rep));
-            uint64_t checksum = 0;
-            auto t0 = chrono::steady_clock::now();
-            fn(rng, checksum);
-            auto t1 = chrono::steady_clock::now();
-            auto run_ms = chrono::duration<double, milli>(t1 - t0).count();
-            auto ns_per_op = run_ms * 1.0e6 / (double)ops_per_run;
-            g_sink ^= checksum;
-            sum_run_ms += run_ms;
-            worst_run_ms = max(worst_run_ms, run_ms);
-            sum_ns += ns_per_op;
-            worst_ns = max(worst_ns, ns_per_op);
-            checksum_xor ^= checksum;
+    // 0 をまたぐ・またがない・端点が 0 の区間を混ぜて、実行時引数で計測する
+    array<pair<int, int>, 1024> deltas{};
+    for (auto i = size_t{0}; i < deltas.size(); ++i) {
+        auto a = 1 + (int)(data() % 100000), b = 1 + (int)(data() % 100000);
+        switch (i % 5) {
+            case 0: deltas[i] = {-a, b}; break;
+            case 1: deltas[i] = {a, a + b}; break;
+            case 2: deltas[i] = {-a - b, -a}; break;
+            case 3: deltas[i] = {0, b}; break;
+            default: deltas[i] = {-a, 0}; break;
         }
-        print_row(name, ops_per_run, sum_run_ms / repeat, worst_run_ms, sum_ns / repeat, worst_ns, checksum_xor);
-    };
-
-    bench_op("next_u64", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.next_u64();
-    }, samples);
-
-    bench_op("next_u32", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.next_u32();
-    }, samples);
-
-    bench_op("next_bool", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.next_bool();
-    }, samples);
-
-    bench_op("uniform_u32_pow2", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u32(1U << 20);
-    }, samples);
-
-    bench_op("uniform_u32_general", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u32(1'000'000'007U);
-    }, samples);
-
-    bench_op("uniform_u64_pow2", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(1ULL << 40);
-    }, samples);
-
-    bench_op("uniform_u64_small", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(1'000'000'007ULL);
-    }, samples);
-
-    bench_op("uniform_u64_large", [&](FastRng& rng, uint64_t& checksum) {
-        constexpr uint64_t range = (1ULL << 63) + 12345ULL;
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(range);
-    }, samples);
-
-    bench_op("uniform_int_small", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.uniform_int(-1000, 1000);
-    }, samples);
-
-    bench_op("uniform_int_wide", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.uniform_int(-1'000'000'000, 1'000'000'000);
-    }, samples);
-
-    bench_op("uniform_int_full", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.uniform_int(numeric_limits<int32_t>::min(), numeric_limits<int32_t>::max());
-    }, samples);
-
-    bench_op("uniform_ll_small", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.uniform_ll(-1'000'000'000'000LL, 1'000'000'000'000LL);
-    }, samples);
-
-    bench_op("uniform_ll_full", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.uniform_ll(numeric_limits<int64_t>::min(), numeric_limits<int64_t>::max());
-    }, samples);
-
-    bench_op("uniform_u64_lr_small", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(123456789ULL, 123456789ULL + 1'000'000'007ULL);
-    }, samples);
-
-    bench_op("uniform_u64_lr_large", [&](FastRng& rng, uint64_t& checksum) {
-        constexpr uint64_t l = 1ULL << 63;
-        constexpr uint64_t r = numeric_limits<uint64_t>::max() - 12345ULL;
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(l, r);
-    }, samples);
-
-    bench_op("uniform_u64_lr_full", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= rng.uniform_u64(0, numeric_limits<uint64_t>::max());
-    }, samples);
-
-    // double 系は毎回整数化せず、4 本の和に畳んで最後だけビット化する
-    auto bench_double_op = [&](const char* name, auto fn, uint64_t ops_per_run) {
-        double sum_run_ms = 0.0, worst_run_ms = 0.0, sum_ns = 0.0, worst_ns = 0.0;
-        uint64_t checksum_xor = 0;
-        for (int rep = 0; rep < repeat; ++rep) {
-            FastRng rng((uint64_t)(1000 + rep));
-            double s0 = 0.0, s1 = 0.0, s2 = 0.0, s3 = 0.0;
-            auto t0 = chrono::steady_clock::now();
-            uint64_t i = 0;
-            for (; i + 4 <= ops_per_run; i += 4) {
-                s0 += fn(rng);
-                s1 += fn(rng);
-                s2 += fn(rng);
-                s3 += fn(rng);
-            }
-            for (; i < ops_per_run; ++i) s0 += fn(rng);
-            auto t1 = chrono::steady_clock::now();
-            auto sum = (s0 + s1) + (s2 + s3);
-            union { double d; uint64_t u; } bits{sum};
-            g_sink ^= bits.u;
-            auto run_ms = chrono::duration<double, milli>(t1 - t0).count();
-            auto ns_per_op = run_ms * 1.0e6 / (double)ops_per_run;
-            sum_run_ms += run_ms;
-            worst_run_ms = max(worst_run_ms, run_ms);
-            sum_ns += ns_per_op;
-            worst_ns = max(worst_ns, ns_per_op);
-            checksum_xor ^= bits.u;
-        }
-        print_row(name, ops_per_run, sum_run_ms / repeat, worst_run_ms, sum_ns / repeat, worst_ns, checksum_xor);
-    };
-
-    bench_double_op("uniform_double", [&](FastRng& rng) {
-        return rng.uniform_double();
-    }, samples);
-
-    bench_double_op("uniform_double_lr", [&](FastRng& rng) {
-        return rng.uniform_double(-3.5, 7.25);
-    }, samples);
-
-    bench_op("bernoulli_0.3", [&](FastRng& rng, uint64_t& checksum) {
-        for (uint64_t i = 0; i < samples; ++i) checksum ^= (uint64_t)rng.bernoulli(0.3);
-    }, samples);
+    }
+    shuffle(deltas.begin(), deltas.end(), data);
+    row("delta<int> runtime-mixed", [&](FastRng& rng, uint64_t i) {
+        auto [l, r] = deltas[i & 1023];
+        return rng.uniform_closed_delta(l, r);
+    });
+    row("retry<int> runtime-mixed", [&](FastRng& rng, uint64_t i) {
+        auto [l, r] = deltas[i & 1023];
+        auto x = 0;
+        do { x = rng.uniform_closed(l, r); } while (x == 0);
+        return x;
+    });
+}
 }
 
-}
-
-// 単体実行時はテストとベンチを順に回す
-int main() {
+// 引数なしはテストと全ベンチ、--tests-only はテストのみ
+// ベンチは --bench-only / --api-bench-only / --rng-bench-only [回数 [反復数]]
+int main(int argc, char** argv) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
-
-    run_tests();
-    run_rng_benchmark();
-    run_api_benchmark();
-
-    cout << "\nfinal_sink = " << g_sink << '\n';
-    return 0;
+    auto mode = argc > 1 ? string_view(argv[1]) : string_view{};
+    auto count = uint64_t{5000000};
+    auto repeat = 4;
+    auto parse = [](const char* text, auto& value) {
+        auto end = text + strlen(text);
+        auto [ptr, error] = from_chars(text, end, value);
+        return error == errc{} && ptr == end && value > 0;
+    };
+    if (argc > 4 || (argc > 2 && !parse(argv[2], count)) || (argc > 3 && !parse(argv[3], repeat)) ||
+        !(mode.empty() || mode == "--tests-only" || mode == "--bench-only" ||
+          mode == "--api-bench-only" || mode == "--rng-bench-only")) {
+        cerr << "Usage: rng [--tests-only|--bench-only|--api-bench-only|--rng-bench-only] [count [repeat]]\n";
+        return 2;
+    }
+    cout << "Compiler: GCC " << __VERSION__ << '\n';
+    if (mode.empty() || mode == "--tests-only") run_tests();
+    if (mode.empty() || mode == "--bench-only" || mode == "--rng-bench-only") run_rng_benchmark(count, repeat);
+    if (mode.empty() || mode == "--bench-only" || mode == "--api-bench-only") run_api_benchmark(count, repeat);
+    if (mode != "--tests-only") cout << "\nfinal_sink = " << bench_sink << '\n';
 }
 #endif
-
-
-// 実行結果(atcoder)
-// All tests passed. checks = 1710073
-
-// === FastRng API benchmark ===
-// operation                          ops/run    avg_run_ms    worst_run_ms       avg_ns/op     worst_ns/op            checksum_xor
-// --------------------------------------------------------------------------------------------------------------------------------
-// next_u64                           5000000         1.864           1.895           0.373           0.379    13356002974676463571
-// next_u32                           5000000         2.158           2.204           0.432           0.441              3109686769
-// next_bool                          5000000         2.180           2.205           0.436           0.441                       1
-// uniform_u32_pow2                   5000000         2.033           2.082           0.407           0.416                  438227
-// uniform_u32_general                5000000         2.848           2.888           0.570           0.578               932883746
-// uniform_u64_pow2                   5000000         1.967           1.987           0.393           0.397           1036104675283
-// uniform_u64_small                  5000000         2.859           2.901           0.572           0.580               932883746
-// uniform_u64_large                  5000000         4.605           4.635           0.921           0.927     6678001198353302192
-// uniform_int_small                  5000000         3.140           3.162           0.628           0.632    18446744073709550610
-// uniform_int_wide                   5000000         3.116           3.145           0.623           0.629               913712272
-// uniform_int_full                   5000000         2.322           2.357           0.464           0.471              1017556947
-// uniform_ll_small                   5000000         3.181           3.238           0.636           0.648    18446743964522489968
-// uniform_ll_full                    5000000         2.203           2.253           0.441           0.451    13356002974676463571
-// uniform_u64_lr_small               5000000         3.051           3.083           0.610           0.617              1348137669
-// uniform_u64_lr_large               5000000         5.583           5.706           1.117           1.141     6678001419325284715
-// uniform_u64_lr_full                5000000         1.821           1.849           0.364           0.370    13356002974676463571
-// uniform_double                     5000000         2.614           2.656           0.523           0.531           5927408164868
-// uniform_double_lr                  5000000         4.459           4.524           0.892           0.905          57937936905882
-// bernoulli_0.3                      5000000         3.061           3.069           0.612           0.614                       0
-
-// final_sink = 13356054241575762562
-
-
-// 実行結果(chatgpt)
-// All tests passed. checks = 1710073
-
-// === Case A: single seed + bulk generation ===
-// ops per run = 10000000
-
-// RNG                             avg_run_ms    worst_run_ms       avg_ns/op     worst_ns/op            checksum_xor
-// ------------------------------------------------------------------------------------------------------------------
-// FastRng                              4.418           4.549           0.442           0.455     5996346739661175277
-// WyRand                               7.406           7.773           0.741           0.777      301706195511615249
-// xoshiro256++                        11.700          11.741           1.170           1.174     7276203832120700336
-// mt19937_64                          17.325          17.440           1.732           1.744     9429132475706860347
-
-// === Case B: reseed + one generation ===
-// ops per run = 5000000
-
-// RNG                             avg_run_ms    worst_run_ms       avg_ns/op     worst_ns/op            checksum_xor
-// ------------------------------------------------------------------------------------------------------------------
-// FastRng                              2.074           2.177           0.415           0.435     4698882017515505596
-// WyRand                               5.546           5.623           1.109           1.125     6093296816857506784
-// xoshiro256++                        10.269          10.415           2.054           2.083     4367655942766497819
-// mt19937_64                        3153.527        3211.380         630.705         642.276    10381061362517846008
-
-// === FastRng API benchmark ===
-// operation                          ops/run    avg_run_ms    worst_run_ms       avg_ns/op     worst_ns/op            checksum_xor
-// --------------------------------------------------------------------------------------------------------------------------------
-// next_u64                           5000000         2.196           2.213           0.439           0.443    13356002974676463571
-// next_u32                           5000000         2.733           2.804           0.547           0.561              3109686769
-// next_bool                          5000000         2.708           2.718           0.542           0.544                       1
-// uniform_u32_pow2                   5000000         2.738           2.885           0.548           0.577                  438227
-// uniform_u32_general                5000000         3.645           3.679           0.729           0.736               932883746
-// uniform_u64_pow2                   5000000         2.521           2.538           0.504           0.508           1036104675283
-// uniform_u64_small                  5000000         3.669           3.691           0.734           0.738               932883746
-// uniform_u64_large                  5000000         7.388           7.407           1.478           1.481     6678001198353302192
-// uniform_int_small                  5000000         4.713           5.671           0.943           1.134    18446744073709550610
-// uniform_int_wide                   5000000         5.673           5.685           1.135           1.137               913712272
-// uniform_int_full                   5000000         3.770           4.059           0.754           0.812              1017556947
-// uniform_ll_small                   5000000         4.955           5.586           0.991           1.117    18446743964522489968
-// uniform_ll_full                    5000000         2.953           3.007           0.591           0.601    13356002974676463571
-// uniform_u64_lr_small               5000000         3.987           4.116           0.797           0.823              1348137669
-// uniform_u64_lr_large               5000000         7.155           8.105           1.431           1.621     6678001419325284715
-// uniform_u64_lr_full                5000000         2.219           2.259           0.444           0.452    13356002974676463571
-// uniform_double                     5000000         2.668           2.691           0.534           0.538           5927408164868
-// uniform_double_lr                  5000000         3.777           3.927           0.755           0.785          57937936905882
-// bernoulli_0.3                      5000000         3.602           3.696           0.720           0.739                       0
-
-// final_sink = 17633389049377866975

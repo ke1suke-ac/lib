@@ -1,142 +1,125 @@
+// 単独 SA のスケルトン。近傍は propose で決め、finalize(true) で適用する
+// TODO を問題に合わせて実装する。未編集では空の解・コスト 0 を探索するだけ
 #include <bits/stdc++.h>
-#include "sa_func.hpp"  // 手元のファイル名に合わせて変更
+#include "sa_func_v12.hpp"  // 利用するヘッダ名に合わせる
 using namespace std;
 
+using Cost = long long;  // 差分は負になり得るため、整数なら符号付き型を使う
+
 struct Input {
-    // TODO: 入力を入れる
+    int n = 0;
+    // TODO: 問題固有の入力データ
 };
 
-struct State {
-    // TODO: 最良解として保存したい最小情報だけを持つ
+// 出力・復元に必要な最小限の情報。探索状態を参照せず、値として保存する
+struct Snapshot {
     vector<int> solution;
+
+    // 保存した解を出力する O(N)、N は出力する要素数
+    void print() const {
+        // TODO: 問題の出力形式に合わせる
+        // for (int value : solution) cout << value << '\n';
+    }
 };
 
 struct Move {
-    // TODO: 1手ぶんの近傍情報
     int l = -1;
     int r = -1;
-    long long delta = 0;
+    Cost delta = 0;
 };
+
+// 解全体から絶対コストを再計算する O(C)、C は問題固有の評価処理量
+Cost compute_cost(const Input& input, const vector<int>& solution) {
+    (void)input;
+    (void)solution;
+    // TODO: input と solution から計算する。差分で更新したキャッシュは使わない
+    return 0;
+}
 
 int main() {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
 
-    using Cost = long long;
-
+    // 入力・初期解構築・出力は SA の時間予算外なので、制限時間には余裕を取る
     Input input;
-    // TODO: input を読む
+    // TODO: 入力を読む
+    // cin >> input.n;
 
-    // -----------------------------
-    // 現在状態（ユーザー管理）
-    // -----------------------------
+    // 近傍生成用の乱数はユーザー側で用意する。param.seed は SA の受理判定用
+    constexpr uint64_t seed = 1;
+    [[maybe_unused]] mt19937_64 rng(seed);
     vector<int> cur_solution;
-    Cost cur_cost = 0;
-
-    // TODO:
-    // - 初期解を構築
-    // - cur_cost を初期解のコストにする
-
-    // Propose で決めた近傍を Finalize へ渡すための一時領域
+    // TODO: input と rng を使って初期解を構築する
+    Cost cur_cost = compute_cost(input, cur_solution);
     Move pending_move;
 
-    // -----------------------------
-    // SA パラメータ
-    // -----------------------------
+    // SA パラメータ。以下は既定値で、必要な項目だけ変更する
     sa::SaParam param;
-    param.seed = 1;
+    param.seed = seed;
     param.auto_mode = true;
     param.samples = 300;
     param.start_accept_prob = 0.8;
     param.end_accept_prob = 0.01;
-    param.start_temp = 100.0;   // auto_mode=false のとき使用
-    param.end_temp = 1.0;       // auto_mode=false のとき使用
-    param.enable_end_cost_check = true;  // LOCAL 時のみ有効
+    param.start_temp = 100.0;  // 手動時、および自動推定失敗時に使用
+    param.end_temp = 1.0;
+    param.enable_end_cost_check = true;  // LOCAL 時の終了診断だけを制御する
 
-    // -----------------------------
-    // get_state:
-    // 最良解保存用のスナップショットを返す
-    // -----------------------------
-    auto get_state = [&]() -> State {
-        State st;
-        st.solution = cur_solution;
-        return st;
+    // 初期時と最良更新時だけ、現在の解を値としてコピーする
+    auto get_snapshot = [&]() -> Snapshot {
+        return {cur_solution};
     };
 
-    // -----------------------------
-    // get_cost:
-    // 現在状態の絶対コストを返す
-    // -----------------------------
+    // 差分計算と独立に再評価することで、LOCAL の終了診断で更新ミスを検出する
+    // cur_cost をそのまま返すと、解本体への適用・巻き戻しミスを検出できない場合がある
     auto get_cost = [&]() -> Cost {
-        return cur_cost;
+        return compute_cost(input, cur_solution);
     };
 
-    // -----------------------------
-    // propose:
-    // 近傍を1つ決めて、その delta を返す
-    // この流儀では、ここではまだ状態を変更しない
-    // -----------------------------
+    // 近傍を決め、delta = 提案後コスト - 提案前コストを返す。ここでは適用しない
     auto propose = [&](const sa::SaRuntime<Cost>& runtime) -> Cost {
-        (void)runtime;  // 使わないなら消してよい
+        (void)runtime;
+        // runtime.temperature / current_cost / best_cost / progress() を参照できる
+        // progress() は 0～1。時計は追加取得せず、探索中は 32 反復ごとの計測値を使う
+        pending_move = {};
 
-        Move mv;
-
-        // TODO:
-        // - 近傍を決める
-        // - 現在状態 cur_solution に対するコスト差分 mv.delta を計算する
-        //
-        // 例:
-        // mv.l = ...;
-        // mv.r = ...;
-        // mv.delta = ...;
-
-        pending_move = mv;
+        // TODO: rng で近傍を選び、pending_move.l / r / delta を設定する
+        // 近傍がない場合は delta=0 の無操作とし、finalize でも何も変更しない
+        // 自動温度推定中も呼ばれ、その直後は必ず finalize(false) となる
         return pending_move.delta;
     };
 
-    // -----------------------------
-    // finalize:
-    // accepted=true なら近傍を現在状態へ適用する
-    // accepted=false なら何もしない
-    // -----------------------------
+    // 受理されたときだけ、解・評価用キャッシュ・現在コストを更新する
     auto finalize = [&](bool accepted) -> void {
         if (!accepted) return;
 
-        // TODO:
-        // pending_move を cur_solution に適用する
-        //
-        // 例:
-        // reverse(cur_solution.begin() + pending_move.l,
-        //         cur_solution.begin() + pending_move.r + 1);
-
+        // TODO: pending_move を cur_solution と評価用キャッシュへ適用する
+        // 例: 有効な区間 [l, r] を反転する近傍なら、
+        // if (pending_move.l >= 0) reverse(cur_solution.begin() + pending_move.l,
+        //                                 cur_solution.begin() + pending_move.r + 1);
         cur_cost += pending_move.delta;
     };
 
-    // -----------------------------
-    // SA 実行
-    // CsvStatHook はデフォルト引数のまま使う
-    //   - ファイル名: sa_stat.csv
-    //   - 記録周期: 50ms
-    // -----------------------------
-    auto [best_cost, best_state] = sa::sa<State, Cost>(
+    // 既定設定: sa_stat.csv に 50ms ごとに記録し、終了時にまとめて書き出す
+    sa::SaCsvStatHook<Cost> csv_hook{};
+    auto debug_hook = [&](sa::SaEventType event_type, const sa::SaRuntime<Cost>& runtime) -> void {
+        csv_hook(event_type, runtime);
+        // TODO: 必要なら追加の診断を行う。非 LOCAL ではこのラムダ自体が呼ばれない
+    };
+
+    // 全引数を明示。返るのは最良時点の Snapshot であり、終了時の cur_solution ではない
+    auto [best_cost, best_snapshot] = sa::sa<Snapshot, Cost>(
         param,
-        1950.0,  // time_limit_ms
-        get_state,
+        1950.0,  // time_limit_ms: 小数ミリ秒も指定可能
+        get_snapshot,
         get_cost,
         propose,
         finalize,
-        sa::CsvStatHook<Cost>{}
+        debug_hook
     );
 
-    // -----------------------------
-    // best_state / best_cost を使う
-    // -----------------------------
+#ifdef LOCAL
     cerr << "best_cost = " << best_cost << '\n';
-
-    // TODO:
-    // best_state.solution を使って出力を作る
-    // 例:
-    // for (int x : best_state.solution) cout << x << '\n';
-
+#endif
+    best_snapshot.print();
     return 0;
 }
