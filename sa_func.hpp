@@ -222,10 +222,11 @@ struct TemperatureReport {
 
 }  // namespace detail
 
-// DebugHook に渡す周期 CSV 記録。sa からは LOCAL 時だけ呼ばれ、RunEnd で一括保存する。
-// Hook は値渡し。呼び出し元でも rows を読みたい場合は std::ref(hook) を渡す。
+// LOCAL 用の周期 CSV 記録。RunEnd で一括保存。非 LOCAL は同じ構築・呼び出しができる空実装。
+// 記録データ（rows 等）は LOCAL のみ。呼び出し元で rows を読む場合は std::ref(hook) を渡す。
 template<Numeric Cost>
 struct SaCsvStatHook {
+#ifdef LOCAL
     struct Row {
         double elapsed_ms = 0.0;
         int iteration = 0;
@@ -351,6 +352,10 @@ private:
         ofs.close();
         if (!ofs) cerr << "[sa] warning: failed to write csv file: " << filename << '\n';
     }
+#else
+    explicit SaCsvStatHook(string = "sa_stat.csv", double = 50.0) {}
+    void operator()(SaEventType, const SaRuntime<Cost>&) {}
+#endif
 };
 
 // best_cost はこの SA の最良値。外部の existing_best_cost とは合成しない。
@@ -1303,6 +1308,7 @@ int main() {
               "end check reports exact integer difference only in LOCAL and preserves stream precision");
     }
 
+#ifdef LOCAL
     // CSV の時刻あふれ、小さい整数型、書き込み失敗を確認する
     {
         SaCsvStatHook<signed char> hook("sa_small_cost_v12.csv", 1.0);
@@ -1358,6 +1364,19 @@ int main() {
         stats(SaEventType::RunStart, SaRuntime<int>{});
         check(stats.rows.size() == 1 && stats.rows.front().period_iterations == 0, "CSV reuse resets the period baseline");
     }
+#else
+    // 非 LOCAL は記録用メンバーを持たず、直接呼んでも出力しない。
+    {
+        static_assert(is_empty_v<SaCsvStatHook<int>>);
+        const string filename = "sa_nonlocal_stat.csv";
+        filesystem::remove(filename);
+        SaCsvStatHook<int> hook(filename, 1.0);
+        SaRuntime<int> runtime;
+        for (SaEventType event : {SaEventType::RunStart, SaEventType::IterationStart,
+                                 SaEventType::IterationEnd, SaEventType::RunEnd}) hook(event, runtime);
+        check(!filesystem::exists(filename), "non-LOCAL CSV hook is empty and direct calls create no file");
+    }
+#endif
 
     // 保存用状態にはコピー構築を要求せず、取得したスナップショットを移動できればよい
     {

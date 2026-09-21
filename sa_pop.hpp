@@ -211,10 +211,11 @@ inline double sa_pop_selection_key(
 
 } // namespace detail
 
-// DebugHook に渡す CSV 記録。sa_pop からは LOCAL 時だけ呼ばれ、RunEnd で 3 ファイルを上書きする。
+// LOCAL 用の CSV 記録。RunEnd で 3 ファイルを上書き。非 LOCAL は同じ構築・呼び出しができる空実装。
 template<Numeric Cost>
 class SaPopCsvStatHook {
 public:
+#ifdef LOCAL
     // 保存先の接頭辞。既定では sa_pop_trace.csv / sa_pop_phase.csv / sa_pop_summary.csv。
     explicit SaPopCsvStatHook(string csv_filename_prefix = "sa_pop_") : prefix_(move(csv_filename_prefix)) {}
 
@@ -598,6 +599,10 @@ private:
             << r.final_end_temp << ',' << r.final_time_limit_ms << ',' << r.final_elapsed_ms << ','
             << r.final_iterations << ',' << r.final_best_cost << '\n';
     }
+#else
+    explicit SaPopCsvStatHook(string = "sa_pop_") {}
+    void operator()(SaPopEventType, const SaPopRuntime<Cost>&) {}
+#endif
 };
 
 // 複数個体 SA。work_states は 1〜min(256,max_state_count) 個。move で渡すと初期群のコピーを避けられる。
@@ -1551,6 +1556,7 @@ void run_api_tests() {
     check(verified_proposals > 0, "randomized tests exercised proposals");
     cout << "[test] ok: 120 randomized cases, " << verified_proposals << " proposals match naive scores\n";
 
+#ifdef LOCAL
     // CSV は Runtime の整数 μs を ms に変換し、共通名と区間温度名で出力する
     {
         SaPopCsvStatHook<int> hook("sa_pop_api_v04_");
@@ -1621,6 +1627,23 @@ void run_api_tests() {
               "CSV rate denominator is total iterations");
     }
     cout << "[test] ok: CSV names, millisecond budgets, elapsed time and acceptance-rate denominators\n";
+#else
+    // 非 LOCAL は記録用メンバーを持たず、直接呼んでも 3 ファイルを作らない。
+    {
+        static_assert(is_empty_v<SaPopCsvStatHook<int>>);
+        const string prefix = "sa_pop_nonlocal_";
+        for (const char* suffix : {"trace.csv", "phase.csv", "summary.csv"}) filesystem::remove(prefix + suffix);
+        SaPopCsvStatHook<int> hook(prefix);
+        SaPopRuntime<int> runtime;
+        for (SaPopEventType event : {SaPopEventType::RunStart, SaPopEventType::AutoSampleStart,
+                SaPopEventType::AutoSampleEnd, SaPopEventType::PhaseStart, SaPopEventType::StateRunStart,
+                SaPopEventType::StateRunEnd, SaPopEventType::StateSelection, SaPopEventType::PhaseEnd,
+                SaPopEventType::FinalRunStart, SaPopEventType::FinalRunEnd, SaPopEventType::RunEnd}) hook(event, runtime);
+        for (const char* suffix : {"trace.csv", "phase.csv", "summary.csv"})
+            check(!filesystem::exists(prefix + suffix), "non-LOCAL population CSV hook creates no file");
+        cout << "[test] ok: non-LOCAL population CSV hook is empty and direct calls create no files\n";
+    }
+#endif
 }
 
 struct Point2D {
