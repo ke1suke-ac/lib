@@ -2,7 +2,7 @@
 #include <bits/stdc++.h>
 using namespace std;
 
-// ArrayVector<T, Capacity>: std::arrayと有効長による固定容量の可変長配列
+// static_vector_lite<T, Capacity>: std::arrayと有効長による固定容量の可変長配列
 // コンテナ自身はヒープを使わない。Capacity > 0、要素はデフォルト構築・コピー代入可能かつ自明に破棄可能
 // int、double、pair<int,int>、軽量構造体などが対象。string/vector等の資源管理型は対象外
 // 全スロットのTが存在し、clear/pop/eraseでは寿命を終了しない。Boostの完全互換ではない
@@ -10,7 +10,7 @@ using namespace std;
 // コピーとムーブ相当の操作は有効部分だけをコピーし、コピー元は変更しない
 // 容量超過・範囲外アクセスはassertで検出。NDEBUG時は呼び出し側が前提を守る
 template<class T, size_t Capacity>
-class ArrayVector {
+class static_vector_lite {
     static_assert(Capacity > 0);
     static_assert(is_default_constructible_v<T> && is_copy_assignable_v<T> && is_trivially_destructible_v<T>);
     array<T, Capacity> values_;
@@ -23,25 +23,25 @@ public:
     using const_iterator = const T*;
 
     // 空で構築する。スカラーの未使用領域は初期化しない: O(1)、Tの初期化が必要ならO(Capacity)
-    ArrayVector() {}
+    static_vector_lite() {}
 
     // count個をvalueで初期化する: O(count)、Tの初期化が必要ならさらにO(Capacity)
-    explicit ArrayVector(size_t count, const T& value = T{}) { assign(count, value); }
+    explicit static_vector_lite(size_t count, const T& value = T{}) { assign(count, value); }
 
     // 初期化リストから構築する: O(要素数)、Tの初期化が必要ならさらにO(Capacity)
-    ArrayVector(initializer_list<T> values) { assign(values.begin(), values.end()); }
+    static_vector_lite(initializer_list<T> values) { assign(values.begin(), values.end()); }
 
     // イテレータ区間から構築する: O(要素数)、Tの初期化が必要ならさらにO(Capacity)
     template<input_iterator It>
-    ArrayVector(It first, It last) { assign(first, last); }
+    static_vector_lite(It first, It last) { assign(first, last); }
 
     // 有効部分をコピーする。右辺値もこのコンストラクタでコピーする: O(size)、Tの初期化が必要ならさらにO(Capacity)
-    ArrayVector(const ArrayVector& other) : size_(other.size_) {
+    static_vector_lite(const static_vector_lite& other) : size_(other.size_) {
         copy_n(other.begin(), size_, begin());
     }
 
     // 有効部分をコピー代入する。右辺値もこの演算子を使う: O(other.size)
-    ArrayVector& operator=(const ArrayVector& other) {
+    static_vector_lite& operator=(const static_vector_lite& other) {
         if (this != &other) {
             copy_n(other.begin(), other.size_, begin());
             size_ = other.size_;
@@ -50,7 +50,7 @@ public:
     }
 
     // 初期化リストを代入する: O(要素数)
-    ArrayVector& operator=(initializer_list<T> values) {
+    static_vector_lite& operator=(initializer_list<T> values) {
         assign(values.begin(), values.end());
         return *this;
     }
@@ -105,8 +105,9 @@ public:
     // 末尾に追加する: O(1)
     void push_back(const T& value) {
         assert(size_ < Capacity);
-        values_[size_] = value;
-        ++size_;
+        const size_t index = size_;
+        values_[index] = value;
+        size_ = index + 1;
     }
 
     // 引数から値を作り、末尾スロットに代入して参照を返す: O(Tの構築・代入)
@@ -180,7 +181,7 @@ public:
     }
 
     // 有効部分と要素数を交換する。未使用領域は読まない: O(max(size, other.size))
-    void swap(ArrayVector& other) {
+    void swap(static_vector_lite& other) {
         if (this == &other) return;
         // 両方に存在する部分を交換し、長い側の残りを短い側へコピーする
         const size_t common = min(size_, other.size_);
@@ -191,10 +192,10 @@ public:
     }
 
     // ADLによるswapで有効部分を交換する: O(max(a.size, b.size))
-    friend void swap(ArrayVector& a, ArrayVector& b) { a.swap(b); }
+    friend void swap(static_vector_lite& a, static_vector_lite& b) { a.swap(b); }
 
     // 有効部分の一致を調べる: O(size)
-    bool operator==(const ArrayVector& other) const {
+    bool operator==(const static_vector_lite& other) const {
         return size_ == other.size_ && equal(begin(), end(), other.begin());
     }
 };
@@ -207,7 +208,7 @@ void check(bool condition) { if (!condition) abort(); }
 template<size_t Capacity>
 void random_test(uint64_t seed) {
     mt19937_64 rng(seed);
-    ArrayVector<int, Capacity> a, b;
+    static_vector_lite<int, Capacity> a, b;
     vector<int> x, y;
     auto verify = [](const auto& actual, const auto& expected) {
         check(actual.size() == expected.size());
@@ -254,7 +255,7 @@ void random_test(uint64_t seed) {
         } else if (op == 14) {
             const auto copy = a;
             verify(copy, x);
-            ArrayVector<int, Capacity> moved(std::move(a));
+            static_vector_lite<int, Capacity> moved(std::move(a));
             verify(moved, x); verify(a, x);
             a = a; a.swap(a);
         } else if (op == 15 && !x.empty()) {
@@ -267,13 +268,13 @@ void random_test(uint64_t seed) {
 
 int main() {
     // 空、満杯、再利用、自己参照、constアクセス、標準アルゴリズムを確認する
-    ArrayVector<int, 4> a;
+    static_vector_lite<int, 4> a;
     check(a.empty() && a.begin() == a.end() && a.capacity() == 4);
     a.erase(a.begin(), a.end());
     a.reserve(4);
     for (int i = 0; i < 4; ++i) a.push_back(i);
     a.assign(a.begin() + 1, a.end());
-    check((a == ArrayVector<int, 4>{1, 2, 3}));
+    check((a == static_vector_lite<int, 4>{1, 2, 3}));
     a.assign(a.begin(), a.end());
     a.push_back(a.front());
     a.clear(); a.resize(4);
@@ -287,25 +288,25 @@ int main() {
     check(a[1] == 8 && a.data() == a.begin());
 
     // pair、構造体、bool、double、過剰アラインメント、入力イテレータを確認する
-    ArrayVector<pair<int, int>, 4> pairs;
+    static_vector_lite<pair<int, int>, 4> pairs;
     pairs.emplace_back(3, 7);
     check(pairs.back() == make_pair(3, 7));
     struct Item { int x = 5; double y = 2; };
-    ArrayVector<Item, 3> items;
+    static_vector_lite<Item, 3> items;
     items.emplace_back(4, 1.5);
     items.resize(3);
     check(items[0].x == 4 && items[2].x == 5);
-    ArrayVector<bool, 2> bits{true, false};
+    static_vector_lite<bool, 2> bits{true, false};
     bool& bit = bits[1]; bit = true;
     check(bits.back());
-    ArrayVector<double, 2> reals{1.25, -2.5};
+    static_vector_lite<double, 2> reals{1.25, -2.5};
     reals.erase_unordered(0); check(reals.front() == -2.5);
     struct alignas(64) Aligned { long long value; };
-    ArrayVector<Aligned, 2> aligned;
+    static_vector_lite<Aligned, 2> aligned;
     aligned.emplace_back(7);
     check((uintptr_t)aligned.data() % 64 == 0 && aligned[0].value == 7);
     istringstream input("3 1 4");
-    ArrayVector<int, 8> stream_values{istream_iterator<int>(input), istream_iterator<int>()};
+    static_vector_lite<int, 8> stream_values{istream_iterator<int>(input), istream_iterator<int>()};
     check(stream_values.size() == 3 && stream_values.back() == 4);
 
     // 2群200seed、各容量3000操作をstd::vectorと逐次比較する
