@@ -1,4 +1,4 @@
-// コスト最小化用の焼きなまし法。状態管理をユーザーに委ね、最良解と実行統計を保持する
+// C++20 / コスト最小化の単独 SA。状態はユーザーが管理し、探索中の最良解を返す。
 #pragma once
 
 #include <bits/stdc++.h>
@@ -6,13 +6,11 @@ using namespace std;
 
 namespace sa {
 
-// 数値型制約
-// Cost は符号付き整数または浮動小数を想定する。
+// sa / sa_pop の Cost には符号付き整数または浮動小数を使う（差分は負になり得る）。
 template<class T>
 concept Numeric = integral<T> || floating_point<T>;
 
-// 内部実装詳細
-// 競技用に軽量な乱数や補助関数をまとめる。
+// 内部実装。
 namespace detail {
 
 struct FastRng {
@@ -66,24 +64,28 @@ inline constexpr bool debug_hook_enabled = false;
 
 }  // namespace detail
 
-// SA のパラメータ
-// 必須最小限に絞り、温度決定に必要な項目だけを持つ。
+// まず既定値で実行。温度を手動指定するときは auto_mode=false と start/end_temp を設定する。
 struct SaParam {
-    uint64_t seed = 1;               // 乱数 seed
-    bool auto_mode = true;           // true: 事前サンプリングから温度自動推定
-    int samples = 300;               // 自動温度推定の提案数（sa_pop では均等配分のため切り上げ）
-    double start_accept_prob = 0.8;  // auto_mode 時の初期目標受理率
-    double end_accept_prob = 0.01;   // auto_mode 時の最終目標受理率
-    double start_temp = 100.0;       // manual 時、および自動推定失敗時の初期温度
-    double end_temp = 1.0;           // manual 時、および自動推定失敗時の最終温度
-    bool enable_end_cost_check = true; // LOCAL 時の終了時コスト検証（sa_pop では最終 SA のみ）
+    uint64_t seed = 1;               // 受理判定用。近傍生成の乱数はユーザー側で用意する
+    bool auto_mode = true;           // 初期状態で悪化量を採取して温度を推定。各提案は必ず取り消す
+    int samples = 300;               // 採取する提案数（>=0）。0 は推定なし。sa_pop は個体数で割って切り上げ
+    double start_accept_prob = 0.8;  // 推定に使う基準確率（0<p<1）。実際の受理率を保証する値ではない
+    double end_accept_prob = 0.01;   // 終端の基準確率（0<p<1）。sa は推定温度をさらに 0.1 倍する
+    double start_temp = 1000.0;      // 有限・正。手動/推定失敗時の開始温度、および事前採取中の温度
+    double end_temp = 0.1;           // 有限・正。手動/推定失敗時の終了温度。通常は start_temp 以下にする
+    bool enable_end_cost_check = true; // LOCAL: 終了時に get_cost() で再評価し差を stderr に表示。sa_pop は最終 SA のみ
+    // 悪化候補の「提案後コスト - この SA の最良コスト」が倍率×温度未満なら確率判定へ進む。
+    // 非負を指定。0 は悪化拒否、+inf は幅制限なし。sa_pop では SaPopParam の同名項目を使う。
+    double acceptance_width_scale = 1.0;
+    // LOCAL: 次回用の auto_mode/start_temp/end_temp を stderr に出力。今回の温度は変えない。
+    // 悪化データなし・独自受理関数・幅 0 では推定不可。sa_pop での出力は内部 SA ごとの推奨値。
+    bool enable_temperature_report = false;
 };
 
-// 実行時情報
-// Hook 側から現在の進行状況を観測するための軽量構造体。
+// propose / DebugHook が参照する統計。コスト・回数はこの 1 回の SA 内の値。
 template<Numeric Cost>
 struct SaRuntime {
-    int iteration = 0;                    // 現在のイテレーション（1始まり、RunStart 時は 0）
+    int iteration = 0;                    // 本探索は 1 始まり。事前採取中と RunStart は 0
     double temperature = 0.0;            // 現在温度
 
     Cost current_cost{};                 // 現在コスト
@@ -92,27 +94,25 @@ struct SaRuntime {
     int best_update_count = 0;           // この SA 内での best_cost 更新回数
     int last_best_update_iter = 0;       // 最後に best_cost を更新した iteration
 
-    int accepted_count = 0;              // 受理回数
+    int accepted_count = 0;              // 改善・同値・悪化を合わせた受理回数
     int worse_accepted_count = 0;        // 悪化受理回数
 
-    int64_t elapsed_us = 0;              // 開始からの経過時間（μs）
+    int64_t elapsed_us = 0;              // 開始からの経過 μs。本探索は 32 反復ごとに更新、事前採取中は 0
     int64_t elapsed_us_at_last_best = 0; // 最後に best 更新された時刻（μs）
 
-    bool best_updated_this_iter = false;   // 今回 best 更新されたか
-    bool accepted_this_iter = false;       // 今回 accept されたか
-    bool worse_accepted_this_iter = false; // 今回悪化受理されたか
+    bool best_updated_this_iter = false;   // IterationEnd で今回の最良更新を確認できる
+    bool accepted_this_iter = false;       // IterationEnd で今回の受理を確認できる
+    bool worse_accepted_this_iter = false; // IterationEnd で今回の悪化受理を確認できる
 
     int64_t time_limit_us = 0;           // SA 開始時に一度だけ設定する時間予算（μs）
 
-    // 最良コスト更新からの経過時間を返す O(1)
+    // 最良更新からの経過 μs（未更新なら開始から）。時計を取得しない O(1)。
     int64_t elapsed_us_since_last_best() const {
         return elapsed_us - elapsed_us_at_last_best;
     }
 
-    // 既存の elapsed_us を参照し、時計取得や状態更新は行わない
-    // 経過時間は探索中は 32 反復ごとに更新され、事前サンプリング中は 0 のまま
-    // sa_pop の Propose でも対象は内部 SA の予算であり、探索全体の進捗ではない
-    // 時間予算の消費率を [0, 1] で返す（予算が 0 以下なら 1）O(1)
+    // 時間予算の消費率 [0,1]。予算<=0 は 1。既存の経過時刻を使う O(1)。
+    // sa_pop では各内部 SA の進捗であり、全体の進捗ではない。
     double progress() const {
         return time_limit_us > 0
             ? clamp(static_cast<double>(elapsed_us) / static_cast<double>(time_limit_us), 0.0, 1.0)
@@ -120,17 +120,15 @@ struct SaRuntime {
     }
 };
 
-// Hook の発火タイミング（RunStart は初期コスト・Snapshot と温度が確定した後）
+// DebugHook(event, runtime) の通知。sa からの呼び出しは LOCAL 時のみ。
 enum class SaEventType {
-    RunStart,
-    RunEnd,
-    IterationStart,
-    IterationEnd,
+    RunStart,       // 初期評価・保存・温度推定の後
+    RunEnd,         // 探索終了後（終了時コスト検証・温度診断の前）
+    IterationStart, // 本探索の提案前。今回の各フラグは false
+    IterationEnd,   // finalize とコスト・統計更新の後
 };
 
-// デフォルト Hook
-// 非 LOCAL では Hook 呼び出し自体をコンパイル時に消すため、
-// 何もしない型を既定値として用意する。
+// 何もしない既定の DebugHook。sa / sa_pop の Hook を省略したときに使う。
 struct NoOp {
     // イベントを何もせず受け取る O(1)
     template<class Event, class Runtime>
@@ -164,11 +162,68 @@ inline void call_debug_hook(DebugHook& debug_hook, SaEventType event_type, const
 #endif
 }
 
+#ifdef LOCAL
+// 事前サンプリングは含めず、本探索で提案された有限の悪化量を採否によらず集計する。
+// 各 1/4 時間区間を定数メモリで保持する。温度の最適性や目標受理率は保証しない。
+struct TemperatureReport {
+    array<uint64_t, 4> count{};
+    array<double, 4> mean{};
+    uint64_t width_rejected = 0;
+
+    void add(double delta, double progress) {
+        if (!(delta > 0.0 && isfinite(delta))) return;
+        const int phase = min(3, static_cast<int>(progress * 4));
+        mean[phase] += (delta - mean[phase]) / static_cast<double>(++count[phase]);
+    }
+
+    void print(const SaParam& param, bool custom_acceptance) const {
+        uint64_t total = 0;
+        double average = 0.0;
+        int first = -1, last = -1;
+        for (int i = 0; i < 4; ++i) if (count[i]) {
+            total += count[i];
+            average += (mean[i] - average) * (static_cast<double>(count[i]) / total);
+            if (first < 0) first = i;
+            last = i;
+        }
+        // cerr の書式設定に依存せず、またその設定を変更せず、貼り付け可能な値を出す。
+        ostringstream out;
+        out << setprecision(17) << "[sa] temperature report: worsening=" << total << ", quarters=[";
+        for (int i = 0; i < 4; ++i) out << (i ? "," : "") << count[i];
+        out << "]";
+        if (!custom_acceptance) out << ", width_rejected=" << width_rejected;
+        out << '\n';
+        if (!total || custom_acceptance || param.acceptance_width_scale == 0.0) {
+            out << "[sa] temperature recommendation unavailable: "
+                << (!total ? "no finite worsening moves in the search."
+                    : custom_acceptance ? "custom sa_accept_worse is not supported."
+                    : "acceptance_width_scale=0 disables worsening moves.") << '\n';
+        } else {
+            // 最初・最後に悪化を観測した区間を使う。100 標本未満なら全体平均で補う。
+            const int begin = count[first] >= 100 ? first : -1;
+            const int end = count[last] >= 100 ? last : -1;
+            const double start_temp = temperature_from_avg_delta(begin < 0 ? average : mean[begin], param.start_accept_prob);
+            const double end_temp = temperature_from_avg_delta(end < 0 ? average : mean[end], param.end_accept_prob) * 0.1;
+            if (isfinite(start_temp) && start_temp > 0.0 && isfinite(end_temp) && end_temp > 0.0) {
+                out << "[sa] suggested temperatures (heuristic; source quarter 1-4, 0=all): start="
+                    << begin + 1 << ", end=" << end + 1 << '\n'
+                    << "param.auto_mode = false;\nparam.start_temp = " << start_temp
+                    << ";\nparam.end_temp = " << end_temp << ";\n";
+                if (total < 100) out << "[sa] warning: fewer than 100 worsening samples; recommendation is uncertain.\n";
+                if (end_temp > start_temp) out << "[sa] warning: suggested end_temp exceeds start_temp (heating schedule).\n";
+            } else {
+                out << "[sa] temperature recommendation unavailable: estimated temperatures are out of range.\n";
+            }
+        }
+        cerr << out.str();
+    }
+};
+#endif
+
 }  // namespace detail
 
-// CSV 出力 Hook
-// SA 本体とは独立した外部機能として、Run/Iteration の Hook だけで
-// 定期スナップショットと差分統計を最後に CSV 出力する。
+// DebugHook に渡す周期 CSV 記録。sa からは LOCAL 時だけ呼ばれ、RunEnd で一括保存する。
+// Hook は値渡し。呼び出し元でも rows を読みたい場合は std::ref(hook) を渡す。
 template<Numeric Cost>
 struct SaCsvStatHook {
     struct Row {
@@ -186,8 +241,8 @@ struct SaCsvStatHook {
         int period_accepted = 0;
         int period_worse_accepted = 0;
         int period_best_updates = 0;
-        double accept_rate = 0.0;
-        double worse_accept_rate = 0.0;
+        double accept_rate = 0.0;       // 区間の受理回数 / 区間の全反復数
+        double worse_accept_rate = 0.0; // 区間の悪化受理回数 / 区間の全反復数
         double iter_per_sec = 0.0;
     };
 
@@ -197,7 +252,7 @@ struct SaCsvStatHook {
     int64_t next_record_us = 0;
     bool started = false;
 
-    // 保存先と記録間隔を設定する（0 以下の間隔は 1μs）O(|csv_filename|)
+    // 保存先（上書き）と記録間隔 ms。有限値を指定し、0 以下は 1μs とする。
     explicit SaCsvStatHook(string csv_filename = "sa_stat.csv", double interval_ms = 50.0)
         : filename(move(csv_filename)) {
         const double raw_us = max(0.0, interval_ms) * 1000.0;
@@ -205,7 +260,7 @@ struct SaCsvStatHook {
         interval_us = max<int64_t>(1, llround(raw_us));
     }
 
-    // Runtime を記録する 通常は償却 O(1)、開始・終了時は O(R)（R は記録行数）
+    // RunStart で記録をリセットし、RunEnd で保存。通常は償却 O(1)、開始・終了は O(記録行数)。
     void operator()(SaEventType event_type, const SaRuntime<Cost>& runtime) {
         // 開始イベントで記録を初期化し、開始前のイベントは無視する
         if (event_type == SaEventType::RunStart) {
@@ -298,16 +353,27 @@ private:
     }
 };
 
-// 焼きなまし本体
-// 状態本体は持たず、現在状態の管理はユーザーに委ねる。
-// ライブラリ側は最良コストと best_snapshot のみ保持する。
-// Cost の加算と各 int カウンタは、型の範囲内に収まることを前提とする。
-// Snapshot は出力・復元に必要な最小限の保存情報。探索状態と同じ型でもよい。
-// 取得後に探索状態を変更しても内容が変わらない、構築・代入可能な値型を使う。
-// get_snapshot は初期時と最良更新時だけ呼び、get_cost は現在状態の絶対コストを返す。
-// propose の差分を採否判定した後に finalize を呼ぶ。false の後は提案前の状態へ戻す。
-// 以下の計算量で I/S/B は反復/サンプル/最良更新回数、P/F/G/C/H は各コールバックの処理量。
-// 最良コストと最良状態を返す O(S(P+F)+I(P+F+H)+(B+1)G+C)
+// best_cost はこの SA の最良値。外部の existing_best_cost とは合成しない。
+template<class Snapshot, Numeric Cost>
+struct SaResult {
+    Cost best_cost;
+    optional<Snapshot> best_snapshot; // 基準未指定なら必ず存在。指定時はそれを厳密に改善した場合だけ存在
+};
+
+// 単独 SA。time_limit_ms は有限の ms（小数可）。<=0 は初期評価・保存だけで返す。
+// 初期評価・初期 Snapshot と終了処理は計時外。時間確認は 32 反復ごとなので余裕を取る。
+// get_snapshot() -> Snapshot: 初期時と最良更新時に保存。独立した、移動構築可能な値を返す。
+//   get_snapshot(const SaRuntime<Cost>&) も可。両方あれば引数なしを優先。
+//   Runtime 付きではコストのみ更新済み、反復統計の後処理前。初期保存時はコスト以外が既定値。
+// get_cost() -> Cost: 現在の絶対コスト。初期時と LOCAL の終了検証時に呼ぶ。
+// propose([const SaRuntime<Cost>&]) -> Cost: 提案後 - 提案前の差分。両方あれば Runtime 付きを優先。
+// finalize(bool accepted): 受理なら提案を確定、棄却なら提案前の状態にする。事前採取は必ず false。
+// existing_best_cost: マルチスタートの全体ベスト等。これを厳密に改善する Snapshot だけ保存する。
+//   省略時は必ず保存。保存基準は受理判定に影響しない。戻り値は SaResult を参照。
+// DebugHook(event, runtime): LOCAL のみ通知。コールバックは値渡し（必要なら std::ref を使う）。
+// 独自の propose.sa_accept_worse(runtime, delta, u) があれば悪化受理を全て委ねる。u は [0,1)。
+// Cost の加算と int カウンタが範囲内に収まること。状態は終了時点のままなので、出力には Snapshot を使う。
+// 計算量: O(S(P+F)+I(P+F+H)+(B+1)G+C)。S/I/B は採取/反復/最良更新数、P/F/H/G/C は各処理量。
 template<
     class Snapshot,
     Numeric Cost,
@@ -316,13 +382,14 @@ template<
     class Propose,
     class Finalize,
     class DebugHook = NoOp>
-pair<Cost, Snapshot> sa(
+SaResult<Snapshot, Cost> sa(
     const SaParam& param,
     double time_limit_ms,
     GetSnapshot get_snapshot,
     GetCost get_cost,
     Propose propose,
     Finalize finalize,
+    optional<Cost> existing_best_cost = nullopt,
     DebugHook debug_hook = DebugHook{}) {
     if constexpr (integral<Cost>) static_assert(is_signed_v<Cost>, "Signed integral Cost is required because delta can be negative");
 
@@ -332,17 +399,28 @@ pair<Cost, Snapshot> sa(
     assert((0.0 < param.end_accept_prob && param.end_accept_prob < 1.0) && "sa::SaParam.end_accept_prob must satisfy 0 < p < 1");
     assert((isfinite(param.start_temp) && param.start_temp > 0.0) && "start_temp must be finite and > 0");
     assert((isfinite(param.end_temp) && param.end_temp > 0.0) && "end_temp must be finite and > 0");
+    assert(param.acceptance_width_scale >= 0.0 && "acceptance_width_scale must be nonnegative; +infinity is allowed");
+    if constexpr (floating_point<Cost>) assert(!existing_best_cost || !isnan(*existing_best_cost));
 
     const double limit_us_raw = max(0.0, time_limit_ms) * 1000.0;
     assert(isfinite(time_limit_ms) && limit_us_raw < 0x1p63 && "time budget must fit int64_t microseconds");
     const int64_t limit_us = static_cast<int64_t>(limit_us_raw);
 
-    // 初期解を一度だけ保存し、以降の状態管理はコールバックに委ねる
+    // 初期解を評価し、保存基準を満たすときだけ Snapshot を作る
     detail::FastRng rng(param.seed);
     SaRuntime<Cost> runtime;
     runtime.current_cost = get_cost();
     runtime.best_cost = runtime.current_cost;
-    Snapshot best_snapshot = get_snapshot();
+    auto take_snapshot = [&]() -> Snapshot {
+        if constexpr (is_invocable_r_v<Snapshot, GetSnapshot&>) return get_snapshot();
+        else return get_snapshot(static_cast<const SaRuntime<Cost>&>(runtime));
+    };
+    optional<Snapshot> best_snapshot;
+    auto save_snapshot = [&]() {
+        if (!existing_best_cost || runtime.best_cost < *existing_best_cost)
+            best_snapshot.emplace(take_snapshot());
+    };
+    save_snapshot();
 
     const auto start_clock = chrono::steady_clock::now();
     const auto elapsed_now_us = [&]() -> int64_t {
@@ -376,7 +454,7 @@ pair<Cost, Snapshot> sa(
 
         if (worse_count > 0) {
             start_temp = detail::temperature_from_avg_delta(avg_worse_delta, param.start_accept_prob);
-            end_temp = detail::temperature_from_avg_delta(avg_worse_delta, param.end_accept_prob);
+            end_temp = detail::temperature_from_avg_delta(avg_worse_delta, param.end_accept_prob) * 0.1;
         }
         // 有効標本がない場合や、推定温度が表現範囲を外れる場合は手動値へ戻す
         if (worse_count == 0 || !isfinite(start_temp) || !isfinite(end_temp) || start_temp <= 0.0 || end_temp <= 0.0) {
@@ -393,8 +471,19 @@ pair<Cost, Snapshot> sa(
     runtime.elapsed_us = min(elapsed_now_us(), limit_us);
     detail::call_debug_hook(debug_hook, SaEventType::RunStart, runtime);
 
+#ifdef LOCAL
+    detail::TemperatureReport temperature_report;
+    auto report_temperature = [&]() {
+        if (param.enable_temperature_report) temperature_report.print(param,
+            requires { { propose.sa_accept_worse(runtime, declval<const Cost&>(), 0.0) } -> convertible_to<bool>; });
+    };
+#endif
+
     if (limit_us <= 0) {
         detail::call_debug_hook(debug_hook, SaEventType::RunEnd, runtime);
+#ifdef LOCAL
+        report_temperature();
+#endif
         return {runtime.best_cost, move(best_snapshot)};
     }
 
@@ -402,6 +491,8 @@ pair<Cost, Snapshot> sa(
     const double limit_us_d = static_cast<double>(limit_us);
     const double log_start_temp = log(start_temp);
     const double log_end_temp = log(end_temp);
+    double acceptance_limit = param.acceptance_width_scale * runtime.temperature;
+    const bool unrestricted_width = isinf(param.acceptance_width_scale);
     while (true) {
         if ((runtime.iteration & 31) == 0) {
             runtime.elapsed_us = elapsed_now_us();
@@ -411,6 +502,7 @@ pair<Cost, Snapshot> sa(
         if (runtime.iteration != 0 && ((runtime.iteration & 31) == 0 || runtime.iteration == 1) && runtime.elapsed_us > 0) {
             runtime.temperature = exp(lerp(log_start_temp, log_end_temp,
                 static_cast<double>(runtime.elapsed_us) / limit_us_d));
+            acceptance_limit = param.acceptance_width_scale * runtime.temperature;
         }
         ++runtime.iteration;
         runtime.best_updated_this_iter = false;
@@ -420,14 +512,29 @@ pair<Cost, Snapshot> sa(
         detail::call_debug_hook(debug_hook, SaEventType::IterationStart, runtime);
 
         const Cost delta = detail::call_propose<Cost>(propose, runtime);
+#ifdef LOCAL
+        if (param.enable_temperature_report) temperature_report.add(detail::to_double(delta), runtime.progress());
+#endif
 
         // 改善・同値は必ず受理し、悪化だけ乱数を消費する
         bool accepted = false;
         if (delta <= Cost{0}) {
             accepted = true;
         } else {
-            const double prob = exp(-detail::to_double(delta) / runtime.temperature);
-            accepted = (rng.rand_unit() < prob);
+            if constexpr (requires { { propose.sa_accept_worse(runtime, delta, 0.0) } -> convertible_to<bool>; }) {
+                accepted = propose.sa_accept_worse(runtime, delta, rng.rand_unit());
+            } else {
+                double gap = detail::to_double(runtime.current_cost) - detail::to_double(runtime.best_cost);
+                if constexpr (integral<Cost>)
+                    gap = detail::to_double(static_cast<uint64_t>(runtime.current_cost) - static_cast<uint64_t>(runtime.best_cost));
+                const double u = rng.rand_unit();
+#ifdef LOCAL
+                if (param.enable_temperature_report && isfinite(detail::to_double(delta)) && !unrestricted_width
+                    && gap + detail::to_double(delta) >= acceptance_limit) ++temperature_report.width_rejected;
+#endif
+                accepted = (unrestricted_width || gap + detail::to_double(delta) < acceptance_limit)
+                    && u < exp(-detail::to_double(delta) / runtime.temperature);
+            }
         }
 
         // 先に状態を確定してからコストと統計を更新し、最良更新時だけ状態を保存する
@@ -446,7 +553,7 @@ pair<Cost, Snapshot> sa(
             if (runtime.current_cost < runtime.best_cost) {
                 runtime.best_updated_this_iter = true;
                 runtime.best_cost = runtime.current_cost;
-                best_snapshot = get_snapshot();
+                save_snapshot();
                 ++runtime.best_update_count;
                 runtime.last_best_update_iter = runtime.iteration;
                 runtime.elapsed_us_at_last_best = runtime.elapsed_us;
@@ -461,6 +568,7 @@ pair<Cost, Snapshot> sa(
     detail::call_debug_hook(debug_hook, SaEventType::RunEnd, runtime);
 
 #ifdef LOCAL
+    report_temperature();
     if (param.enable_end_cost_check) {
         const Cost checked_cost = get_cost();
         const streamsize old_precision = cerr.precision(15);
@@ -628,7 +736,7 @@ int main() {
                 pending = 0.0;
             });
         check_near(best_cost, state, 1e-9, "floating-point best cost matches current state");
-        check_near(best_snapshot, state, 1e-9, "floating-point best state matches current state");
+        check_near(*best_snapshot, state, 1e-9, "floating-point best state matches current state");
     }
 
     // auto_mode 成功時、sampling で集めた悪化量から温度が推定されることを確認する。
@@ -722,6 +830,7 @@ int main() {
                 if (accepted) state += pending;
                 pending = 0;
             },
+            nullopt,
             combo_hook);
         (void)best_cost;
         (void)best_snapshot;
@@ -824,13 +933,14 @@ int main() {
             [&](bool accepted) {
                 if (!accepted) reverse(current.route.begin() + last_l, current.route.begin() + last_r + 1);
             },
+            nullopt,
             debug_hook);
 
         check(best_cost <= initial_cost, "TSP demo improves or keeps initial route");
-        check(tsp_problem::compute_score(input, best_snapshot) == best_cost, "best_snapshot score matches best_cost");
+        check(tsp_problem::compute_score(input, *best_snapshot) == best_cost, "best_snapshot score matches best_cost");
         cout << "[tsp demo] initial_cost=" << initial_cost << '\n';
         cout << "[tsp demo] best_cost=" << best_cost << '\n';
-        cout << "[tsp demo] best_state_size=" << best_snapshot.route.size() << '\n';
+        cout << "[tsp demo] best_state_size=" << best_snapshot->route.size() << '\n';
         cout << "[tsp demo] done\n";
     }
 
@@ -840,7 +950,7 @@ int main() {
     // 既存のテストや出力はそのまま残し、seed 0..10 の問題に対して
     // 同様の TSP サンプル solver を実行し、集計値を出力する。
     {
-        auto solve_tsp_sample = [&](uint64_t problem_seed) -> pair<long long, tsp_problem::Output> {
+        auto solve_tsp_sample = [&](uint64_t problem_seed) -> SaResult<tsp_problem::Output, long long> {
             const tsp_problem::Input input = tsp_problem::gen(problem_seed);
             tsp_problem::Output current;
             current.route.resize(input.n);
@@ -909,7 +1019,7 @@ int main() {
         for (uint64_t seed = 0; seed <= 10; ++seed) {
             const tsp_problem::Input input = tsp_problem::gen(seed);
             auto [best_cost, best_snapshot] = solve_tsp_sample(seed);
-            const long long verified_score = tsp_problem::compute_score(input, best_snapshot);
+            const long long verified_score = tsp_problem::compute_score(input, *best_snapshot);
             const bool ok = (verified_score == best_cost);
             if (!ok) ++error_count;
             score_sum += best_cost;
@@ -1007,12 +1117,13 @@ int main() {
                 return 0;
             },
             [](bool) -> void {},
+            nullopt,
             [&](SaEventType event_type, const SaRuntime<int>& runtime) -> void {
                 ++hook_count;
                 verify_progress(runtime);
                 if (event_type == SaEventType::RunEnd) end_progress = runtime.progress();
             });
-        check(result.first == 0 && result.second == 0 && main_count > 0,
+        check(result.best_cost == 0 && result.best_snapshot == 0 && main_count > 0,
               "progress access keeps SA state/result valid");
         check(sample_count == (auto_mode ? param.samples : 0), "progress initialized before sampling");
         check(detail::debug_hook_enabled ? end_progress == 1.0 : hook_count == 0,
@@ -1030,11 +1141,12 @@ int main() {
             []() -> int { return 42; },
             [&]() -> int { fail("zero budget must not propose"); return 0; },
             [&](bool) -> void { fail("zero budget must not finalize"); },
+            nullopt,
             [&](SaEventType, const SaRuntime<int>& runtime) -> void {
                 ++hook_count;
                 if (runtime.progress() != 1.0) fail("zero effective budget progress must be one");
             });
-        check(result == pair<int, int>{42, 42}, "zero effective budget keeps initial result");
+        check((result.best_cost == 42 && result.best_snapshot == 42), "zero effective budget keeps initial result");
         check(hook_count == (detail::debug_hook_enabled ? 2 : 0), "zero-budget hook behavior unchanged");
     }
 
@@ -1073,6 +1185,7 @@ int main() {
                 if (!accepted) fail("zero delta must remain accepted");
                 ++finalizes;
             },
+            nullopt,
             [&](SaEventType event, const SaRuntime<int>& runtime) -> void {
                 ++hooks;
                 if (event == SaEventType::RunEnd) {
@@ -1080,7 +1193,7 @@ int main() {
                     if (runtime.temperature != expected) fail("RunEnd temperature changed");
                 }
             });
-        check(result == pair<int, int>{0, 0} && proposals >= 32 && proposals == finalizes && state_copies == 1,
+        check((result.best_cost == 0 && result.best_snapshot == 0) && proposals >= 32 && proposals == finalizes && state_copies == 1,
               "cached temperature matches reference and preserves callback counts");
         check(hooks == (detail::debug_hook_enabled ? 2 * proposals + 2 : 0),
               "temperature optimization preserves all hook events");
@@ -1135,7 +1248,7 @@ int main() {
         cerr.rdbuf(previous);
         const double expected = mode == 0 ? 2.5e307 : (mode == 3 ? -5.0 / log(0.8) : 7.0);
         check(isfinite(first_temp) && fabs(first_temp - expected) <= expected * 1e-12 &&
-                  samples == 300 && finalizes == 300 && result == pair<double, int>{0.0, 0},
+                  samples == 300 && finalizes == 300 && (result.best_cost == 0.0 && result.best_snapshot == 0),
               "auto temperature handles large or nonfinite samples without state changes");
     }
 
@@ -1163,7 +1276,7 @@ int main() {
         int proposals = 0;
         int finalizes = 0;
         const auto result = sa<int, int>(param, 2.0, Getter{}, Getter{}, Proposal{&proposals}, Finalizer{&finalizes});
-        check(result == pair<int, int>{0, 0} && proposals > 0 && proposals == finalizes,
+        check((result.best_cost == 0 && result.best_snapshot == 0) && proposals > 0 && proposals == finalizes,
               "lvalue-only callbacks work and Runtime overload takes precedence");
     }
 
@@ -1259,7 +1372,7 @@ int main() {
             [&]() -> int { return current; },
             [&]() -> int { pending = current > 0 ? -1 : 0; return pending; },
             [&](bool accepted) -> void { if (accepted) current += pending; });
-        check(result.first == 0 && *result.second == 0 && snapshots == 11,
+        check(result.best_cost == 0 && result.best_snapshot && **result.best_snapshot == 0 && snapshots == 11,
               "move-only snapshots are captured exactly once per best update");
     }
 

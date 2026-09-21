@@ -1,114 +1,115 @@
-// 複数の探索状態を段階的に選抜し、最後に残した状態を単独 SA で改善するコスト最小化ライブラリ
+// C++20 / 複数初期解を選別しながら探索する SA。全個体・全期間の最良解を返す。
 #pragma once
 #include <bits/stdc++.h>
-#include "sa_func_v12.hpp"
+#include "sa_func_v17.hpp"
 using namespace std;
 
 namespace sa {
 
-// sa_pop の選別方針。
-// TSPなどの最小化問題を前提に、小さい selection key の個体を残す。
+// 個体の選別基準。評価値が小さい個体を残す。迷ったら既定の Combination。
 enum class SaPopSelectionPolicy {
-    Current,      // 現在コストで選別する
-    LifetimeBest, // その個体が過去に到達した最良コストで選別する
-    Combination,  // 最良コストに現在コストとの乖離ペナルティを加えて選別する
+    Current,      // 現在コスト
+    LifetimeBest, // その個体が過去に到達した最良コスト（過去の状態へは戻さない）
+    Combination, // 過去最良 + selection_current_weight × max(0, 現在 - 過去最良)
 };
 
-// sa_pop のパラメータ。
-// AHC 用の軽量な population annealing 風ラッパーとして、個体数は最大 256 を想定する。
+// 個体群用の設定。実際の初期個体数は sa_pop に渡す vector の要素数で決まる。
 struct SaPopParam {
-    double selection_time_ratio = 0.75; // 全体時間のうち、個体選別に使う割合
-    int max_state_count = 256;     // 受け付ける最大個体数
+    double selection_time_ratio = 0.75; // [0,1]。選別までの時間割合。残りを最後の 1 個体に使う
+    int max_state_count = 256;     // 受け付ける個体数の上限。実装上の上限は設定によらず 256
 
-    // デフォルトでは、過去bestのポテンシャルを重視しつつ、現在位置が悪すぎる個体を少し減点する。
     SaPopSelectionPolicy selection_policy = SaPopSelectionPolicy::Combination;
-    double selection_current_weight = 0.25; // Combination時: lifetime + weight * max(0, current - lifetime)
+    double selection_current_weight = 0.25; // [0,1]、Combination 用。0 は過去最良、1 は現在コストに相当
+    double auto_end_temp_scale = 0.1; // 有限・正。自動推定した終端温度に掛ける倍率。手動時は掛けない
+    // 各内部 SA の最良コストから許す悪化幅 = この倍率×温度。SaParam の同名項目より優先。
+    // 非負を指定。0 は悪化拒否、+inf は幅制限なし。幅内の悪化には通常の確率判定も行う。
+    double acceptance_width_scale = 1.0;
 };
 
-// 選別フェーズでは Snapshot を保持せず、sa の保存型に空型を渡して最良コストだけを使う。
+// 内部 SA 用。ユーザーの Snapshot は全個体共通の最良解 1 つだけ保存する。
 struct SaPopEmptyBest {};
 
-// sa_pop 用 Hook の発火タイミング（RunStart は温度推定前、AutoSampleEnd は推定後）
+// DebugHook(event, runtime) の通知。sa_pop からの呼び出しは LOCAL 時のみ。
 enum class SaPopEventType {
-    RunStart,
-    AutoSampleStart,
-    AutoSampleEnd,
-    PhaseStart,
-    StateRunStart,
-    StateRunEnd,
-    StateSelection,
-    PhaseEnd,
-    FinalRunStart,
-    FinalRunEnd,
-    RunEnd,
+    RunStart,        // 初期個体の評価後、温度推定前
+    AutoSampleStart, // 自動推定の開始（auto_mode && samples>0 のとき）
+    AutoSampleEnd,   // 自動推定の終了。温度・標本数・fallback が確定
+    PhaseStart,      // 選別段階の開始
+    StateRunStart,   // 個体 1 つの内部 SA 開始
+    StateRunEnd,     // 個体 1 つの内部 SA 終了
+    StateSelection, // 個体ごとの順位と生存判定が確定
+    PhaseEnd,        // 選別段階の終了
+    FinalRunStart,   // 残った 1 個体で仕上げ開始
+    FinalRunEnd,     // 仕上げ終了
+    RunEnd,          // 全体終了。final_best_cost が返却コスト
 };
 
-// sa_pop の実行時情報。
-// 重い集計や文字列化は Hook 側で行うため、ここには軽量な数値だけを持たせる。
+// 外側の DebugHook 用。各イベントに関係する項目だけが有効。*_us の単位は μs、添字は 0 始まり。
+// propose に渡るのはこの型ではなく、各内部 SA の SaRuntime<Cost>。
 template<Numeric Cost>
 struct SaPopRuntime {
-    int initial_state_count = 0;
-    int phase = -1;
-    int phase_count = 0;
+    int initial_state_count = 0; // 最初の個体数
+    int phase = -1;              // 選別段階の番号。段階外は -1
+    int phase_count = 0;         // 選別段階の総数（最後の仕上げを除く）
 
-    int active_state_count = 0;
-    int next_active_state_count = 0;
+    int active_state_count = 0;      // この段階の個体数
+    int next_active_state_count = 0; // 次の段階に残す個体数
 
     int state_order = -1; // phase 内の処理順
     int state_id = -1;    // 初期 work_states の添字（個体の識別子）
 
-    int rank = -1;
-    bool survived = false;
-    bool final_polish = false;
+    int rank = -1;              // StateSelection で確定する順位（0 が最良）
+    bool survived = false;     // StateSelection での生存判定
+    bool final_polish = false; // 最後の 1 個体の仕上げ中
 
     uint64_t seed = 0;
     int64_t time_limit_us = 0; // 外側の全体時間予算（μs）
     double selection_time_ratio = 0.75;
-    int64_t phase_time_limit_us = 0;
-    int64_t inner_time_limit_us = 0;
-    int64_t final_time_limit_us = 0;
+    int64_t phase_time_limit_us = 0; // この選別段階の予算
+    int64_t inner_time_limit_us = 0; // 今回の内部 SA の予算
+    int64_t final_time_limit_us = 0; // 最終 SA の予算
 
     int64_t elapsed_us = 0; // 外側の開始からの経過時間（μs）
-    int64_t phase_elapsed_us = 0;
-    int64_t inner_elapsed_us = 0;
+    int64_t phase_elapsed_us = 0; // この選別段階で使った時間
+    int64_t inner_elapsed_us = 0; // 今回の内部 SA で使った時間
 
     bool auto_mode = false;
-    bool auto_fallback = false;
-    int auto_per_state_samples = 0;
-    int auto_total_samples = 0;
-    int auto_worse_count = 0;
-    double auto_avg_worse_delta = 0.0;
+    bool auto_fallback = false;       // 推定失敗により param の手動温度を使用
+    int auto_per_state_samples = 0;   // 各個体への予定提案数
+    int auto_total_samples = 0;       // 実際に採取した合計提案数
+    int auto_worse_count = 0;         // 推定に使えた有限の悪化標本数
+    double auto_avg_worse_delta = 0.0; // 悪化標本の平均（有効標本なしなら 0）
 
-    double global_start_temp = 0.0;
+    double global_start_temp = 0.0; // 全体の温度スケジュールの開始・終了値
     double global_end_temp = 0.0;
 
-    double phase_weight = 0.0;
-    double total_phase_weight = 0.0;
+    double phase_weight = 0.0;       // 温度区間を分ける重み
+    double total_phase_weight = 0.0; // 全選別段階の重み合計
 
     double temp_progress_begin = 0.0; // 温度スケジュール上の区間始点（実測進捗とは異なる）
     double temp_progress_end = 0.0;   // 温度スケジュール上の区間終点
-    double inner_start_temp = 0.0;
+    double inner_start_temp = 0.0; // 今回の内部 SA の開始・終了温度
     double inner_end_temp = 0.0;
 
-    Cost current_cost_before{};
+    Cost current_cost_before{}; // 今回の内部 SA の前後の現在コスト
     Cost current_cost_after{};
     Cost run_best_cost{}; // 対象個体を今回走らせた内部 SA の最良コスト
 
     Cost lifetime_best_cost_before{}; // その個体が過去のフェーズも含め到達した最良コスト
     Cost lifetime_best_cost_after{};
 
-    double selection_key = 0.0;
-    double selection_cutoff_key = 0.0;
+    double selection_key = 0.0;        // この個体の選別評価値（小さいほど優先）
+    double selection_cutoff_key = 0.0; // 最下位の生存個体の評価値。同値でも順位で選別する
 
     int selection_policy = static_cast<int>(SaPopSelectionPolicy::Combination);
     double selection_current_weight = 0.25;
 
-    int final_state_id = -1;
+    int final_state_id = -1; // 最終 SA を走らせた個体。返却 Snapshot の取得元とは限らない
     double final_start_temp = 0.0;
     double final_end_temp = 0.0;
-    Cost final_best_cost{}; // 最終 SA の最良コスト（全個体・全期間の最良とは限らない）
+    Cost final_best_cost{}; // 返却する最良コスト（全個体・全フェーズを通じた最良）
 
-    SaRuntime<Cost> inner_runtime;
+    SaRuntime<Cost> inner_runtime; // 内部 SA 終了時の統計。Iteration ごとの外側通知はない
 };
 
 namespace detail {
@@ -210,15 +211,14 @@ inline double sa_pop_selection_key(
 
 } // namespace detail
 
-// sa_pop 用 CSV Hook。
-// sa_func の SaCsvStatHook と同様に、途中ではファイルへ書かず、RunEnd でまとめて出力する。
+// DebugHook に渡す CSV 記録。sa_pop からは LOCAL 時だけ呼ばれ、RunEnd で 3 ファイルを上書きする。
 template<Numeric Cost>
 class SaPopCsvStatHook {
 public:
-    // CSV 3 ファイルの接頭辞を設定する O(|csv_filename_prefix|)
+    // 保存先の接頭辞。既定では sa_pop_trace.csv / sa_pop_phase.csv / sa_pop_summary.csv。
     explicit SaPopCsvStatHook(string csv_filename_prefix = "sa_pop_") : prefix_(move(csv_filename_prefix)) {}
 
-    // イベントを記録する 通常は償却 O(1)、PhaseEnd は O(K)、RunEnd は O(R)（K は個体数、R は記録行数）
+    // RunStart でリセット。個体/段階/全体を記録する。通常 O(1)、PhaseEnd は O(個体数)、RunEnd は O(記録数)。
     void operator()(SaPopEventType event_type, const SaPopRuntime<Cost>& runtime) {
         // 個体・フェーズ単位で集計し、探索終了時だけファイルへ書き出す
         switch (event_type) {
@@ -600,17 +600,21 @@ private:
     }
 };
 
-// 複数個体 SA。物理 compact は行わず、active_ids だけで生存個体を管理する。
-// WorkState は差分計算用の情報を含む探索状態、Snapshot は出力・復元に必要な保存情報。
-// 両者は同じ型でもよいが、取得した Snapshot は以降の探索状態の変更に影響されないこと。
-// get_snapshot / get_cost / propose / finalize の順は単独 SA と共通。
-// propose は状態を先に仮適用してもよい。finalize(false) 後は提案前の状態へ戻す。
-// Runtime 付き propose が受け取る進捗は各内部 SA のもの。外側の全体進捗ではない。
-// samples は各個体に ceil(samples / K) 回ずつ割り当てるため、合計提案数は切り上がる。
-// Snapshot を取得するのは最終 SA の初期時・最良更新時だけ。予算 0 では最良初期解を取得する。
-// 返却解は最終 SA 内の最良であり、選抜中を含む全個体・全期間の最良とは限らない。
-// K/S/I/B/E は個体/サンプル/全反復/最終 SA 最良更新/イベント数、P/F/G/C/H は各コールバックの処理量。
-// 最後に残した個体の最良コストと Snapshot を返す O(S(P+F)+I(P+F)+(B+1)G+KC+K log K+EH)
+// 複数個体 SA。work_states は 1〜min(256,max_state_count) 個。move で渡すと初期群のコピーを避けられる。
+// time_limit_ms は有限の非負 ms。0 は初期最良だけを返す。初期個体の評価・終了出力等は計時外。
+// get_snapshot(state) -> Snapshot: 全体最良の初期解と、全体最良の更新時だけ呼ぶ。
+//   Snapshot は探索状態から独立した、コピー構築・代入が可能な値型（WorkState と同じ型でも可）。
+// get_cost(state) -> Cost: 現在の絶対コスト。各個体の評価や内部 SA の開始・終了時などに呼ぶ。
+// propose(state[, const SaRuntime<Cost>&]) -> Cost: 提案後 - 提案前の差分。Runtime 付きを優先。
+// finalize(state, bool accepted): 受理なら確定、棄却なら提案前に戻す。finalize(bool) も可。
+// 事前採取は各個体に ceil(samples/K) 回を予定し、必ず finalize(false)。合計数は切り上がる。
+// Runtime 付き propose の progress() / best_cost は各内部 SA の値（全体進捗・個体の過去最良ではない）。
+// 戻り値は pair<Cost,Snapshot>。消えた個体を含む全期間の最良解で、Snapshot は必ず存在する。
+//   個体ごとの過去状態は保存・復元しない。Cost の加算と内部 SA の int カウンタは範囲内に収める。
+// DebugHook(event, SaPopRuntime): LOCAL のみ。全コールバックは値渡し（必要なら std::ref を使う）。
+// param.enable_temperature_report は内部 SA ごとの診断。全体の推奨温度をまとめる機能ではない。
+// 計算量: O(S(P+F)+I(P+F)+(B+1)G+KC+K log K+EH)。K/S/I/B/E は個体/採取/反復/全体最良更新/イベント数。
+// P/F/G/C/H は各コールバックの処理量。WorkState 群のコピー・構築時間は別途考慮する。
 template<
     class Snapshot,
     Numeric Cost,
@@ -641,6 +645,8 @@ pair<Cost, Snapshot> sa_pop(
     assert(isfinite(time_limit_ms) && time_limit_ms >= 0.0 && time_limit_ms * 1000.0 < 0x1p63 && "time budget must fit int64_t microseconds");
     assert(isfinite(pop_param.selection_time_ratio) && 0.0 <= pop_param.selection_time_ratio && pop_param.selection_time_ratio <= 1.0 && "selection_time_ratio must be in [0, 1]");
     assert(isfinite(pop_param.selection_current_weight) && 0.0 <= pop_param.selection_current_weight && pop_param.selection_current_weight <= 1.0 && "selection_current_weight must be in [0, 1]");
+    assert(isfinite(pop_param.auto_end_temp_scale) && pop_param.auto_end_temp_scale > 0.0 && "auto_end_temp_scale must be finite and positive");
+    assert(pop_param.acceptance_width_scale >= 0.0 && "acceptance_width_scale must be nonnegative; +infinity is allowed");
     assert(param.samples >= 0 && "sa::SaParam.samples must be >= 0");
     assert(0.0 < param.start_accept_prob && param.start_accept_prob < 1.0);
     assert(0.0 < param.end_accept_prob && param.end_accept_prob < 1.0);
@@ -660,18 +666,11 @@ pair<Cost, Snapshot> sa_pop(
         selection_keys[i] = detail::sa_pop_selection_key(pop_param.selection_policy, pop_param.selection_current_weight, current_costs[i], lifetime_best_costs[i]);
     }
 
-    // 各フェーズで個体数を半減させ、温度区間の配分を先に決める
-    const int phase_count = (K <= 1 ? 0 : static_cast<int>(bit_width(static_cast<unsigned>(K - 1))));
+    // 各段階で4分の3を残し、冷却区間を段階ごとに等分する
+    int phase_count = 0;
+    for (int a = K; a > 1; a = max(1, (3 * a) / 4)) ++phase_count;
 
-    vector<int> active_counts;
-    active_counts.reserve(max(1, phase_count));
-    for (int a = K, p = 0; p < phase_count; ++p) {
-        active_counts.push_back(a);
-        a = max(1, (a + 1) / 2);
-    }
-
-    double total_phase_weight = 0.0;
-    for (int a : active_counts) total_phase_weight += 1.0 / static_cast<double>(a);
+    const double total_phase_weight = static_cast<double>(phase_count);
 
     const auto global_start_clock = chrono::steady_clock::now();
     const auto elapsed_us_now = [&]() -> int64_t {
@@ -739,6 +738,18 @@ pair<Cost, Snapshot> sa_pop(
         return {current_costs[best_id], move(snap)};
     }
 
+    // 加熱・選別で失わないよう、初期最良の Snapshot を一つ保持する
+    const int initial_best_id = best_current_id();
+    Cost global_best_cost = current_costs[initial_best_id];
+    Snapshot global_best_snapshot = detail::call_sa_pop_get_snapshot<Snapshot>(get_snapshot, work_states[initial_best_id]);
+    auto save_best = [&](int id) {
+        return [&, id](const SaRuntime<Cost>& inner_rt) -> SaPopEmptyBest {
+            global_best_cost = inner_rt.best_cost;
+            global_best_snapshot = detail::call_sa_pop_get_snapshot<Snapshot>(get_snapshot, work_states[id]);
+            return {};
+        };
+    };
+
     // population 全体から一度だけ auto 温度を推定する。
     int auto_per_state_samples = 0;
     int auto_total_samples = 0;
@@ -747,7 +758,7 @@ pair<Cost, Snapshot> sa_pop(
     bool auto_fallback = false;
 
     if (param.auto_mode && param.samples > 0) {
-        auto_per_state_samples = (param.samples + K - 1) / K;
+        auto_per_state_samples = param.samples / K + (param.samples % K != 0);
         {
             SaPopRuntime<Cost> rt = rt_base;
             fill_common_runtime(rt);
@@ -755,7 +766,7 @@ pair<Cost, Snapshot> sa_pop(
             detail::call_sa_pop_debug_hook(debug_hook, SaPopEventType::AutoSampleStart, rt);
         }
 
-        double worse_delta_sum = 0.0;
+        double mean_worse_delta = 0.0;
         SaRuntime<Cost> sample_runtime;
         sample_runtime.iteration = 0;
         sample_runtime.temperature = param.start_temp;
@@ -768,9 +779,9 @@ pair<Cost, Snapshot> sa_pop(
             for (int t = 0; t < auto_per_state_samples; ++t) {
                 if ((auto_total_samples & 31) == 0 && elapsed_us_now() >= total_us) break;
                 const Cost delta = detail::call_sa_pop_propose<Cost>(propose, work_states[i], sample_runtime);
-                if (delta > Cost{0}) {
-                    worse_delta_sum += detail::to_double(delta);
-                    ++auto_worse_count;
+                const double value = detail::to_double(delta);
+                if (value > 0.0 && isfinite(value)) {
+                    mean_worse_delta += (value - mean_worse_delta) / static_cast<double>(++auto_worse_count);
                 }
                 detail::call_sa_pop_finalize(finalize, work_states[i], false);
                 ++auto_total_samples;
@@ -779,10 +790,12 @@ pair<Cost, Snapshot> sa_pop(
         }
 
         if (auto_worse_count > 0) {
-            auto_avg_worse_delta = worse_delta_sum / static_cast<double>(auto_worse_count);
+            auto_avg_worse_delta = mean_worse_delta;
             global_start_temp = detail::temperature_from_avg_delta(auto_avg_worse_delta, param.start_accept_prob);
-            global_end_temp = detail::temperature_from_avg_delta(auto_avg_worse_delta, param.end_accept_prob);
-        } else {
+            global_end_temp = detail::temperature_from_avg_delta(auto_avg_worse_delta, param.end_accept_prob) * pop_param.auto_end_temp_scale;
+        }
+        if (auto_worse_count == 0 || !isfinite(global_start_temp) || !isfinite(global_end_temp)
+            || global_start_temp <= 0.0 || global_end_temp <= 0.0) {
             auto_fallback = true;
             global_start_temp = param.start_temp;
             global_end_temp = param.end_temp;
@@ -811,8 +824,8 @@ pair<Cost, Snapshot> sa_pop(
 
     for (int phase = 0; phase < phase_count; ++phase) {
         const auto phase_start_clock = chrono::steady_clock::now();
-        const int next_active = max(1, (active + 1) / 2);
-        const double phase_weight = 1.0 / static_cast<double>(active);
+        const int next_active = max(1, (3 * active) / 4);
+        const double phase_weight = 1.0;
         const double temp_progress_begin = (total_phase_weight > 0.0 ? pop_param.selection_time_ratio * prefix_weight / total_phase_weight : 0.0);
         const double temp_progress_end = (total_phase_weight > 0.0 ? pop_param.selection_time_ratio * (prefix_weight + phase_weight) / total_phase_weight : pop_param.selection_time_ratio);
         prefix_weight += phase_weight;
@@ -880,6 +893,7 @@ pair<Cost, Snapshot> sa_pop(
 
             if (slice_us > 0) {
                 SaParam inner_param = param;
+                inner_param.acceptance_width_scale = pop_param.acceptance_width_scale;
                 inner_param.seed = detail::sa_pop_mix_seed(param.seed, static_cast<uint64_t>(phase), static_cast<uint64_t>(id), 0x51E1EC710FULL);
                 inner_param.auto_mode = false;
                 inner_param.samples = 0;
@@ -902,10 +916,11 @@ pair<Cost, Snapshot> sa_pop(
                 auto [best_cost, ignored_best] = sa<SaPopEmptyBest, Cost>(
                     inner_param,
                     slice_ms,
-                    []() -> SaPopEmptyBest { return SaPopEmptyBest{}; },
+                    save_best(id),
                     [&]() -> Cost { return detail::call_sa_pop_get_cost<Cost>(get_cost, work_states[id]); },
                     [&](const SaRuntime<Cost>& inner_rt) -> Cost { return detail::call_sa_pop_propose<Cost>(propose, work_states[id], inner_rt); },
                     [&](bool accepted) { detail::call_sa_pop_finalize(finalize, work_states[id], accepted); },
+                    global_best_cost,
                     inner_hook);
                 (void)ignored_best;
                 run_best_cost = best_cost;
@@ -982,13 +997,12 @@ pair<Cost, Snapshot> sa_pop(
         }
 
         for (int j = 0; j < next_active; ++j) active_ids[j] = order[j];
-        active = next_active;
 
         {
             SaPopRuntime<Cost> rt = rt_base;
             fill_common_runtime(rt);
             rt.phase = phase;
-            rt.active_state_count = active_counts[phase];
+            rt.active_state_count = active;
             rt.next_active_state_count = next_active;
             rt.phase_weight = phase_weight;
             rt.temp_progress_begin = temp_progress_begin;
@@ -1000,9 +1014,10 @@ pair<Cost, Snapshot> sa_pop(
             rt.selection_cutoff_key = cutoff_key;
             detail::call_sa_pop_debug_hook(debug_hook, SaPopEventType::PhaseEnd, rt);
         }
+        active = next_active;
     }
 
-    // 最後に残った個体だけは Snapshot を保存し、残り時間で最良解を求める
+    // 残った個体を残り時間で改善する。返却用の最良は全探索を通じて保持する
     const int final_state_id = active_ids[0];
     const int64_t elapsed_before_final_us = elapsed_us_now();
     const int64_t final_budget_us = max<int64_t>(0, total_us - elapsed_before_final_us);
@@ -1034,6 +1049,7 @@ pair<Cost, Snapshot> sa_pop(
     }
 
     SaParam final_param = param;
+    final_param.acceptance_width_scale = pop_param.acceptance_width_scale;
     final_param.seed = detail::sa_pop_mix_seed(param.seed, 0xF17A1ULL, static_cast<uint64_t>(final_state_id), 0xA11CEULL);
     final_param.auto_mode = false;
     final_param.samples = 0;
@@ -1058,14 +1074,16 @@ pair<Cost, Snapshot> sa_pop(
 #endif
     };
 
-    auto [final_best_cost, final_best_snapshot] = sa<Snapshot, Cost>(
+    auto [final_best_cost, ignored_final_best] = sa<SaPopEmptyBest, Cost>(
         final_param,
         final_budget_ms,
-        [&]() -> Snapshot { return detail::call_sa_pop_get_snapshot<Snapshot>(get_snapshot, work_states[final_state_id]); },
+        save_best(final_state_id),
         [&]() -> Cost { return detail::call_sa_pop_get_cost<Cost>(get_cost, work_states[final_state_id]); },
         [&](const SaRuntime<Cost>& inner_rt) -> Cost { return detail::call_sa_pop_propose<Cost>(propose, work_states[final_state_id], inner_rt); },
         [&](bool accepted) { detail::call_sa_pop_finalize(finalize, work_states[final_state_id], accepted); },
+        global_best_cost,
         final_inner_hook);
+    (void)ignored_final_best;
 
     if (!has_final_runtime) {
         final_inner_runtime.best_cost = final_best_cost;
@@ -1094,7 +1112,7 @@ pair<Cost, Snapshot> sa_pop(
         rt.run_best_cost = final_best_cost;
         rt.lifetime_best_cost_before = lifetime_best_costs[final_state_id];
         rt.lifetime_best_cost_after = min(lifetime_best_costs[final_state_id], final_best_cost);
-        rt.final_best_cost = final_best_cost;
+        rt.final_best_cost = global_best_cost;
         rt.inner_runtime = final_inner_runtime;
         detail::call_sa_pop_debug_hook(debug_hook, SaPopEventType::FinalRunEnd, rt);
     }
@@ -1104,7 +1122,7 @@ pair<Cost, Snapshot> sa_pop(
         fill_common_runtime(rt);
         rt.elapsed_us = elapsed_us_now();
         rt.final_state_id = final_state_id;
-        rt.final_best_cost = final_best_cost;
+        rt.final_best_cost = global_best_cost;
         rt.final_start_temp = final_start_temp;
         rt.final_end_temp = final_end_temp;
         rt.final_time_limit_us = final_budget_us;
@@ -1112,7 +1130,7 @@ pair<Cost, Snapshot> sa_pop(
         detail::call_sa_pop_debug_hook(debug_hook, SaPopEventType::RunEnd, rt);
     }
 
-    return {final_best_cost, move(final_best_snapshot)};
+    return {global_best_cost, move(global_best_snapshot)};
 }
 
 } // namespace sa
@@ -1276,7 +1294,7 @@ void run_basic_tests() {
             },
             pop_param);
         (void)cost;
-        check(snapshot_id == 0, "default combination selection keeps lifetime-best potential with current penalty");
+        check(cost == -100 && snapshot_id == 0, "intermediate best survives elimination of its state");
     }
 
     {
@@ -1769,7 +1787,8 @@ TspRunStats run_tsp_sa_pop(const vector<Point2D>& points, int K, double time_lim
     res.total_iters = hook.total_iterations;
     res.auto_samples = total_candidates - hook.total_iterations;
     res.state_runs = hook.state_run_end_count;
-    res.phase_count = (K <= 1 ? 0 : static_cast<int>(bit_width(static_cast<unsigned>(K - 1))));
+    res.phase_count = 0;
+    for (int a = K; a > 1; a = max(1, (3 * a) / 4)) ++res.phase_count;
     res.final_state_id = hook.final_state_id;
     res.time_limit_ms = time_limit_ms;
     res.elapsed_ms = elapsed_ms;
@@ -1821,12 +1840,13 @@ TspRunStats run_tsp_sa_multi(const vector<Point2D>& points, int K, double time_l
                 return work_states[i].propose_2opt(rt);
             },
             [&](bool accepted) { work_states[i].finalize(accepted); },
+            best_cost,
             std::ref(hook));
         total_iters += hook.iterations;
         total_accepted += hook.accepted;
         if (cost < best_cost) {
             best_cost = cost;
-            best_tour = move(tour);
+            best_tour = move(*tour);
             best_idx = i;
         }
     }
@@ -1882,7 +1902,65 @@ void run_tsp_comparison() {
 
 } // namespace
 
+
+// 初期最良を加熱後も保持し、最終 SA が改善した場合はその保存解を返す
+void run_initial_archive_tests() {
+    const auto check = [](bool ok, const char* message) {
+        if (!ok) { cerr << "[test] failed: " << message << '\n'; exit(1); }
+    };
+    sa::SaParam param;
+    param.auto_mode = false;
+    param.start_temp = param.end_temp = 1e200;
+    param.enable_end_cost_check = false;
+    int snapshots = 0;
+    auto initial = sa::sa_pop<double, double>(param, 5.0, vector<double>{12., -25., 8.},
+        [&](const double& value) { ++snapshots; return value; }, [](const double& value) { return value; },
+        [](double& value) { value += .25; return .25; },
+        [](double& value, bool accepted) { if (!accepted) value -= .25; });
+    check(initial == pair<double, double>{-25., -25.} && snapshots == 1,
+          "one global initial snapshot survives heating without a redundant final copy");
+
+    struct State { unique_ptr<int> value; int pending = 0; };
+    vector<State> states;
+    for (int value : {30, 40, 50}) states.push_back({make_unique<int>(value), 0});
+    auto improved = sa::sa_pop<int, int>(param, 5.0, move(states),
+        [](const State& state) { return *state.value; }, [](const State& state) { return *state.value; },
+        [](State& state) { state.pending = *state.value > -10 ? -1 : 0; return state.pending; },
+        [](State& state, bool accepted) { if (accepted) *state.value += state.pending; });
+    check(improved == pair<int, int>{-10, -10}, "final improvement and move-only work state");
+
+    // 旧4要素の aggregate 初期化を維持し、手動温度と推定失敗時には倍率を掛けない
+    const sa::SaPopParam legacy{.75, 256, sa::SaPopSelectionPolicy::Combination, .25};
+    check(legacy.auto_end_temp_scale == .1, "legacy aggregate parameter construction");
+    for (int mode = 0; mode < 3; ++mode) {
+        sa::SaParam p;
+        p.auto_mode = mode != 0;
+        p.samples = 32;
+        p.start_temp = 17.; p.end_temp = .7;
+        p.enable_end_cost_check = false;
+        sa::SaPopParam pp;
+        pp.auto_end_temp_scale = .2;
+        double start = -1., end = -1.;
+        const auto temperatures = sa::sa_pop<int, int>(p, 5., vector<int>{0},
+            [](const int& state) { return state; }, [](const int& state) { return state; },
+            [mode](int&, const sa::SaRuntime<int>& runtime) { return mode == 2 && runtime.iteration == 0 ? 10 : 0; },
+            [](int&, bool) {}, pp,
+            [&](sa::SaPopEventType event, const sa::SaPopRuntime<int>& runtime) {
+                if (event == sa::SaPopEventType::FinalRunStart) { start = runtime.global_start_temp; end = runtime.global_end_temp; }
+            });
+        check(temperatures == pair<int, int>{0, 0}, "temperature sampling preserves state");
+        if constexpr (sa::detail::debug_hook_enabled) {
+            const double expected_start = mode == 2 ? -10. / log(p.start_accept_prob) : 17.;
+            const double expected_end = mode == 2 ? -10. / log(p.end_accept_prob) * .2 : .7;
+            check(abs(start - expected_start) < 1e-10 && abs(end - expected_end) < 1e-10,
+                  "auto scale, manual temperature and fallback contracts");
+        }
+    }
+    cout << "[test] ok: initial archive, final improvement, move-only state, auto temperature extension\n";
+}
+
 int main() {
+    run_initial_archive_tests();
     run_basic_tests();
     run_api_tests();
     run_tsp_comparison();
