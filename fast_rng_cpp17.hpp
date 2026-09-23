@@ -5,7 +5,7 @@ using namespace std;
 // FastRng: C++17 / GCC 用、splitmix64 を使う状態 64bit の競技プログラミング用 RNG
 // uniform は半開区間、uniform_closed は整数の閉区間を返す
 // uniform_closed_delta は整数の閉区間から 0 を除いた差分を返す
-// uniform / uniform_closed は配列の充填にも対応、perm は開始値付きの順列を生成
+// 配列は vector / array のみ対応、uniform / uniform_closed は充填、perm は開始値付き順列
 // uniform_sum は double 配列を非負・合計指定の一様分布で埋める
 // normal は平均・標準偏差を指定する正規乱数、double のスカラーと配列に対応
 // weighted_index は重み付きの添字を選ぶ、反復利用は WeightedTable で事前準備
@@ -39,30 +39,13 @@ struct FastRng {
     inline bool next_bool() noexcept { return (bool)((*this)() >> 63); }
 
 private:
-    // 要素型は配列から取得する、厳密な型検査は行わない
+    // vector / array の要素型、オーバーロードの区別にだけ使う
     template<class R>
-    using array_element = remove_reference_t<decltype(*begin(declval<R&>()))>;
-
-    // 内部だけの配列参照、C++17 でも元の配列処理を共通の形で使う
-    template<class T> struct Array {
-        T* p;
-        size_t n;
-        T* begin() const { return p; }
-        T* end() const { return n ? p + n : p; }
-        size_t size() const { return n; }
-        bool empty() const { return !n; }
-        T& operator[](size_t i) const { return p[i]; }
-    };
-    template<class R>
-    static auto as_array(R& out) {
-        auto first = begin(out);
-        auto n = (size_t)(end(out) - first);
-        return Array<array_element<R>>{n ? addressof(*first) : nullptr, n};
-    }
+    using array_element = typename decay_t<R>::value_type;
 
     // 非空・非負・有限の重みを合計する、合計は正かつ有限が前提
     template<class A>
-    static double weight_sum(A a) noexcept {
+    static double weight_sum(const A& a) noexcept {
         assert(!a.empty() && a.size() <= INT32_MAX);
         auto sum = accumulate(a.begin(), a.end(), 0.0);
         assert(sum > 0 && isfinite(sum));
@@ -147,7 +130,7 @@ public:
     // double 配列を [0, 1) で埋める、空配列は乱数を消費しない
     template<class R, class = array_element<R>>
     inline void uniform(R&& out) noexcept {
-        for (auto& x : as_array(out)) x = uniform();
+        for (auto& x : out) x = uniform();
     }
 
     // 配列を半開区間 [0, r) で埋める、端点は配列の要素型に変換される
@@ -159,7 +142,7 @@ public:
     // 配列を半開区間 [l, r) で埋める、各要素は先頭からスカラー版で生成する
     template<class R>
     inline void uniform(R&& out, array_element<R> l, array_element<R> r) noexcept {
-        for (auto& x : as_array(out)) x = uniform(l, r);
+        for (auto& x : out) x = uniform(l, r);
     }
 
     // 整数配列を閉区間 [0, r] で埋める
@@ -171,13 +154,12 @@ public:
     // 整数配列を閉区間 [l, r] で埋める、各要素は先頭からスカラー版で生成する
     template<class R>
     inline void uniform_closed(R&& out, array_element<R> l, array_element<R> r) noexcept {
-        for (auto& x : as_array(out)) x = uniform_closed(l, r);
+        for (auto& x : out) x = uniform_closed(l, r);
     }
 
     // double 配列を正規乱数で埋める、空配列・標準偏差 0 は乱数不要、生成値の桁あふれは対象外
     template<class R, class = array_element<R>>
-    inline void normal(R&& out, double mean = 0.0, double stddev = 1.0) noexcept {
-        auto a = as_array(out);
+    inline void normal(R&& a, double mean = 0.0, double stddev = 1.0) noexcept {
         if (a.empty()) return;
         assert(isfinite(mean) && isfinite(stddev) && stddev >= 0);
         if (stddev == 0) { fill(a.begin(), a.end(), mean); return; }
@@ -193,8 +175,7 @@ public:
 
     // double 配列を非負・合計 s の単体上一様分布で埋める、合計の丸め誤差は許容する
     template<class R>
-    inline void uniform_sum(R&& out, double s = 1.0) noexcept {
-        auto a = as_array(out);
+    inline void uniform_sum(R&& a, double s = 1.0) noexcept {
         assert(s >= 0 && isfinite(s) && (!a.empty() || s == 0));
         // 自明な場合は乱数不要、2 要素は一様乱数 1 個と残りに分割する
         if (a.size() <= 1 || s == 0) { fill(a.begin(), a.end(), s); return; }
@@ -218,8 +199,7 @@ public:
 
     // start から配列サイズ個の整数をランダムに並べる、全ての値が要素型に収まることが前提
     template<class R>
-    inline void perm(R&& out, array_element<R> start = 0) noexcept {
-        auto a = as_array(out);
+    inline void perm(R&& a, array_element<R> start = 0) noexcept {
         using T = array_element<R>;
         if (a.empty()) return;
         assert(a.size() - 1 <= (uint64_t)numeric_limits<T>::max() - (uint64_t)start);
@@ -249,8 +229,7 @@ public:
 
         // 表を再構築する、重みは非空・非負・有限、合計は正かつ有限が前提
         template<class R>
-        void assign(R&& weights) {
-            auto a = as_array(weights);
+        void assign(R&& a) {
             auto sum = weight_sum(a);
             auto n = (int32_t)a.size();
             entries.resize(a.size());
@@ -283,8 +262,7 @@ public:
 
     // 重みに比例して添字を 1 個選ぶ、確保なし・乱数 1 個、重み 0 は選ばない
     template<class R, class = array_element<R>>
-    inline int32_t weighted_index(R&& weights) noexcept {
-        auto a = as_array(weights);
+    inline int32_t weighted_index(R&& a) noexcept {
         auto x = uniform(weight_sum(a));
         auto i = int32_t{0};
         auto sum = (double)a[0];
@@ -308,55 +286,8 @@ public:
 };
 
 #if __INCLUDE_LEVEL__ == 0
-// 以下はテスト専用の配列ビュー、配布するライブラリのAPIには追加しない
+// テスト用の数値補助、C++17で使える標準処理だけを使用する
 namespace {
-template<class R> auto test_begin(R& out) { using std::begin; return begin(out); }
-template<class R> auto test_end(R& out) { using std::end; return end(out); }
-template<class T, size_t N = size_t(-1)> struct TestSpan {
-    using element_type = T;
-    T* p = nullptr;
-    size_t n = 0;
-    TestSpan() = default;
-    TestSpan(T* pointer, size_t count) : p(pointer), n(count) {}
-    template<class R> TestSpan(R&& out) {
-        auto first = test_begin(out);
-        n = (size_t)(test_end(out) - first);
-        p = n ? addressof(*first) : nullptr;
-    }
-    T* begin() const { return p; }
-    T* end() const { return n ? p + n : p; }
-    T* data() const { return p; }
-    size_t size() const { return n; }
-    bool empty() const { return !n; }
-    T& operator[](size_t i) const { return p[i]; }
-    T& front() const { return p[0]; }
-    T& back() const { return p[n - 1]; }
-    TestSpan<T> subspan(size_t pos, size_t count = size_t(-1)) const {
-        return {pos ? p + pos : p, count == size_t(-1) ? n - pos : count};
-    }
-    template<size_t Pos, size_t Count = size_t(-1)> TestSpan<T> subspan() const { return subspan(Pos, Count); }
-    TestSpan<T> first(size_t count) const { return {p, count}; }
-    TestSpan<T> last(size_t count) const { return subspan(n - count, count); }
-};
-template<class R> TestSpan(R&&) -> TestSpan<remove_reference_t<decltype(*begin(declval<R&>()))>>;
-template<class T> TestSpan(T*, size_t) -> TestSpan<T>;
-
-// C++17 でも、終端の型が異なる連続範囲をテストする
-template<class T> struct TestRange {
-    struct Iterator {
-        T* p;
-        size_t n;
-        T& operator*() const { return *p; }
-    };
-    struct Sentinel {};
-    T* p;
-    size_t n;
-    Iterator begin() const { return {p, n}; }
-    Sentinel end() const { return {}; }
-    friend ptrdiff_t operator-(Sentinel, Iterator i) { return (ptrdiff_t)i.n; }
-};
-template<class T> TestRange<T> test_range(T* p, size_t n) { return {p, n}; }
-
 template<class To, class From> To test_bit_cast(const From& value) {
     static_assert(sizeof(To) == sizeof(From));
     To result;
@@ -381,12 +312,6 @@ struct Tester {
         }
     }
 };
-
-// 型制約を、関数本体ではなく呼び出し可能性として検査する
-// cv 付きの明示指定も bool を許可しない
-struct Convertible { operator int() const { return 1; } };
-enum PlainEnum { enum_value };
-enum class ScopedEnum { value };
 
 // 本体とは独立に幅を 128bit で計算し、境界値と縮小結果の一致を確かめる
 uint64_t reference_raw(uint64_t& state) {
@@ -621,77 +546,6 @@ void test_double(Tester& t, mt19937_64& data) {
     t.require(rng.state == state, "bernoulli endpoints consume no words");
 }
 
-// 配列版の型制約、const TestSpan 自体は参照先が書き込み可能なら利用できる
-// 引数の数と要素型を固定し、スカラー版との曖昧なオーバーロードを検出する
-
-// ADL でのみ走査できる連続範囲、メンバーの begin/end は関数ではなく添字演算子も持たない
-// TestSpan が受け付ける型を、直接の range-for や out[i] への変更で取りこぼさないことを確認する
-template<class T>
-struct AdlArray {
-    enum { begin = 0, end = 0 };
-    T* first;
-    T* last;
-    friend T* begin(AdlArray a) noexcept { return a.first; }
-    friend T* end(AdlArray a) noexcept { return a.last; }
-};
-
-template<class T, class MakeRange>
-void test_contiguous_array_view(Tester& t, MakeRange make_range) {
-    for (auto n : {size_t{0}, size_t{1}, size_t{2}, size_t{7}, size_t{31}, size_t{257}}) {
-        for (auto seed_value = uint64_t{0}; seed_value < 32; ++seed_value) {
-            // 範囲外を含む配列全体と、生成後の内部状態をスカラー実装と比較する
-            auto check = [&](auto fill, auto scalar) {
-                vector<T> a(n + 4, T{99}), b = a;
-                auto view = make_range(a.data() + 2, n);
-                FastRng first(seed_value), second(seed_value);
-                fill(first, view);
-                for (auto i = size_t{2}; i < n + 2; ++i) b[i] = scalar(second);
-                t.require(a == b, "contiguous view fill and guards");
-                t.require(first.state == second.state, "contiguous view fill state");
-            };
-            check([](auto& rng, auto& out) { rng.uniform(out, T{7}); },
-                  [](auto& rng) { return rng.uniform(T{7}); });
-            check([](auto& rng, auto& out) { rng.uniform(out, T{1}, T{7}); },
-                  [](auto& rng) { return rng.uniform(T{1}, T{7}); });
-            if constexpr (is_same_v<T, double>) {
-                check([](auto& rng, auto& out) { rng.uniform(out); },
-                      [](auto& rng) { return rng.uniform(); });
-            } else {
-                check([](auto& rng, auto& out) { rng.uniform_closed(out, T{7}); },
-                      [](auto& rng) { return rng.uniform_closed(T{7}); });
-                check([](auto& rng, auto& out) { rng.uniform_closed(out, T{1}, T{7}); },
-                      [](auto& rng) { return rng.uniform_closed(T{1}, T{7}); });
-
-                // 順列の値・並び順・消費回数と、範囲外を変更しないことを確認する
-                for (auto start : {T{0}, T{3}, (T)(numeric_limits<T>::max() - 256)}) {
-                    vector<T> a(n + 4, T{99}), b = a;
-                    auto view = make_range(a.data() + 2, n);
-                    FastRng first(seed_value), second(seed_value);
-                    first.perm(view, start);
-                    if (n != 0) b[2] = start;
-                    for (auto i = size_t{1}; i < n; ++i) {
-                        b[i + 2] = (T)((uint64_t)start + i);
-                        swap(b[i + 2], b[2 + second.uniform(i + 1)]);
-                    }
-                    t.require(a == b, "contiguous view permutation and guards");
-                    t.require(first.state == second.state, "contiguous view permutation state");
-                }
-            }
-        }
-    }
-}
-
-void test_contiguous_array_views(Tester& t) {
-    // ADL 専用の範囲と、終端の型がイテレータと異なる範囲をそれぞれ検査する
-    test_each_type(tuple<int, uint64_t, double>{}, [&](auto type) {
-        using T = typename decltype(type)::type;
-        test_contiguous_array_view<T>(t, [](auto* p, size_t n) { return AdlArray<T>{p, p + n}; });
-        test_contiguous_array_view<T>(t, [](auto* p, size_t n) {
-            return test_range(p, (ptrdiff_t)n);
-        });
-    });
-}
-
 // スカラーを順番に呼んだ場合と、全要素・生乱数消費・配列サイズが一致することを検査する
 template<class T, class Fill, class Scalar>
 void check_fill(Tester& t, size_t n, uint64_t seed_value, Fill fill, Scalar scalar) {
@@ -748,31 +602,19 @@ void test_integer_arrays(Tester& t, mt19937_64& data) {
         check((size_t)(data() % 129), l, r, data());
     }
 
-    // C 配列・array・固定長 TestSpan・動的 TestSpan・const な view で同じ出力になる
-    T raw_array[17]{};
+    // vector と array は同じ系列、サイズや格納領域は変更しない
+    vector<T> values(17);
     array<T, 17> fixed{};
-    auto copy = fixed;
-    FastRng a(123), b(123), c(123), d(123);
-    a.uniform(raw_array, T{1}, T{7});
-    b.uniform(fixed, T{1}, T{7});
-    c.uniform(TestSpan{copy}, T{1}, T{7});
-    auto view = TestSpan<T>{raw_array};
-    const auto const_view = view;
-    d.uniform(const_view, T{1}, T{7});
-    t.require(equal(begin(raw_array), end(raw_array), fixed.begin()) && copy == fixed, "fill container equivalence");
-    t.require(a.state == b.state && b.state == c.state && c.state == d.state, "fill container state equivalence");
+    FastRng a(123), b(123);
+    a.uniform(values, T{1}, T{7}); b.uniform(fixed, T{1}, T{7});
+    t.require(equal(values.begin(), values.end(), fixed.begin()), "fill vector/array equivalence");
+    t.require(a.state == b.state, "fill vector/array state");
+    array<T, 0> empty_array{};
+    vector<T> empty_vector;
+    auto state = a.state;
+    a.uniform(empty_vector, T{1}); a.uniform_closed(empty_array, T{0});
+    t.require(a.state == state, "empty fill consumes no words");
 
-    // 部分配列以外には書き込まない、空の部分配列では状態も変えない
-    fixed.fill(T{99});
-    FastRng sub(77);
-    sub.uniform_closed(TestSpan{fixed}.subspan(3, 8), T{1}, T{7});
-    for (auto i = size_t{0}; i < fixed.size(); ++i) {
-        t.require(i >= 3 && i < 11 ? fixed[i] >= T{1} && fixed[i] <= T{7} : fixed[i] == T{99}, "fill subspan boundary");
-    }
-    auto state = sub.state;
-    sub.uniform(TestSpan<T>{}, T{1});
-    sub.uniform_closed(TestSpan{fixed}.last(0), T{0});
-    t.require(sub.state == state, "empty fill consumes no words");
 }
 
 void test_double_arrays(Tester& t, mt19937_64& data) {
@@ -811,16 +653,12 @@ void test_double_arrays(Tester& t, mt19937_64& data) {
     rng.uniform(regression, 1.0, 2.0);
     t.require(regression[0] == nextafter(2.0, 1.0), "array upper-end rounding regression");
     array<double, 9> a{};
-    double b[9]{};
+    vector<double> b(9);
     FastRng first(11), second(11);
-    first.uniform(a);
-    second.uniform(b);
-    t.require(equal(a.begin(), a.end(), begin(b)), "unit double array equivalence");
-    a.fill(-99.0);
-    first.uniform(TestSpan{a}.subspan<2, 5>(), 1.0);
-    for (auto i = size_t{0}; i < a.size(); ++i) {
-        t.require(i >= 2 && i < 7 ? a[i] >= 0 && a[i] < 1 : a[i] == -99, "double subspan boundary");
-    }
+    first.uniform(a); second.uniform(b);
+    t.require(equal(a.begin(), a.end(), b.begin()), "unit double vector/array equivalence");
+    t.require(first.state == second.state, "unit double vector/array state");
+
 }
 
 // 型の端でも 128bit で正解を数え、順列の一意性・範囲・消費回数を独立に確認する
@@ -863,27 +701,20 @@ void test_permutations(Tester& t, mt19937_64& data) {
         check_perm<T>(t, n, start, data());
     }
 
-    // 初期内容は無関係、開始値省略と明示 0、各配列形式も一致する
+    // 初期内容は無関係、開始値省略と明示 0、vector と array も一致する
     array<T, 17> a{}, b{};
-    T c[17];
+    vector<T> c(17);
     a.fill(T{9}); b.fill(T{7});
     FastRng first(89), second(89), third(89);
-    first.perm(a); second.perm(TestSpan{b}, T{0}); third.perm(c);
-    t.require(a == b && equal(a.begin(), a.end(), begin(c)), "perm independent of initial contents");
+    first.perm(a); second.perm(b, T{0}); third.perm(c);
+    t.require(a == b && equal(a.begin(), a.end(), c.begin()), "perm independent of initial contents");
     t.require(first.state == second.state && second.state == third.state, "perm container state equivalence");
-    a.fill(T{99});
-    first.perm(TestSpan{a}.subspan(3, 8), T{10});
-    vector<T> section(a.begin() + 3, a.begin() + 11);
-    sort(section.begin(), section.end());
-    for (auto i = size_t{0}; i < a.size(); ++i) {
-        if (i < 3 || i >= 11) t.require(a[i] == T{99}, "perm subspan guard");
-    }
-    for (auto i = size_t{0}; i < section.size(); ++i) t.require(section[i] == (T)(i + 10), "perm subspan values");
     array<T, 0> empty{};
+    vector<T> empty_vector;
     auto state = first.state;
-    first.perm(empty, numeric_limits<T>::max());
-    first.perm(TestSpan<T>{});
+    first.perm(empty, numeric_limits<T>::max()); first.perm(empty_vector);
     t.require(first.state == state, "empty perm consumes no words");
+
 }
 
 void test_permutation_frequencies(Tester& t) {
@@ -922,10 +753,8 @@ void test_array_apis(Tester& t, mt19937_64& data) {
     test_permutation_frequencies(t);
 }
 
-// 読み取り専用配列の型制約と、準備済み表とのオーバーロードを検査する
-
 // 独立した累積配列と upper_bound でワンショットの結果を照合する
-int32_t reference_weighted(TestSpan<const double> weights, uint64_t raw) {
+int32_t reference_weighted(const vector<double>& weights, uint64_t raw) {
     vector<double> prefix(weights.size());
     partial_sum(weights.begin(), weights.end(), prefix.begin());
     auto sum = prefix.back();
@@ -953,20 +782,15 @@ template<class T>
 void test_weight_type(Tester& t) {
     const array<T, 5> a{T{0}, T{1}, T{3}, T{6}, T{0}};
     const vector<T> v(a.begin(), a.end());
-    const T c[5] = {T{0}, T{1}, T{3}, T{6}, T{0}};
-    const auto view = TestSpan{a};
-    auto adl = AdlArray<const T>{a.data(), a.data() + a.size()};
-    FastRng::WeightedTable first(a), second(v), third(c), fourth(view), fifth(adl);
+    FastRng::WeightedTable first(a), second(v);
     for (auto raw : raw_edges) {
         auto seed_value = seed_for_raw(raw);
-        FastRng r1(seed_value), r2(seed_value), r3(seed_value), r4(seed_value), r5(seed_value);
-        auto expected = r1.weighted_index(a);
-        t.require(expected == r2.weighted_index(v) && expected == r3.weighted_index(c) &&
-                  expected == r4.weighted_index(view) && expected == r5.weighted_index(adl), "weighted input containers");
-        r1.seed(seed_value); r2.seed(seed_value); r3.seed(seed_value); r4.seed(seed_value); r5.seed(seed_value);
-        expected = r1.weighted_index(first);
-        t.require(expected == r2.weighted_index(second) && expected == r3.weighted_index(third) &&
-                  expected == r4.weighted_index(fourth) && expected == r5.weighted_index(fifth), "weighted table containers");
+        FastRng r1(seed_value), r2(seed_value);
+        t.require(r1.weighted_index(a) == r2.weighted_index(v), "weighted const vector/array");
+        t.require(r1.state == r2.state, "weighted containers state");
+        r1.seed(seed_value); r2.seed(seed_value);
+        t.require(r1.weighted_index(first) == r2.weighted_index(second), "weighted table containers");
+        t.require(r1.state == r2.state, "weighted table containers state");
     }
     if constexpr (!is_same_v<T, double>) {
         vector<T> edge{numeric_limits<T>::max(), T{0}, numeric_limits<T>::max()};
@@ -1084,11 +908,10 @@ void test_weighted(Tester& t, mt19937_64& data) {
     cout << "Weighted tests passed. checks = " << t.checks - before << '\n';
 }
 
-// 合計指定は書き込み可能な double の連続範囲だけを受け取る
-// const TestSpan<double> は利用可能、TestSpan<const double> は利用不可
+// 合計指定は double の vector / array を使う
 
 // 比較用の指数乱数正規化、3 要素にも一般の場合と同じ処理を行う
-void sum_exponential(FastRng& rng, TestSpan<double> a, double s) {
+void sum_exponential(FastRng& rng, vector<double>& a, double s) {
     assert(s >= 0 && isfinite(s) && (!a.empty() || s == 0));
     if (a.size() <= 1 || s == 0) { fill(a.begin(), a.end(), s); return; }
     if (a.size() == 2) { a[0] = rng.uniform(s); a[1] = s - a[0]; return; }
@@ -1101,9 +924,9 @@ void sum_exponential(FastRng& rng, TestSpan<double> a, double s) {
 }
 
 // 別方式の比較用、区切り位置をソートして隣接差分を取り、追加配列は使わない
-void sum_sorted_cuts(FastRng& rng, TestSpan<double> a, double s) {
+void sum_sorted_cuts(FastRng& rng, vector<double>& a, double s) {
     if (a.size() <= 1 || s == 0) { fill(a.begin(), a.end(), s); return; }
-    for (auto& x : a.first(a.size() - 1)) x = rng.uniform();
+    for (auto it = a.begin(); it != a.end() - 1; ++it) *it = rng.uniform();
     a.back() = 1;
     sort(a.begin(), a.end() - 1);
     for (auto i = a.size() - 1; i > 0; --i) a[i] = (a[i] - a[i - 1]) * s;
@@ -1111,7 +934,7 @@ void sum_sorted_cuts(FastRng& rng, TestSpan<double> a, double s) {
 }
 
 // 長倍精度で合計を求め、有限・非負・上端・通常丸めと非正規化数の誤差を検査する
-void check_sum_values(Tester& t, TestSpan<const double> a, double s) {
+void check_sum_values(Tester& t, const vector<double>& a, double s) {
     auto total = 0.0L;
     for (auto x : a) {
         t.require(isfinite(x) && x >= 0 && x <= s, "uniform_sum element range");
@@ -1122,17 +945,16 @@ void check_sum_values(Tester& t, TestSpan<const double> a, double s) {
     t.require(abs(total - (long double)s) <= tolerance, "uniform_sum rounded total");
 }
 
-// 生乱数から長倍精度で参照値を独立生成し、配列の外側・系列・消費回数を照合する
+// 生乱数から長倍精度で参照値を独立生成し、格納領域・系列・消費回数を照合する
 void check_sum_case(Tester& t, size_t n, double s, uint64_t seed_value) {
-    vector<double> storage(n + 4, -123.0), copied(n);
-    auto a = TestSpan{storage}.subspan(2, n);
+    vector<double> a(n, -123.0), copied(n);
+    auto ptr = a.data(); auto capacity = a.capacity();
     FastRng rng(seed_value), twin(seed_value);
     rng.uniform_sum(a, s);
     twin.uniform_sum(copied, s);
     check_sum_values(t, a, s);
     t.require(equal(a.begin(), a.end(), copied.begin()), "uniform_sum reproducibility");
-    t.require(storage[0] == -123 && storage[1] == -123 && storage[n + 2] == -123 && storage[n + 3] == -123,
-              "uniform_sum subspan guards");
+    t.require(a.data() == ptr && a.size() == n && a.capacity() == capacity, "uniform_sum keeps storage");
 
     // 空・ゼロ・1 要素は消費なし、2 要素は 1 個、3 要素は 2 個、それ以外は n 個
     auto expected_state = seed_value;
@@ -1197,7 +1019,7 @@ void check_sum_distribution(Tester& t, F generate) {
             auto nd = (long double)n;
             array<long double, 3> cuts{0.25L / nd, 1.0L / nd, 2.0L / nd};
             for (auto k = 0; k < trials; ++k) {
-                generate(rng, TestSpan{a}, 1.0);
+                generate(rng, a, 1.0);
                 for (auto i = size_t{0}; i < a.size(); ++i) {
                     auto x = (long double)a[i];
                     first[i] += x;
@@ -1255,35 +1077,22 @@ void test_uniform_sum(Tester& t, mt19937_64& data) {
         check_sum_values(t, a, 10.0);
     }
 
-    // 対応コンテナは同じ値・同じ状態、初期内容には依存しない
+    // vector と array は同じ値・同じ状態、初期内容には依存しない
     for (auto k = 0; k < 64; ++k) {
         auto seed_value = data();
         vector<double> expected(7);
-        FastRng ref(seed_value);
-        ref.uniform_sum(expected);
-        auto check = [&](auto&& out) {
-            FastRng rng(seed_value);
-            rng.uniform_sum(forward<decltype(out)>(out));
-            auto a = TestSpan{out};
-            t.require(equal(a.begin(), a.end(), expected.begin()), "uniform_sum container/default sum");
-            t.require(rng.state == ref.state, "uniform_sum container state");
-        };
         array<double, 7> a{};
-        double c[7]{};
-        check(a); check(c); check(TestSpan{a});
-        const auto view = TestSpan{a};
-        check(view);
-        auto adl = AdlArray<double>{a.data(), a.data() + a.size()};
-        check(adl);
-        auto counted = test_range(a.data(), (ptrdiff_t)a.size());
-        check(counted);
+        FastRng ref(seed_value), rng(seed_value);
+        ref.uniform_sum(expected); rng.uniform_sum(a);
+        t.require(equal(a.begin(), a.end(), expected.begin()), "uniform_sum vector/array default sum");
+        t.require(rng.state == ref.state, "uniform_sum container state");
     }
     array<double, 0> empty{};
+    vector<double> empty_vector;
     FastRng rng(10);
-    rng.uniform_sum(empty, 0);
-    rng.uniform_sum(TestSpan<double>{}, 0);
-    t.require(rng.state == 10, "uniform_sum null empty");
-    // 3 要素に集中したランダム入力と、固定長・動的長・C 配列での系列一致
+    rng.uniform_sum(empty, 0); rng.uniform_sum(empty_vector, 0);
+    t.require(rng.state == 10, "uniform_sum empty");
+    // 3 要素に集中したランダム入力と、vector / array の系列一致
     for (auto k = 0; k < 20000; ++k) {
         auto raw = data() & 0x7fffffffffffffffULL;
         if ((raw >> 52) == 0x7ff) raw ^= 1ULL << 52;
@@ -1291,20 +1100,20 @@ void test_uniform_sum(Tester& t, mt19937_64& data) {
         auto seed_value = data();
         check_sum_case(t, 3, s, seed_value);
         array<double, 3> a{};
-        double c[3]{};
+        array<double, 3> c{};
         vector<double> v(3);
         FastRng r1(seed_value), r2(seed_value), r3(seed_value);
         r1.uniform_sum(a, s); r2.uniform_sum(c, s); r3.uniform_sum(v, s);
-        t.require(equal(a.begin(), a.end(), c) && equal(a.begin(), a.end(), v.begin()),
+        t.require(equal(a.begin(), a.end(), c.begin()) && equal(a.begin(), a.end(), v.begin()),
                   "uniform_sum triangle container agreement");
         t.require(r1.state == r2.state && r1.state == r3.state, "uniform_sum triangle container state");
     }
-    check_sum_distribution(t, [](auto& g, auto a, double s) { g.uniform_sum(a, s); });
+    check_sum_distribution(t, [](auto& g, auto& a, double s) { g.uniform_sum(a, s); });
     check_sum_distribution(t, sum_sorted_cuts);
     cout << "Uniform-sum tests passed. checks = " << t.checks - before << '\n';
 }
 
-// 正規分布の配列版は、書き込み可能な double の連続領域だけを受け取る
+// 正規分布の配列版は double の vector / array を使う
 
 // 乱数状態は独立した生乱数実装で進め、対数・平方根は長倍精度で検算する
 pair<long double, long double> reference_normal_pair(uint64_t& state, uint64_t& attempts) {
@@ -1328,18 +1137,17 @@ void check_normal_value(Tester& t, double actual, long double z, double mean, do
     t.require(isfinite(actual) && abs((long double)actual - expected) <= tolerance, "normal long double reference");
 }
 
-// 配列外の保護、コピー・seed 再設定、奇偶サイズ、乱数消費を同時に調べる
+// 格納領域の維持、コピー・seed 再設定、奇偶サイズ、乱数消費を同時に調べる
 void check_normal_case(Tester& t, size_t n, double mean, double stddev, uint64_t seed_value) {
-    vector<double> storage(n + 4, -12345.0), copied(n), reseeded(n);
-    auto a = TestSpan{storage}.subspan(2, n);
+    vector<double> a(n, -12345.0), copied(n), reseeded(n);
+    auto ptr = a.data(); auto capacity = a.capacity();
     FastRng rng(seed_value), twin = rng, reset(111);
     reset.seed(seed_value);
     rng.normal(a, mean, stddev);
     twin.normal(copied, mean, stddev);
     reset.normal(reseeded, mean, stddev);
     t.require(equal(a.begin(), a.end(), copied.begin()) && copied == reseeded, "normal fill copy/reseed reproducibility");
-    t.require(storage[0] == -12345 && storage[1] == -12345 && storage[n + 2] == -12345 && storage[n + 3] == -12345,
-              "normal subspan guards");
+    t.require(a.data() == ptr && a.size() == n && a.capacity() == capacity, "normal keeps storage");
     t.require(rng.state == twin.state && rng.state == reset.state, "normal copy/reseed state");
     auto state = seed_value, attempts = uint64_t{0};
     if (stddev == 0) {
@@ -1367,7 +1175,7 @@ void test_normal_distribution(Tester& t, size_t block, double mean, double stdde
     while (samples < count) {
         auto n = min(buffer.size(), count - samples);
         if (block == 0) buffer[0] = rng.normal(mean, stddev);
-        else rng.normal(TestSpan{buffer}.first(n), mean, stddev);
+        else { buffer.resize(n); rng.normal(buffer, mean, stddev); }
         for (auto i = size_t{0}; i < n; ++i, ++samples) {
             auto z = ((long double)buffer[i] - mean) / stddev;
             t.require(isfinite(z), "normal finite distribution sample");
@@ -1398,6 +1206,17 @@ void test_normal_distribution(Tester& t, size_t block, double mean, double stdde
     cout << "Normal stats: block=" << block << " count=" << count << " mean=" << (double)total_mean
          << " variance=" << (double)(second - total_mean * total_mean) << " fourth=" << (double)(fourth / count)
          << " lag1=" << (double)(lag1 / (count - 1)) << '\n';
+}
+
+// 同じ式でも array/vector や固定長の違いで FMA の適用が変わりうるため、型をまたぐ比較だけ丸めを許容する
+template<class A, class B>
+bool equal_normal_arrays(const A& a, const B& b) {
+    if (a.size() != b.size()) return false;
+    for (auto i = size_t{0}; i < a.size(); ++i) {
+        auto tolerance = 4 * numeric_limits<double>::epsilon() * max({1.0, abs(a[i]), abs(b[i])});
+        if (abs(a[i] - b[i]) > tolerance) return false;
+    }
+    return true;
 }
 
 void test_normal(Tester& t, mt19937_64& data) {
@@ -1449,41 +1268,37 @@ void test_normal(Tester& t, mt19937_64& data) {
     }
     t.require(rejected, "normal rejection exercised by raw endpoint");
 
-    // 全ての配列入口・既定引数と、TestSpan を経由する連続範囲の互換性を検査する
+    // vector / array の既定引数、空・単一要素と隠れた状態がないことを確認する
     for (auto seed_value = uint64_t{0}; seed_value < 100; ++seed_value) {
         array<double, 7> a{};
         vector<double> b(7);
-        double c[7]{};
         FastRng r1(seed_value), r2(seed_value), r3(seed_value), r4(seed_value);
-        r1.normal(a); r2.normal(b); r3.normal(c);
-        t.require(equal(a.begin(), a.end(), b.begin()) && equal(a.begin(), a.end(), begin(c)), "normal container defaults");
-        t.require(r1.state == r2.state && r2.state == r3.state, "normal container state");
-        auto p = TestSpan{a};
-        const auto const_view = TestSpan{b};
-        auto adl = AdlArray<double>{c, c + 7};
-        r1.normal(p, 10); r2.normal(const_view, 10.0, 1.0); r3.normal(adl, 10, 1);
-        t.require(equal(a.begin(), a.end(), b.begin()) && equal(a.begin(), a.end(), begin(c)), "normal mean-only and contiguous views");
-        auto view = test_range(c, 7);
-        r3.normal(view, -2, 0);
-        for (auto x : c) t.require(x == -2, "normal sentinel-range zero stddev");
-        t.require(r1.state == r2.state && r2.state == r3.state, "normal zero fill consumes no words");
+        r1.normal(a); r2.normal(b);
+        t.require(equal_normal_arrays(a, b), "normal container defaults");
+        t.require(r1.state == r2.state, "normal container state");
+        r1.normal(a, 10); r2.normal(b, 10.0, 1.0);
+        t.require(equal_normal_arrays(a, b), "normal mean-only defaults");
+        r1.normal(a, -2, 0); r2.normal(b, -2, 0);
+        for (auto x : a) t.require(x == -2, "normal array zero deviation");
+        t.require(r1.state == r2.state, "normal zero fill state");
         t.require(r1.normal(7) == r2.normal(7.0, 1.0), "normal scalar mean-only default");
-        r3.seed(seed_value);
-        auto x = r3.normal();
-        r4.normal(TestSpan{a}.first(1));
-        t.require(x == a[0] && r3.state == r4.state, "normal single element equals scalar");
-        r3.normal(TestSpan<double>{});
-        array<double, 0> empty{};
-        r3.normal(empty);
+        array<double, 1> one{};
+        auto x = r3.normal(); r4.normal(one);
+        t.require(x == one[0] && r3.state == r4.state, "normal single element equals scalar");
+        array<double, 0> empty{}; vector<double> empty_vector;
+        r3.normal(empty); r3.normal(empty_vector);
         t.require(r3.state == r4.state, "normal empty consumes no words");
     }
-    // 偶数位置での分割は同じ列、奇数長で終了した余りは次回へ保存しない
+    // 偶数個ずつなら列は一致し、奇数個の呼び出しでは余りを次回に保存しない
     for (auto seed_value = uint64_t{0}; seed_value < 64; ++seed_value) {
-        array<double, 32> a{}, b{}, c{};
+        array<double, 32> a{}, c{};
+        array<double, 16> first{}, second{};
+        array<double, 13> odd_first{}; array<double, 19> odd_second{};
         FastRng r1(seed_value), r2(seed_value), r3(seed_value);
-        r1.normal(a); r2.normal(TestSpan{b}.first(16)); r2.normal(TestSpan{b}.subspan(16));
-        t.require(a == b && r1.state == r2.state, "normal even split equivalence");
-        r3.normal(TestSpan{c}.first(13)); r3.normal(TestSpan{c}.subspan(13));
+        r1.normal(a); r2.normal(first); r2.normal(second);
+        t.require(equal(first.begin(), first.end(), a.begin()) && equal(second.begin(), second.end(), a.begin() + 16)
+                  && r1.state == r2.state, "normal even split equivalence");
+        r3.normal(odd_first); r3.normal(odd_second);
         t.require(r3.state != r1.state, "normal odd split discards spare");
         r3.seed(seed_value); r3.normal(c);
         t.require(a == c && r3.state == r1.state, "normal seed has no hidden cache");
@@ -1492,6 +1307,59 @@ void test_normal(Tester& t, mt19937_64& data) {
     test_normal_distribution(t, 128, 10.0, 2.0);
     test_normal_distribution(t, 257, -3.0, 0.25);
     cout << "Normal tests passed. checks = " << t.checks - before << '\n';
+}
+
+// 固定長 array の前後に番兵を置き、vector との全要素・状態の一致を比較する
+template<class T, size_t N>
+void check_native_array(Tester& t, uint64_t seed) {
+    struct Guarded {
+        array<uint64_t, 2> before{UINT64_MAX, UINT64_MAX};
+        array<T, N> values{};
+        array<uint64_t, 2> after{UINT64_MAX, UINT64_MAX};
+    } a;
+    vector<T> v(N);
+    FastRng first(seed), second(seed);
+    auto verify = [&] {
+        t.require(first.state == second.state, "native array state");
+        for (auto i = size_t{0}; i < N; ++i) {
+            if constexpr (is_same_v<T, double>) {
+                auto tolerance = 4 * numeric_limits<double>::epsilon() * max({1.0, abs(a.values[i]), abs(v[i])});
+                t.require(abs(a.values[i] - v[i]) <= tolerance, "native array double values");
+            } else t.require(a.values[i] == v[i], "native array integer values");
+        }
+        t.require(a.before[0] == UINT64_MAX && a.before[1] == UINT64_MAX &&
+                  a.after[0] == UINT64_MAX && a.after[1] == UINT64_MAX, "native array guard values");
+    };
+    first.uniform(a.values, 7); second.uniform(v, 7); verify();
+    first.uniform(a.values, 1, 7); second.uniform(v, 1, 7); verify();
+    if constexpr (is_same_v<T, double>) {
+        first.uniform(a.values); second.uniform(v); verify();
+        first.normal(a.values); second.normal(v); verify();
+        first.normal(a.values, 10, 2); second.normal(v, 10, 2); verify();
+        first.normal(a.values, -0.0, 0.0); second.normal(v, -0.0, 0.0); verify();
+        first.uniform_sum(a.values, 0); second.uniform_sum(v, 0); verify();
+        if constexpr (N > 0) { first.uniform_sum(a.values, 1); second.uniform_sum(v, 1); verify(); }
+    } else {
+        first.uniform_closed(a.values, 7); second.uniform_closed(v, 7); verify();
+        first.uniform_closed(a.values, 1, 7); second.uniform_closed(v, 1, 7); verify();
+        first.uniform_closed(a.values, numeric_limits<T>::min(), numeric_limits<T>::max());
+        second.uniform_closed(v, numeric_limits<T>::min(), numeric_limits<T>::max()); verify();
+        first.perm(a.values); second.perm(v); verify();
+        first.perm(a.values, 1); second.perm(v, 1); verify();
+    }
+}
+
+void test_native_arrays(Tester& t) {
+    test_each_type(tuple<int8_t, int, int64_t, uint64_t, double>{}, [&](auto type) {
+        using T = typename decltype(type)::type;
+        for (auto seed = uint64_t{0}; seed < 32; ++seed) {
+            check_native_array<T, 0>(t, seed);
+            check_native_array<T, 1>(t, seed);
+            check_native_array<T, 2>(t, seed);
+            check_native_array<T, 3>(t, seed);
+            check_native_array<T, 17>(t, seed);
+        }
+    });
 }
 
 // 全テストを実行する、検査は NDEBUG に依存せず有効
@@ -1534,7 +1402,7 @@ void run_tests() {
     test_delta_sequences(t);
     test_double(t, data);
     test_array_apis(t, data);
-    test_contiguous_array_views(t);
+    test_native_arrays(t);
     test_weighted(t, data);
     test_uniform_sum(t, data);
     test_normal(t, data);
@@ -1801,7 +1669,7 @@ template<class T, class F>
     FastRng rng(seed_value);
     auto start = chrono::steady_clock::now();
     for (auto run = uint64_t{0}; run < arrays; ++run) {
-        fn(rng, TestSpan{a}, run);
+        fn(rng, a, run);
         asm volatile("" : : "g"(a.data()) : "memory");
     }
     asm volatile("" : "+r"(rng.state) : : "memory");
@@ -1863,38 +1731,38 @@ void run_array_benchmark(uint64_t count, int repeat) {
          << setw(14) << "avg_ns/elem" << setw(22) << "worst_batch_ns/elem" << setw(23) << "checksum_xor" << '\n';
     for (auto size : {size_t{32}, size_t{1024}, size_t{65536}}) {
         array_benchmark_pair<int>("fill uniform<int>", "loop uniform<int>", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform(a, -1000, 1001); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform(-1000, 1001); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform(a, -1000, 1001); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform(-1000, 1001); });
         array_benchmark_pair<int>("fill closed<int>", "loop closed<int>", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform_closed(a, -1000, 1000); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform_closed(-1000, 1000); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform_closed(a, -1000, 1000); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform_closed(-1000, 1000); });
         array_benchmark_pair<int64_t>("fill closed<i64>", "loop closed<i64>", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform_closed(a, -1000000000000LL, 1000000000000LL); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform_closed<int64_t>(-1000000000000LL, 1000000000000LL); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform_closed(a, -1000000000000LL, 1000000000000LL); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform_closed<int64_t>(-1000000000000LL, 1000000000000LL); });
         array_benchmark_pair<uint64_t>("fill uniform<u64>", "loop uniform<u64>", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform(a, (1ULL << 63) + 12345); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform<uint64_t>((1ULL << 63) + 12345); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform(a, (1ULL << 63) + 12345); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform<uint64_t>((1ULL << 63) + 12345); });
         array_benchmark_pair<double>("fill uniform()", "loop uniform()", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform(a); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform(); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform(a); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform(); });
         array_benchmark_pair<double>("fill uniform<double>", "loop uniform<double>", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform(a, -3.5, 7.25); },
-            [](FastRng& rng, auto a, uint64_t) { for (auto& x : a) x = rng.uniform(-3.5, 7.25); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform(a, -3.5, 7.25); },
+            [](FastRng& rng, auto& a, uint64_t) { for (auto& x : a) x = rng.uniform(-3.5, 7.25); });
         array_benchmark_pair<int>("fill runtime bounds", "loop runtime bounds", size, count, repeat, true,
-            [](FastRng& rng, auto a, uint64_t run) { auto r = 1 + (int)(run % 2001); rng.uniform(a, -r, r); },
-            [](FastRng& rng, auto a, uint64_t run) { auto r = 1 + (int)(run % 2001); for (auto& x : a) x = rng.uniform(-r, r); });
+            [](FastRng& rng, auto& a, uint64_t run) { auto r = 1 + (int)(run % 2001); rng.uniform(a, -r, r); },
+            [](FastRng& rng, auto& a, uint64_t run) { auto r = 1 + (int)(run % 2001); for (auto& x : a) x = rng.uniform(-r, r); });
 
         // 1 パス方式と、連番の初期化後に後ろから交換する 2 パス方式を比較する
         array_benchmark_pair<int>("perm (1-pass)", "perm (2-pass)", size, count, repeat, false,
-            [](FastRng& rng, auto a, uint64_t) { rng.perm(a); },
-            [](FastRng& rng, auto a, uint64_t) {
+            [](FastRng& rng, auto& a, uint64_t) { rng.perm(a); },
+            [](FastRng& rng, auto& a, uint64_t) {
                 for (auto i = size_t{0}; i < a.size(); ++i) a[i] = (int)i;
                 for (auto n = a.size(); n > 1; --n) swap(a[n - 1], a[rng.uniform(n)]);
             });
         // 標準 shuffle は範囲縮小・乱数消費も異なるため、系列一致は要求しない
         array_benchmark_pair<int>("perm (1-pass)", "iota + std::shuffle", size, count, repeat, false,
-            [](FastRng& rng, auto a, uint64_t) { rng.perm(a); },
-            [](FastRng& rng, auto a, uint64_t) { iota(a.begin(), a.end(), 0); shuffle(a.begin(), a.end(), rng); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.perm(a); },
+            [](FastRng& rng, auto& a, uint64_t) { iota(a.begin(), a.end(), 0); shuffle(a.begin(), a.end(), rng); });
     }
 }
 
@@ -1907,11 +1775,11 @@ void run_sum_benchmark(uint64_t count, int repeat) {
     for (auto n : {size_t{2}, size_t{3}, size_t{4}, size_t{8}, size_t{16}, size_t{32},
                    size_t{128}, size_t{1024}, size_t{65536}}) {
         array_benchmark_pair<double>("uniform_sum", "exponential", n, count, repeat, n != 3,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform_sum(a, 100.0); },
-            [](FastRng& rng, auto a, uint64_t) { sum_exponential(rng, a, 100.0); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform_sum(a, 100.0); },
+            [](FastRng& rng, auto& a, uint64_t) { sum_exponential(rng, a, 100.0); });
         array_benchmark_pair<double>("uniform_sum", "sorted cuts", n, count, repeat, false,
-            [](FastRng& rng, auto a, uint64_t) { rng.uniform_sum(a, 100.0); },
-            [](FastRng& rng, auto a, uint64_t) { sum_sorted_cuts(rng, a, 100.0); });
+            [](FastRng& rng, auto& a, uint64_t) { rng.uniform_sum(a, 100.0); },
+            [](FastRng& rng, auto& a, uint64_t) { sum_sorted_cuts(rng, a, 100.0); });
     }
 }
 
@@ -1935,16 +1803,19 @@ void weighted_compare_rows(const array<const char*, sizeof...(F)>& labels, uint6
     auto functions = tuple{fn...};
     array<double, methods> sum{}, worst{};
     array<uint64_t, methods> checksum{};
-    auto run = [&]<size_t... I>(size_t choice, uint64_t seed_value, uint64_t ops, index_sequence<I...>) {
+    auto run = [&](size_t choice, uint64_t seed_value, uint64_t ops) {
         Sample result{};
-        ((choice == I ? (void)(result = measure<FastRng>(seed_value, ops, get<I>(functions))) : (void)0), ...);
+        auto index = size_t{0};
+        apply([&](auto&... f) {
+            ((choice == index++ ? (void)(result = measure<FastRng>(seed_value, ops, f)) : (void)0), ...);
+        }, functions);
         return result;
     };
-    for (auto m = size_t{0}; m < methods; ++m) run(m, 123, min(count, uint64_t{1000}), index_sequence_for<F...>{});
+    for (auto m = size_t{0}; m < methods; ++m) run(m, 123, min(count, uint64_t{1000}));
     for (auto rep = 0; rep < repeat; ++rep) {
         for (auto step = size_t{0}; step < methods; ++step) {
             auto m = (step + (size_t)rep) % methods;
-            auto result = run(m, 3100 + (uint64_t)rep, count, index_sequence_for<F...>{});
+            auto result = run(m, 3100 + (uint64_t)rep, count);
             sum[m] += result.ms;
             worst[m] = max(worst[m], result.ms);
             checksum[m] ^= result.checksum;
@@ -2000,8 +1871,8 @@ void run_normal_benchmark(uint64_t count, int repeat) {
          << setw(14) << "avg_ns/elem" << setw(22) << "worst_batch_ns/elem" << setw(23) << "checksum_xor" << '\n';
     for (auto n : {size_t{1}, size_t{2}, size_t{3}, size_t{32}, size_t{127}, size_t{1024}, size_t{65536}}) {
         array_benchmark_pair<double>("normal array", "std per array", n, count, repeat, false,
-            [](FastRng& rng, auto a, uint64_t) { rng.normal(a, 10.0, 2.0); },
-            [](FastRng& rng, auto a, uint64_t) {
+            [](FastRng& rng, auto& a, uint64_t) { rng.normal(a, 10.0, 2.0); },
+            [](FastRng& rng, auto& a, uint64_t) {
                 normal_distribution<double> dist(10.0, 2.0);
                 for (auto& x : a) x = dist(rng);
             });
@@ -2009,8 +1880,8 @@ void run_normal_benchmark(uint64_t count, int repeat) {
     cout << "\n=== Normal array with runtime parameters ===\n";
     for (auto n : {size_t{3}, size_t{32}, size_t{1024}}) {
         array_benchmark_pair<double>("normal runtime array", "std runtime per array", n, count, repeat, false,
-            [&](FastRng& rng, auto a, uint64_t i) { auto [mean, sd] = parameters[i & 255]; rng.normal(a, mean, sd); },
-            [&](FastRng& rng, auto a, uint64_t i) {
+            [&](FastRng& rng, auto& a, uint64_t i) { auto [mean, sd] = parameters[i & 255]; rng.normal(a, mean, sd); },
+            [&](FastRng& rng, auto& a, uint64_t i) {
                 auto [mean, sd] = parameters[i & 255];
                 normal_distribution<double> dist(mean, sd);
                 for (auto& x : a) x = dist(rng);
