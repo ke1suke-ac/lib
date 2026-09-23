@@ -24,6 +24,7 @@ struct Move {
     int r = -1;
     Cost delta = 0;
     Cost cost_before = 0;
+    bool applied = false; // 仮適用前の nullopt では巻き戻しを行わない。
 };
 
 // 差分更新のキャッシュを使わず、解から絶対コストを再計算する。
@@ -49,18 +50,20 @@ struct WorkState {
     Snapshot get_snapshot() const {
         return {solution};
     }
-    Cost propose(const sa::SaRuntime<Cost>& runtime) {
+    optional<Cost> propose(const sa::SaRuntime<Cost>& runtime) {
         (void)runtime;
         // temperature / progress() / best_cost は今回の内部 SA の値（個体の全履歴ではない）。
         pending_move = {};
         pending_move.cost_before = cost;
         // TODO: 近傍を選び、操作と delta = 提案後 - 提案前、および巻き戻し情報を保存する。
-        // TODO: 解とキャッシュへ仮適用する。操作できなければ delta=0 の無操作にする。
+        if (pending_move.l < 0) return nullopt; // TODO: 自分の操作の有効性判定に置き換える。
+        pending_move.applied = true;
+        // TODO: 解とキャッシュへ仮適用する。仮適用後の nullopt も finalize(false) で戻せるようにする。
         cost += pending_move.delta;
         return pending_move.delta;
     }
     void finalize(bool accepted) {
-        if (accepted) return; // 仮適用済みなので、そのまま確定。
+        if (accepted || !pending_move.applied) return; // 受理は確定、未変更の棄却は何もしない。
         // TODO: 解とキャッシュを提案前へ戻す。事前採取では常にここを通る。
         // 近傍生成用の乱数列は巻き戻さない。
         cost = pending_move.cost_before;
@@ -119,7 +122,7 @@ Snapshot solve(const Input& input, double time_limit_ms, int initial_state_count
     auto get_cost = [](const WorkState& state) -> Cost {
         return compute_cost(*state.input, state.solution); // 独立した再評価で、仮適用・巻き戻しを検証する。
     };
-    auto propose = [](WorkState& state, const sa::SaRuntime<Cost>& runtime) -> Cost { return state.propose(runtime); };
+    auto propose = [](WorkState& state, const sa::SaRuntime<Cost>& runtime) -> optional<Cost> { return state.propose(runtime); };
     auto finalize = [](WorkState& state, bool accepted) -> void { state.finalize(accepted); };
 
 #ifdef LOCAL
@@ -137,7 +140,7 @@ Snapshot solve(const Input& input, double time_limit_ms, int initial_state_count
             param, remaining_ms(),
             [&]() -> Snapshot { return get_snapshot(state); },
             [&]() -> Cost { return get_cost(state); },
-            [&](const sa::SaRuntime<Cost>& runtime) -> Cost { return propose(state, runtime); },
+            [&](const sa::SaRuntime<Cost>& runtime) -> optional<Cost> { return propose(state, runtime); },
             [&](bool accepted) -> void { finalize(state, accepted); },
             existing_best_cost, ref(temperature_csv));
         return move(*result.best_snapshot); // 保存基準を指定していないので必ず存在する。

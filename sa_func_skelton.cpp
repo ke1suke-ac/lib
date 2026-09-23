@@ -74,16 +74,17 @@ int main() {
     };
 
     // delta = 提案後コスト - 提案前コスト。負なら改善。ここでは状態を変えない。
-    auto propose = [&](const sa::SaRuntime<Cost>& runtime) -> Cost {
+    auto propose = [&](const sa::SaRuntime<Cost>& runtime) -> optional<Cost> {
         (void)runtime;
         // temperature / current_cost / best_cost / progress() を参照できる。
         pending_move = {};
         // TODO: rng で近傍を選び、pending_move に操作と delta を保存する。
-        // 操作できないときは delta=0 の無操作にする。事前採取中も呼ばれる。
+        // 操作できないときは nullopt（0 は棄却でなく同値受理）。事前採取中も呼ばれる。
+        if (pending_move.l < 0) return nullopt; // TODO: 自分の操作の有効性判定に置き換える。
         return pending_move.delta;
     };
     auto finalize = [&](bool accepted) -> void {
-        if (!accepted) return; // 事前採取では常に false。
+        if (!accepted) return; // nullopt と事前採取も false。ここでは未変更なので何もしない。
         // TODO: pending_move を解とキャッシュへ適用する。無操作の場合は何も変えない。
         cur_cost += pending_move.delta;
     };

@@ -85,7 +85,7 @@ struct SaParam {
 // propose / DebugHook が参照する統計。コスト・回数はこの 1 回の SA 内の値。
 template<Numeric Cost>
 struct SaRuntime {
-    int iteration = 0;                    // 本探索は 1 始まり。事前採取中と RunStart は 0
+    int iteration = 0;                    // 本探索の提案数（nullopt を含む）、1 始まり。事前採取中は 0
     double temperature = 0.0;            // 現在温度
 
     Cost current_cost{};                 // 現在コスト
@@ -96,6 +96,7 @@ struct SaRuntime {
 
     int accepted_count = 0;              // 改善・同値・悪化を合わせた受理回数
     int worse_accepted_count = 0;        // 悪化受理回数
+    int propose_rejected_count = 0;      // 本探索で nullopt が返った回数。SA 棄却数 = iteration - accepted_count - この値
 
     int64_t elapsed_us = 0;              // 開始からの経過 μs。本探索は 32 反復ごとに更新、事前採取中は 0
     int64_t elapsed_us_at_last_best = 0; // 最後に best 更新された時刻（μs）
@@ -103,6 +104,7 @@ struct SaRuntime {
     bool best_updated_this_iter = false;   // IterationEnd で今回の最良更新を確認できる
     bool accepted_this_iter = false;       // IterationEnd で今回の受理を確認できる
     bool worse_accepted_this_iter = false; // IterationEnd で今回の悪化受理を確認できる
+    bool propose_rejected_this_iter = false; // IterationEnd で今回の nullopt 棄却を確認できる
 
     int64_t time_limit_us = 0;           // SA 開始時に一度だけ設定する時間予算（μs）
 
@@ -137,16 +139,34 @@ struct NoOp {
 
 namespace detail {
 
-// Propose 呼び出し補助
-// () -> Cost と (const SaRuntime<Cost>&) -> Cost の両方を受ける。
-template<Numeric Cost, class Propose>
-inline Cost call_propose(Propose& propose, const SaRuntime<Cost>& runtime) {
-    if constexpr (is_invocable_r_v<Cost, Propose&, const SaRuntime<Cost>&>) {
-        return propose(runtime);
+// 数値を返す既存コールバックは Cost のまま扱い、optional 用の実行時分岐を加えない。
+template<Numeric Cost, class Propose, class... Args>
+inline auto invoke_propose(Propose& propose, Args&&... args) {
+    if constexpr (is_invocable_r_v<Cost, Propose&, Args...>) {
+        return static_cast<Cost>(propose(forward<Args>(args)...));
     } else {
-        static_assert(is_invocable_r_v<Cost, Propose&>, "Propose must return Cost with no argument or const SaRuntime<Cost>&");
-        return propose();
+        static_assert(is_invocable_r_v<optional<Cost>, Propose&, Args...>, "Propose must return Cost or optional<Cost>");
+        return optional<Cost>(propose(forward<Args>(args)...));
     }
+}
+
+// Runtime 付き優先。sa_pop では args に個体を渡す。
+template<Numeric Cost, class Propose, class... Args>
+inline auto call_propose(Propose& propose, const SaRuntime<Cost>& runtime, Args&... args) {
+    if constexpr (is_invocable_r_v<Cost, Propose&, Args&..., const SaRuntime<Cost>&> ||
+                  is_invocable_r_v<optional<Cost>, Propose&, Args&..., const SaRuntime<Cost>&>)
+        return invoke_propose<Cost>(propose, args..., runtime);
+    else return invoke_propose<Cost>(propose, args...);
+}
+
+template<Numeric Cost>
+inline bool unpack_delta(Cost value, Cost& delta) { delta = value; return true; }
+
+template<Numeric Cost>
+inline bool unpack_delta(const optional<Cost>& value, Cost& delta) {
+    if (!value) return false;
+    delta = *value;
+    return true;
 }
 
 // Hook 呼び出し補助
@@ -236,6 +256,7 @@ struct SaCsvStatHook {
         int accepted_count = 0;
         int worse_accepted_count = 0;
         int best_update_count = 0;
+        int propose_rejected_count = 0;
 
         double period_ms = 0.0;
         int period_iterations = 0;
@@ -245,6 +266,9 @@ struct SaCsvStatHook {
         double accept_rate = 0.0;       // 区間の受理回数 / 区間の全反復数
         double worse_accept_rate = 0.0; // 区間の悪化受理回数 / 区間の全反復数
         double iter_per_sec = 0.0;
+        int period_propose_rejected = 0;
+        int period_sa_rejected = 0;
+        double valid_accept_rate = 0.0; // 区間の受理回数 / nullopt を除く区間の提案数（分母 0 は 0）
     };
 
     string filename;
@@ -298,6 +322,7 @@ private:
         row.accepted_count = runtime.accepted_count;
         row.worse_accepted_count = runtime.worse_accepted_count;
         row.best_update_count = runtime.best_update_count;
+        row.propose_rejected_count = runtime.propose_rejected_count;
 
         // 直前の記録との差から区間統計を計算する（受理率の分母は区間反復数）
         if (!rows.empty()) {
@@ -307,6 +332,10 @@ private:
             row.period_accepted = row.accepted_count - prev.accepted_count;
             row.period_worse_accepted = row.worse_accepted_count - prev.worse_accepted_count;
             row.period_best_updates = row.best_update_count - prev.best_update_count;
+            row.period_propose_rejected = row.propose_rejected_count - prev.propose_rejected_count;
+            const int valid = row.period_iterations - row.period_propose_rejected;
+            row.period_sa_rejected = valid - row.period_accepted;
+            if (valid > 0) row.valid_accept_rate = static_cast<double>(row.period_accepted) / valid;
             if (row.period_iterations > 0) {
                 row.accept_rate = static_cast<double>(row.period_accepted) / row.period_iterations;
                 row.worse_accept_rate = static_cast<double>(row.period_worse_accepted) / row.period_iterations;
@@ -328,7 +357,8 @@ private:
         }
         // スナップショットと区間統計を同じ行に出力する
         ofs << "elapsed_ms,iteration,temperature,current_cost,best_cost,accepted_count,worse_accepted_count,best_update_count,";
-        ofs << "period_ms,period_iterations,period_accepted,period_worse_accepted,period_best_updates,accept_rate,worse_accept_rate,iter_per_sec\n";
+        ofs << "period_ms,period_iterations,period_accepted,period_worse_accepted,period_best_updates,accept_rate,worse_accept_rate,iter_per_sec,";
+        ofs << "propose_rejected_count,sa_rejected_count,period_propose_rejected,period_sa_rejected,valid_accept_rate\n";
         ofs << fixed << setprecision(6);
         for (const Row& row : rows) {
             ofs << row.elapsed_ms << ','
@@ -346,7 +376,10 @@ private:
                 << row.period_best_updates << ','
                 << row.accept_rate << ','
                 << row.worse_accept_rate << ','
-                << row.iter_per_sec << '\n';
+                << row.iter_per_sec << ','
+                << row.propose_rejected_count << ','
+                << row.iteration - row.accepted_count - row.propose_rejected_count << ','
+                << row.period_propose_rejected << ',' << row.period_sa_rejected << ',' << row.valid_accept_rate << '\n';
         }
         // バッファを確実に書き出してから、容量不足などの書き込み失敗を確認する
         ofs.close();
@@ -371,8 +404,10 @@ struct SaResult {
 //   get_snapshot(const SaRuntime<Cost>&) も可。両方あれば引数なしを優先。
 //   Runtime 付きではコストのみ更新済み、反復統計の後処理前。初期保存時はコスト以外が既定値。
 // get_cost() -> Cost: 現在の絶対コスト。初期時と LOCAL の終了検証時に呼ぶ。
-// propose([const SaRuntime<Cost>&]) -> Cost: 提案後 - 提案前の差分。両方あれば Runtime 付きを優先。
-// finalize(bool accepted): 受理なら提案を確定、棄却なら提案前の状態にする。事前採取は必ず false。
+// propose([const SaRuntime<Cost>&]) -> Cost または optional<Cost>: 提案後 - 提案前。Runtime 付き優先。
+//   nullopt は強制棄却（受理乱数・温度標本には不使用）。0 は同値の有効提案として受理する。
+// finalize(bool accepted): 各提案に必ず 1 回。受理なら確定、棄却なら提案前へ戻す。事前採取は false。
+//   nullopt でも false で呼ぶ。未変更なら何もしないよう、提案ごとに巻き戻し情報を初期化する。
 // existing_best_cost: マルチスタートの全体ベスト等。これを厳密に改善する Snapshot だけ保存する。
 //   省略時は必ず保存。保存基準は受理判定に影響しない。戻り値は SaResult を参照。
 // DebugHook(event, runtime): LOCAL のみ通知。コールバックは値渡し（必要なら std::ref を使う）。
@@ -443,8 +478,10 @@ SaResult<Snapshot, Cost> sa(
 
         for (int sample_id = 0; sample_id < param.samples; ++sample_id) {
             if ((sample_id & 31) == 0 && elapsed_now_us() >= limit_us) break;
-            const double delta = detail::to_double(detail::call_propose<Cost>(propose, runtime));
-            if (delta > 0.0 && isfinite(delta)) {
+            Cost proposed_delta{};
+            const bool valid = detail::unpack_delta(detail::call_propose<Cost>(propose, runtime), proposed_delta);
+            const double delta = detail::to_double(proposed_delta);
+            if (valid && delta > 0.0 && isfinite(delta)) {
                 // 正の値の逐次平均なら、総和が double の上限を超える場合も扱える
                 avg_worse_delta += (delta - avg_worse_delta) / static_cast<double>(++worse_count);
             }
@@ -513,10 +550,19 @@ SaResult<Snapshot, Cost> sa(
         runtime.best_updated_this_iter = false;
         runtime.accepted_this_iter = false;
         runtime.worse_accepted_this_iter = false;
+        runtime.propose_rejected_this_iter = false;
 
         detail::call_debug_hook(debug_hook, SaEventType::IterationStart, runtime);
 
-        const Cost delta = detail::call_propose<Cost>(propose, runtime);
+        Cost proposed_delta{};
+        if (!detail::unpack_delta(detail::call_propose<Cost>(propose, runtime), proposed_delta)) {
+            ++runtime.propose_rejected_count;
+            runtime.propose_rejected_this_iter = true;
+            finalize(false);
+            detail::call_debug_hook(debug_hook, SaEventType::IterationEnd, runtime);
+            continue;
+        }
+        const Cost delta = proposed_delta;
 #ifdef LOCAL
         if (param.enable_temperature_report) temperature_report.add(detail::to_double(delta), runtime.progress());
 #endif

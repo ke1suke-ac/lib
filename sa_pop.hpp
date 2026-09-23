@@ -150,17 +150,6 @@ inline Snapshot call_sa_pop_get_snapshot(GetSnapshot& get_snapshot, WorkState& s
     }
 }
 
-template<Numeric Cost, class Propose, class WorkState>
-inline Cost call_sa_pop_propose(Propose& propose, WorkState& state, const SaRuntime<Cost>& runtime) {
-    if constexpr (is_invocable_r_v<Cost, Propose, WorkState&, const SaRuntime<Cost>&>) {
-        return propose(state, runtime);
-    } else if constexpr (is_invocable_r_v<Cost, Propose, WorkState&>) {
-        return propose(state);
-    } else {
-        static_assert(sa_pop_always_false_v<Propose>, "Propose must be callable as Cost(WorkState&) or Cost(WorkState&, const SaRuntime<Cost>&)");
-    }
-}
-
 template<class Finalize, class WorkState>
 inline void call_sa_pop_finalize(Finalize& finalize, WorkState& state, bool accepted) {
     if constexpr (is_invocable_v<Finalize, WorkState&, bool>) {
@@ -281,6 +270,7 @@ private:
         int accepted_count = 0;
         int worse_accepted_count = 0;
         int best_update_count = 0;
+        int propose_rejected_count = 0;
     };
 
     struct PhaseRow {
@@ -306,6 +296,7 @@ private:
         int64_t total_accepted_count = 0;
         int64_t total_worse_accepted_count = 0;
         int64_t total_best_update_count = 0;
+        int64_t total_propose_rejected_count = 0;
         double accept_rate = 0.0;
         double worse_accept_rate = 0.0;
     };
@@ -334,6 +325,9 @@ private:
         double final_elapsed_ms = 0.0;
         int final_iterations = 0;
         Cost final_best_cost{};
+        int64_t total_iterations = 0;
+        int64_t total_accepted_count = 0;
+        int64_t total_propose_rejected_count = 0;
     };
 
     struct PhaseAgg {
@@ -386,6 +380,7 @@ private:
         row.accepted_count = rt.inner_runtime.accepted_count;
         row.worse_accepted_count = rt.inner_runtime.worse_accepted_count;
         row.best_update_count = rt.inner_runtime.best_update_count;
+        row.propose_rejected_count = rt.inner_runtime.propose_rejected_count;
         return row;
     }
 
@@ -442,6 +437,7 @@ private:
 
     void on_state_run_end(const SaPopRuntime<Cost>& rt) {
         TraceRow row = make_trace_row(rt);
+        add_summary_counts(rt.inner_runtime);
         if (0 <= rt.state_id && rt.state_id < 256) {
             pending_index_by_state_[rt.state_id] = static_cast<int>(pending_trace_rows_.size());
         }
@@ -453,6 +449,7 @@ private:
         pr.total_accepted_count += rt.inner_runtime.accepted_count;
         pr.total_worse_accepted_count += rt.inner_runtime.worse_accepted_count;
         pr.total_best_update_count += rt.inner_runtime.best_update_count;
+        pr.total_propose_rejected_count += rt.inner_runtime.propose_rejected_count;
 
         if (!phase_agg_.best_initialized) {
             pr.best_lifetime_cost = rt.lifetime_best_cost_after;
@@ -511,6 +508,7 @@ private:
 
     void on_final_run_end(const SaPopRuntime<Cost>& rt) {
         trace_rows_.push_back(make_trace_row(rt));
+        add_summary_counts(rt.inner_runtime);
         summary_.final_state_id = rt.final_state_id;
         summary_.final_start_temp = rt.final_start_temp;
         summary_.final_end_temp = rt.final_end_temp;
@@ -518,6 +516,16 @@ private:
         summary_.final_elapsed_ms = ms_from_us(rt.inner_elapsed_us);
         summary_.final_iterations = rt.inner_runtime.iteration;
         summary_.final_best_cost = rt.final_best_cost;
+    }
+
+    void add_summary_counts(const SaRuntime<Cost>& rt) {
+        summary_.total_iterations += rt.iteration;
+        summary_.total_accepted_count += rt.accepted_count;
+        summary_.total_propose_rejected_count += rt.propose_rejected_count;
+    }
+
+    static double valid_accept_rate(int64_t iterations, int64_t accepted, int64_t rejected) {
+        return iterations > rejected ? static_cast<double>(accepted) / (iterations - rejected) : 0.0;
     }
 
     void on_run_end(const SaPopRuntime<Cost>& rt) {
@@ -543,7 +551,8 @@ private:
         ofs << "stage,elapsed_ms,phase,phase_count,active_state_count,next_active_state_count,state_order,state_id,rank,survived,";
         ofs << "inner_time_limit_ms,inner_elapsed_ms,inner_iterations,temp_progress_begin,temp_progress_end,inner_start_temp,inner_end_temp,";
         ofs << "current_cost_before,current_cost_after,run_best_cost,lifetime_best_cost_before,lifetime_best_cost_after,";
-        ofs << "selection_key,selection_cutoff_key,accepted_count,worse_accepted_count,best_update_count\n";
+        ofs << "selection_key,selection_cutoff_key,accepted_count,worse_accepted_count,best_update_count,";
+        ofs << "propose_rejected_count,sa_rejected_count,valid_accept_rate\n";
         ofs << fixed << setprecision(9);
         for (const TraceRow& r : trace_rows_) {
             ofs << r.stage << ',' << r.elapsed_ms << ',' << r.phase << ',' << r.phase_count << ','
@@ -553,7 +562,9 @@ private:
                 << r.current_cost_before << ',' << r.current_cost_after << ',' << r.run_best_cost << ','
                 << r.lifetime_best_cost_before << ',' << r.lifetime_best_cost_after << ','
                 << r.selection_key << ',' << r.selection_cutoff_key << ','
-                << r.accepted_count << ',' << r.worse_accepted_count << ',' << r.best_update_count << '\n';
+                << r.accepted_count << ',' << r.worse_accepted_count << ',' << r.best_update_count << ','
+                << r.propose_rejected_count << ',' << r.inner_iterations - r.accepted_count - r.propose_rejected_count << ','
+                << valid_accept_rate(r.inner_iterations, r.accepted_count, r.propose_rejected_count) << '\n';
         }
     }
 
@@ -566,7 +577,8 @@ private:
         ofs << "elapsed_ms,phase,phase_count,active_state_count,next_active_state_count,phase_weight,total_phase_weight,";
         ofs << "temp_progress_begin,temp_progress_end,inner_start_temp,inner_end_temp,phase_time_limit_ms,phase_elapsed_ms,";
         ofs << "best_lifetime_cost,best_current_cost,selection_cutoff_key,survivor_best_lifetime_cost,survivor_worst_lifetime_cost,";
-        ofs << "total_iterations,total_accepted_count,total_worse_accepted_count,total_best_update_count,accept_rate,worse_accept_rate\n";
+        ofs << "total_iterations,total_accepted_count,total_worse_accepted_count,total_best_update_count,accept_rate,worse_accept_rate,";
+        ofs << "total_propose_rejected_count,total_sa_rejected_count,valid_accept_rate\n";
         ofs << fixed << setprecision(9);
         for (const PhaseRow& r : phase_rows_) {
             ofs << r.elapsed_ms << ',' << r.phase << ',' << r.phase_count << ',' << r.active_state_count << ',' << r.next_active_state_count << ','
@@ -575,7 +587,9 @@ private:
                 << r.best_lifetime_cost << ',' << r.best_current_cost << ',' << r.selection_cutoff_key << ','
                 << r.survivor_best_lifetime_cost << ',' << r.survivor_worst_lifetime_cost << ','
                 << r.total_iterations << ',' << r.total_accepted_count << ',' << r.total_worse_accepted_count << ','
-                << r.total_best_update_count << ',' << r.accept_rate << ',' << r.worse_accept_rate << '\n';
+                << r.total_best_update_count << ',' << r.accept_rate << ',' << r.worse_accept_rate << ','
+                << r.total_propose_rejected_count << ',' << r.total_iterations - r.total_accepted_count - r.total_propose_rejected_count << ','
+                << valid_accept_rate(r.total_iterations, r.total_accepted_count, r.total_propose_rejected_count) << '\n';
         }
     }
 
@@ -588,7 +602,8 @@ private:
         ofs << "time_limit_ms,elapsed_ms,selection_time_ratio,selection_policy,selection_current_weight,initial_state_count,phase_count,seed,";
         ofs << "auto_mode,auto_per_state_samples,auto_total_samples,auto_worse_count,auto_avg_worse_delta,auto_fallback,";
         ofs << "global_start_temp,global_end_temp,final_state_id,final_start_temp,final_end_temp,";
-        ofs << "final_time_limit_ms,final_elapsed_ms,final_iterations,final_best_cost\n";
+        ofs << "final_time_limit_ms,final_elapsed_ms,final_iterations,final_best_cost,";
+        ofs << "total_iterations,total_accepted_count,total_propose_rejected_count,total_sa_rejected_count,valid_accept_rate\n";
         ofs << fixed << setprecision(9);
         const SummaryRow& r = summary_;
         ofs << r.time_limit_ms << ',' << r.elapsed_ms << ',' << r.selection_time_ratio << ','
@@ -597,7 +612,10 @@ private:
             << r.auto_total_samples << ',' << r.auto_worse_count << ',' << r.auto_avg_worse_delta << ',' << r.auto_fallback << ','
             << r.global_start_temp << ',' << r.global_end_temp << ',' << r.final_state_id << ',' << r.final_start_temp << ','
             << r.final_end_temp << ',' << r.final_time_limit_ms << ',' << r.final_elapsed_ms << ','
-            << r.final_iterations << ',' << r.final_best_cost << '\n';
+            << r.final_iterations << ',' << r.final_best_cost << ','
+            << r.total_iterations << ',' << r.total_accepted_count << ',' << r.total_propose_rejected_count << ','
+            << r.total_iterations - r.total_accepted_count - r.total_propose_rejected_count << ','
+            << valid_accept_rate(r.total_iterations, r.total_accepted_count, r.total_propose_rejected_count) << '\n';
     }
 #else
     explicit SaPopCsvStatHook(string = "sa_pop_") {}
@@ -610,7 +628,9 @@ private:
 // get_snapshot(state) -> Snapshot: 全体最良の初期解と、全体最良の更新時だけ呼ぶ。
 //   Snapshot は探索状態から独立した、コピー構築・代入が可能な値型（WorkState と同じ型でも可）。
 // get_cost(state) -> Cost: 現在の絶対コスト。各個体の評価や内部 SA の開始・終了時などに呼ぶ。
-// propose(state[, const SaRuntime<Cost>&]) -> Cost: 提案後 - 提案前の差分。Runtime 付きを優先。
+// propose(state[, const SaRuntime<Cost>&]) -> Cost または optional<Cost>: 提案後 - 提案前。Runtime 付き優先。
+//   nullopt は強制棄却。finalize(state, false) で巻き戻す。0 は同値の有効提案として受理する。
+//   各内部 SA の propose_rejected_count に集計し、温度推定には使わない（事前採取は回数に含めない）。
 // finalize(state, bool accepted): 受理なら確定、棄却なら提案前に戻す。finalize(bool) も可。
 // 事前採取は各個体に ceil(samples/K) 回を予定し、必ず finalize(false)。合計数は切り上がる。
 // Runtime 付き propose の progress() / best_cost は各内部 SA の値（全体進捗・個体の過去最良ではない）。
@@ -783,9 +803,10 @@ pair<Cost, Snapshot> sa_pop(
             sample_runtime.best_cost = current_costs[i];
             for (int t = 0; t < auto_per_state_samples; ++t) {
                 if ((auto_total_samples & 31) == 0 && elapsed_us_now() >= total_us) break;
-                const Cost delta = detail::call_sa_pop_propose<Cost>(propose, work_states[i], sample_runtime);
+                Cost delta{};
+                const bool valid = detail::unpack_delta(detail::call_propose<Cost>(propose, sample_runtime, work_states[i]), delta);
                 const double value = detail::to_double(delta);
-                if (value > 0.0 && isfinite(value)) {
+                if (valid && value > 0.0 && isfinite(value)) {
                     mean_worse_delta += (value - mean_worse_delta) / static_cast<double>(++auto_worse_count);
                 }
                 detail::call_sa_pop_finalize(finalize, work_states[i], false);
@@ -923,7 +944,7 @@ pair<Cost, Snapshot> sa_pop(
                     slice_ms,
                     save_best(id),
                     [&]() -> Cost { return detail::call_sa_pop_get_cost<Cost>(get_cost, work_states[id]); },
-                    [&](const SaRuntime<Cost>& inner_rt) -> Cost { return detail::call_sa_pop_propose<Cost>(propose, work_states[id], inner_rt); },
+                    [&](const SaRuntime<Cost>& inner_rt) { return detail::call_propose<Cost>(propose, inner_rt, work_states[id]); },
                     [&](bool accepted) { detail::call_sa_pop_finalize(finalize, work_states[id], accepted); },
                     global_best_cost,
                     inner_hook);
@@ -1084,7 +1105,7 @@ pair<Cost, Snapshot> sa_pop(
         final_budget_ms,
         save_best(final_state_id),
         [&]() -> Cost { return detail::call_sa_pop_get_cost<Cost>(get_cost, work_states[final_state_id]); },
-        [&](const SaRuntime<Cost>& inner_rt) -> Cost { return detail::call_sa_pop_propose<Cost>(propose, work_states[final_state_id], inner_rt); },
+        [&](const SaRuntime<Cost>& inner_rt) { return detail::call_propose<Cost>(propose, inner_rt, work_states[final_state_id]); },
         [&](bool accepted) { detail::call_sa_pop_finalize(finalize, work_states[final_state_id], accepted); },
         global_best_cost,
         final_inner_hook);

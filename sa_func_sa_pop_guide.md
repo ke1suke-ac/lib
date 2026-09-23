@@ -65,7 +65,7 @@ $S(x)$ が大きいほど $C(x)$ は小さくなるので、求める解は同�
 |---|---|---|---|
 | `get_snapshot` | `Snapshot()` | `Snapshot(const State&)` | 現在の解を保存用の値へ変換する |
 | `get_cost` | `Cost()` | `Cost(const State&)` | 現在の解全体の絶対costを返す |
-| `propose` | `Cost()` | `Cost(State&)` | 変更案を1つ作り、costの差分を返す |
+| `propose` | `Cost()` または `optional<Cost>()` | `Cost(State&)` または `optional<Cost>(State&)` | 差分を返す。`nullopt` は強制棄却 |
 | `finalize` | `void(bool accepted)` | `void(State&, bool accepted)` | 採否を反映し、状態を確定する |
 
 `Cost` は、costとその差分を表す数値型である。整数なら `long long`、小数なら `double` が分かりやすい。改善する差分は負になるので、整数の `Cost` は符号付き型が必須である。
@@ -86,13 +86,16 @@ $S(x)$ が大きいほど $C(x)$ は小さくなるので、求める解は同�
 
 $$\Delta=C(y)-C(x)$$
 
-$\Delta$ は「変更後−変更前」のcost差分。`Cost`型で返す。
+$\Delta$ は「変更後−変更前」のcost差分。常に有効な案を作れるなら `Cost` 型で返せばよい。制約違反などで案を棄却したいなら、戻り値を `optional<Cost>` にする。これは「差分の値がある／ない」を表す型で、値なしの `nullopt` を返すと必ず棄却される。
 
 | 変更前→変更後 | 返す差分 | 意味 |
 |---|---:|---|
 | 100→93 | −7 | 改善 |
 | 100→100 | 0 | 同じcost |
 | 100→108 | +8 | 悪化 |
+| 制約違反・操作を作れない | `nullopt` | 強制棄却。`finalize(false)` を呼ぶ |
+
+`0` と `nullopt` は異なる。差分0は「costが同じ有効な変更」であり、SAは受理する。`nullopt` は受理判定へ進まず、受理用の乱数も使わない。値を返す場合は、`return delta;` と書けば `optional` へ変換される。ラムダには `-> optional<Cost>` を明示する。`get_cost` の戻り値は `Cost` のままである。
 
 毎回解全体を再評価して差を取ることもできる。しかし、変更によって影響する部分だけを計算すれば、通常は多くの変更案を試せる。第4章では「移動元と移動先の2機械だけ」「巡回路の境界4点だけ」「反転する頂点につながる辺だけ」を使って差分を求める。
 
@@ -114,7 +117,7 @@ $\Delta$ は「変更後−変更前」のcost差分。`Cost`型で返す。
 
 **温度自動推定中も `propose` と `finalize(false)` が呼ばれる。** そのため「falseは来ないだろう」という実装はできない。乱数生成器は巻き戻さなくてよい。解の意味を持つ部分を元に戻し、次回には新しい変更案が出るようにする。
 
-制約を満たす変更が作れなかった場合は、状態を変えずに差分0の無操作を返す方法が簡単である。この場合 `finalize(true)` が来ても何もしないよう、変更内容を初期化しておく。正の巨大値だけ返して「必ず却下される」と期待する設計は避ける。
+**`nullopt` でも `finalize(false)` は必ず1回呼ばれる。** 仮適用後に制約違反が分かったなら、そこで元に戻す。変更前に `nullopt` を返すなら、`finalize(false)` が何もしないようにする。毎回、変更内容と「仮適用したか」のフラグを初期化すれば、前回の操作を誤って巻き戻す事故を防げる。正の巨大値やNaNを「必ず棄却する」印にしない。
 
 ### 2.6 get_snapshot：呼ばれるときだけ保存する
 
@@ -131,14 +134,18 @@ $\Delta$ は「変更後−変更前」のcost差分。`Cost`型で返す。
 | `temperature` | 現在温度。近傍の大きさを変える参考にできる |
 | `current_cost` | 提案直前の現在cost |
 | `best_cost` | 今回のSA呼び出しで見つけた最良cost |
-| `iteration` | 探索本体では1始まり。温度推定中は0 |
+| `iteration` | `nullopt` を含む本探索の提案数。1始まり、温度推定中は0 |
 | `progress()` | そのSAの時間予算に対する消費率。0〜1 |
 | `accepted_count`、`worse_accepted_count` | 受理回数、悪化を受理した回数 |
+| `propose_rejected_count` | 本探索で `nullopt` が返った回数。初期温度推定の棄却は含めない |
+| `propose_rejected_this_iter` | `IterationEnd` で今回の `nullopt` 棄却を確認する。提案前にはfalse |
 | `best_update_count` | そのSAの最良cost更新回数。Snapshot保存回数とは限らない |
 | `elapsed_us`、`time_limit_us` | 経過時間と予算。単位はマイクロ秒 |
 | `last_best_update_iter`、`elapsed_us_since_last_best()` | 最後に最良を更新した反復番号と、その更新からの経過時間 |
 
 runtimeは読み取り専用で、ライブラリが管理する。`progress()` は時計を新たに読まず、探索中は原則32反復ごとに更新された時刻を使う。温度推定中は正の予算があれば0である。
+
+反復完了時（`IterationEnd`、`RunEnd`）の全棄却数は `iteration - accepted_count`、そのうちSAの温度・幅・独自受理規則による棄却数は `iteration - accepted_count - propose_rejected_count` で求められる。本探索の `propose` 内では今回の採否が未確定なので、完了済み提案数には `iteration - 1` を使う。`iteration=0` の事前採取は別扱いとする。`nullopt` でも反復と時間確認は進むので、操作を作れない状態が続いても時間制限で終了する。
 
 sa_popの `propose` に渡るruntimeも **その時点の内部SA** の情報であり、全体の進捗ではない。内部SAが始まるたびに反復番号やローカル最良costも初期化される。外側の全体進捗と取り違えて近傍を設計しない。
 
@@ -242,7 +249,7 @@ API上はどの非負の有限値も指定できる。最初から多数の細�
 
 ### 3.4 自動温度で何が決まるか
 
-`auto_mode=true`、`samples>0`なら、初期状態から作った変更案のうち、有限な正の差分を集める。これらの平均を $D$ とする。改善案や差分0は、この平均に含まれない。
+`auto_mode=true`、`samples>0`なら、初期状態から作った変更案のうち、有限な正の差分を集める。これらの平均を $D$ とする。改善案、差分0、`nullopt` は、この平均に含まれない。
 
 初期受理率の基準を $p_ {s}$、終端受理率の基準を $p_ {e}$、終端温度の倍率を $\alpha$ とすると、次の温度を使う。
 
@@ -256,7 +263,7 @@ sa_funcでは $\alpha=0.1$ が固定。sa_popでは `population.auto_end_temp_sc
 
 `start_accept_prob=0.8` は探索全体の受理率80%を保証する設定ではない。差分の大きさが案ごとに異なり、受理幅でも絞るためである。`end_accept_prob=0.01` も、実測の終端受理率が1%になるという意味ではない。終端にはさらに0.1などの倍率が掛かる。
 
-sa_funcは最大 `samples` 回の提案を使う。sa_popではK個体に `ceil(samples/K)` 回ずつ配るので、例えば300サンプル・8個体なら38回ずつ、合計304回となる。時間切れなら途中で止まる。推定はsa_pop全体で1回であり、個体ごとに別々の温度を推定するわけではない。
+sa_funcは最大 `samples` 回の提案を使う。`nullopt` もこの試行回数を1回消費し、有効標本が集まるまで無制限に引き直すことはしない。sa_popではK個体に `ceil(samples/K)` 回ずつ配るので、例えば300サンプル・8個体なら38回ずつ、合計304回となる。時間切れなら途中で止まる。推定はsa_pop全体で1回であり、個体ごとに別々の温度を推定するわけではない。
 
 正の有効な差分が1つもない、または推定温度が非有限／0以下になる場合は、`start_temp` と `end_temp` に戻る。`auto_mode=false` または `samples=0` も手動値を使う。sa_popの `auto_end_temp_scale` は、手動値や推定失敗時の値には掛からない。
 
@@ -429,11 +436,11 @@ int main(int argc, char** argv) {
         // キャッシュとは独立に計算し、LOCALの終了診断で反映ミスも検出する。
         return evaluate(weights, m, assignment);
     };
-    auto propose = [&]() -> Cost {
+    auto propose = [&]() -> optional<Cost> {
         job = int(rng() % n);
         from = assignment[job];
         to = from;
-        if (m == 1) return 0;  // 変更先がない場合は何もしない提案。
+        if (m == 1) return nullopt;  // 変更先がない。finalize(false)で何もせず戻る。
         to = int(rng() % (m - 1));
         if (to >= from) ++to;  // 現在と異なる機械を選ぶ。
         const Cost w = weights[job], a = load[from], b = load[to];
@@ -496,7 +503,7 @@ $$C(p)=\sum_ {i=0}^{n-1}D(p_ {i},p_ {i+1})$$
 
 $$\Delta=D(a,c)+D(b,d)-D(a,b)-D(c,d)$$
 
-全巡回路を反転する場合は境界の扱いが重なるので、このコードでは無操作にする。差分を求めてから区間を仮反転し、却下なら同じ区間を再反転して戻す。この仕組みは、一般の非対称距離にはそのまま使えない。
+全巡回路を反転する場合は境界の扱いが重なるので、このコードでは変更前に `nullopt` を返す。`changed=false` により、その後の `finalize(false)` は何もしない。有効な区間なら差分を求めて仮反転し、却下なら同じ区間を再反転して戻す。この仕組みは、一般の非対称距離にはそのまま使えない。
 
 #### 完成コード
 
@@ -535,14 +542,14 @@ struct TspState {
         for (int i = 0; i < n; ++i) result += distance[tour[i]][tour[(i + 1) % n]];
         return result;
     }
-    Cost propose(const vector<vector<Cost>>& distance) {
+    optional<Cost> propose(const vector<vector<Cost>>& distance) {
         const int n = (int)tour.size();
         left = int(rng() % n);
         right = int(rng() % (n - 1));
         if (right >= left) ++right;
         if (left > right) swap(left, right);
         changed = !(left == 0 && right == n - 1);
-        if (!changed) return 0;  // 全巡回路の反転は同じ長さ。境界式の適用を避ける。
+        if (!changed) return nullopt;  // 全巡回路の反転を除外。未変更なので巻き戻しは不要。
         const int a = tour[(left + n - 1) % n], b = tour[left];
         const int c = tour[right], d = tour[(right + 1) % n];
         const Cost delta = distance[a][c] + distance[b][d] - distance[a][b] - distance[c][d];
@@ -551,7 +558,7 @@ struct TspState {
         return delta;
     }
     void finalize(bool accepted) {
-        // 自動温度推定中もfalseが来る。内部の辺は対称距離なので反転してよい。
+        // nulloptと自動温度推定もfalse。changed=falseなら安全に何もしない。
         if (!accepted && changed) reverse(tour.begin() + left, tour.begin() + right + 1);
         changed = false;
     }
@@ -583,7 +590,7 @@ int main(int argc, char** argv) {
         param, max(0.0, total_ms - elapsed),
         [&]() -> Snapshot { return state.tour; },
         [&]() -> Cost { return state.cost(distance); },
-        [&](const sa::SaRuntime<Cost>& runtime) -> Cost {
+        [&](const sa::SaRuntime<Cost>& runtime) -> optional<Cost> {
             (void)runtime;  // 必要ならtemperatureやprogress()で近傍を切り替えられる。
             return state.propose(distance);
         },
@@ -647,14 +654,14 @@ struct TspState {
         for (int i = 0; i < n; ++i) result += distance[tour[i]][tour[(i + 1) % n]];
         return result;
     }
-    Cost propose(const vector<vector<Cost>>& distance) {
+    optional<Cost> propose(const vector<vector<Cost>>& distance) {
         const int n = (int)tour.size();
         left = int(rng() % n);
         right = int(rng() % (n - 1));
         if (right >= left) ++right;
         if (left > right) swap(left, right);
         changed = !(left == 0 && right == n - 1);
-        if (!changed) return 0;  // 全巡回路の反転は同じ長さ。境界式の適用を避ける。
+        if (!changed) return nullopt;  // 全巡回路の反転を除外。未変更なので巻き戻しは不要。
         const int a = tour[(left + n - 1) % n], b = tour[left];
         const int c = tour[right], d = tour[(right + 1) % n];
         const Cost delta = distance[a][c] + distance[b][d] - distance[a][b] - distance[c][d];
@@ -663,7 +670,7 @@ struct TspState {
         return delta;
     }
     void finalize(bool accepted) {
-        // 自動温度推定中もfalseが来る。内部の辺は対称距離なので反転してよい。
+        // nulloptと自動温度推定もfalse。changed=falseなら安全に何もしない。
         if (!accepted && changed) reverse(tour.begin() + left, tour.begin() + right + 1);
         changed = false;
     }
@@ -702,7 +709,7 @@ int main(int argc, char** argv) {
             param, budget_ms,
             [&]() -> Snapshot { return state.tour; },
             [&]() -> Cost { return state.cost(distance); },
-            [&]() -> Cost { return state.propose(distance); },
+            [&]() -> optional<Cost> { return state.propose(distance); },
             [&](bool accepted) -> void { state.finalize(accepted); },
             best_cost);  // 全体ベストを厳密に下回るまでSnapshotを作らない。
 
@@ -863,9 +870,11 @@ int main(int argc, char** argv) {
 
 自己ループはこの差分式では扱わない。コードは自己ループなしを入力条件としている。重複辺は別々の辺として足し込むので使える。辺のないグラフや重み0も有効である。
 
+この例ではどの頂点も反転できるため、`propose` は数値の `Cost` を返す。固定頂点などの制約を加える場合は、中継ラムダも含めて `optional<Cost>` にし、動かせない頂点を選んだら `nullopt` を返せばよい。受理後に反転する書き方なので、`finalize(false)` は何もしない。
+
 ### 4.6 CSV・終了診断を使って確認する
 
-4.2、4.5、4.7はCSV Hookを渡している。`-DLOCAL` を付けたときだけイベントが呼ばれ、CSVが書かれる。通常ビルドでは、Hookを渡していても呼び出されない。
+4.2、4.5、4.7はCSV Hookを渡している。`-DLOCAL` を付けたときだけイベントが呼ばれ、CSVが書かれる。通常ビルドでは、両CSV Hookは同じコンストラクタと呼び出し形式を持つ空実装で、直接呼んでも記録・出力しない。`rows` などの記録メンバーはLOCAL時だけ存在する。
 
 ```sh
 g++ -std=c++20 -O2 -DLOCAL -I include examples/01_load_single.cpp -o solver_local
@@ -882,6 +891,18 @@ g++ -std=c++20 -O2 -DLOCAL -I include examples/01_load_single.cpp -o solver_loca
 保存名を変える場合は、sa_funcなら `SaCsvStatHook<Cost>("run.csv", 50.0)`、sa_popなら `SaPopCsvStatHook<Cost>("run_")` のように構築する。sa_funcの第2引数は記録間隔のミリ秒で、0以下は1マイクロ秒へ補正される。極端に短くすると記録とメモリの負担が大きくなる。
 
 `accept_rate` は記録区間の受理回数÷全反復数、`worse_accept_rate` も悪化受理回数÷全反復数である。後者は「悪化案のうち何割通ったか」ではない。温度推定の提案数は探索本体の反復数に含まれない。
+
+棄却を区別する列は次のとおり。いずれも事前の温度推定を含めず、`nullopt` は全反復数に含める。
+
+| CSV | 棄却の列 | 対象範囲 |
+|---|---|---|
+| sa_func | `propose_rejected_count`、`sa_rejected_count` | 本探索の開始から記録時点まで |
+| sa_func | `period_propose_rejected`、`period_sa_rejected` | 前回記録からの区間 |
+| sa_pop trace | `propose_rejected_count`、`sa_rejected_count` | その個体の今回の内部SA |
+| sa_pop phase | `total_propose_rejected_count`、`total_sa_rejected_count` | 選別フェーズ内の合計 |
+| sa_pop summary | `total_iterations`、`total_accepted_count`、`total_propose_rejected_count`、`total_sa_rejected_count` | 全内部SAと最後の仕上げの合計 |
+
+`propose_rejected` は `nullopt` による棄却、`sa_rejected` は値を返した後のSA判定による棄却である。各CSVの `valid_accept_rate` は、受理回数÷（全提案数−`nullopt` 数）。sa_funcでは記録区間、sa_popではその行の集計範囲を使い、分母が0なら0を出力する。無効案が多く `accept_rate` が低いのか、有効案をSAが棄却しているのかを切り分けられる。
 
 マルチスタートで同じファイル名を使い回すと、各RunEndで上書きされる。各回のCSVが必要なら、run番号ごとに名前を変える。sa_funcのHookは値で渡されるので、終了後に呼び出し側の `csv.rows` を読みたい場合は、例のように `std::ref(csv)` か参照キャプチャしたラムダを渡す。sa_popのCSV Hookは内部行データを公開しない。
 
@@ -1045,6 +1066,8 @@ g++ -std=c++20 -O2 -Wall -Wextra -DLOCAL -I include examples/05_load_temperature
 
 sa_func版は `propose` で操作を記録し、`finalize(true)` で反映する書き方。sa_pop版は個体ごとの `WorkState` に解・キャッシュ・乱数・巻き戻し情報を置き、`propose` で仮適用し、`finalize(false)` で元へ戻す書き方である。どちらも第2章の契約を満たすように埋める。
 
+両スケルトンの `propose` は `optional<Cost>` を返す。`pending_move.l < 0` の箇所は、問題に合った操作の有効性判定へ置き換える。未編集なら `nullopt` になる。sa_pop版の `pending_move.applied` は仮適用前の棄却を安全に扱うためのフラグで、変更した場合だけ巻き戻す。常に有効な操作を作るなら、関数と中継ラムダの戻り値を `Cost` にしてもよい。
+
 sa_func版は `main` 内でコールバックを用意して `sa::sa` を呼ぶ。外部の既存ベストを使うときは `existing_best_cost` に値を設定し、`result.best_snapshot` が空なら外部で保持している解を使う。単体利用では `nullopt` のままでよい。
 
 sa_pop版は `main → read_input → solve → Snapshot::print` と進む。`solve(input, time_limit_ms, initial_state_count, seed, csv_hook)` の時間引数は、その関数へ残されたミリ秒数。個体数の既定値は32、seedは1、CSV Hookも省略できる。ライブラリ本体が個体数32を自動生成するのではなく、この雛形が `make_initial_work_states` で作る。`solve` は全探索の最良Snapshotを返す。
@@ -1082,7 +1105,7 @@ sa_pop版の見積もり分岐は、共通コールバックと `pop_param.accep
 | `unsigned` をCostに使う | 改善差分が負になるため不可。符号付き整数を使う |
 | costや差分が型の範囲を超える | 乗算前から十分大きな型で計算し、絶対値・加算・差分をすべて収める |
 | 制約違反を罰則costだけで扱い、返却解の有効性を確認しない | ライブラリは有効性を検査しない。まずは有効な初期解と、制約を保つ近傍を設計する |
-| costや差分にNaN・無限大を返す | 探索用の値は有限に保つ。禁止手は無操作などとして表現する |
+| costや差分にNaN・無限大を返す | 探索用の値は有限に保つ。禁止手は `optional<Cost>` の `nullopt` で棄却する |
 | 手動温度0、負の温度、受理確率0や1 | 不可。温度は有限の正数、確率は0と1の間 |
 | autoなら手動設定を不正値にしてよいと思う | sa_funcはautoでも引数の前提を検査する。失敗時にも使うので有効値を残す |
 | 受理幅が負やNaN | 不可。非負、または正の無限大を使う |
@@ -1099,7 +1122,9 @@ sa_pop版の見積もり分岐は、共通コールバックと `pop_param.accep
 | `propose` が絶対costを返す | 必ず変更後−変更前を返す |
 | 仮適用と受理後適用が混ざり、2回変更する | 1つの近傍ごとに、どこで適用しどこで戻すか決める |
 | 巻き戻しでキャッシュを戻し忘れる | 解と解依存キャッシュをセットで元に戻す |
-| 無操作時に前回の変更箇所が残る | 今回何も変更しないことをfinalizeへ伝える |
+| `nullopt` 時に前回の変更箇所が残る | 必ず `finalize(false)` が来る。毎提案、未変更フラグや巻き戻し情報を初期化する |
+| 差分0を棄却だと思う | 0は同値の有効提案として受理される。強制棄却には `nullopt` を返す |
+| ラムダで数値と `nullopt` をそのまま混在させる | 戻り値推論に任せず `-> optional<Cost>` を指定する。中継ラムダにも型を合わせる |
 | get_snapshot内で必須の状態更新をする | 保存条件を満たさないと呼ばれない。状態更新はfinalizeに置く |
 | Snapshotが探索状態を参照している | 保存後に変化しない値を持つ |
 | 既存ベストを指定したのにSnapshotを無条件で参照する | optionalが値を持つか確認する |
@@ -1169,7 +1194,7 @@ sa_funcは1つの状態を対象に、次の順序で動く。
 
 1. 現在costを取得し、そのSAの最良costにする。保存基準を満たせば初期Snapshotを取る。
 2. 指定されていれば、初期状態からの変更案で温度を自動推定する。推定用の案はすべて却下して状態を戻す。
-3. 時間の進みに合わせて温度を変え、変更案を1つずつ採否判定する。
+3. 時間の進みに合わせて温度を変え、変更案を作る。`nullopt` は強制棄却し、数値ならSAの採否を決める。
 4. `finalize` で状態を確定してから、現在cost・最良cost・統計を更新する。
 5. 保存基準を満たす最良更新だけSnapshotを取る。
 6. 時間切れになったら、LOCALで有効な終了Hook・温度見積もり・終了cost診断を行う。
@@ -1246,7 +1271,7 @@ $\lfloor z\rfloor$ は小数点以下を切り捨てる操作である。8個体
 
 ### 6.7 LOCALの探索後温度見積もり
 
-観測するのは**本探索のproposeが返した有限の正の差分**であり、初期の自動推定サンプルは含まない。悪化が採用されたかどうかには依存しない。採用された提案だけを集めると、受理されやすい小さな悪化へ偏るためである。
+観測するのは**本探索のproposeが返した有限の正の差分**であり、初期の自動推定サンプルと `nullopt` は含まない。悪化が採用されたかどうかには依存しない。採用された提案だけを集めると、受理されやすい小さな悪化へ偏るためである。
 
 SAの時間予算を4等分し、`runtime.progress()` に応じた区間へ標本を入れる。各区間で件数と逐次平均だけを保持するので、全差分を保存する必要はない。進捗は既存の時刻情報から取得するため、観測のために毎提案で時計を読む処理も追加しない。区間は本探索だけの時間を改めて4等分したものではなく、初期推定も含むSA予算全体に対して決まる。
 
@@ -1286,7 +1311,9 @@ sa_popでは、$K$ を初期個体数とすると、個体の評価と選別に�
 
 $$O((S+I)(P+F)+BG+KC_ {g}+K\log K)$$
 
-LOCALではさらに、イベント数を $E_ {h}$ として $O(E_ {h}H)$ が加わる。メモリはK個のWorkState、全体最良Snapshot1つ、個体管理配列が中心。個体管理配列は最大256用の固定配列である。CSV Hookは記録行をメモリにため、終了時にまとめて書く。
+LOCALではさらに、イベント数を $E_ {h}$ として $O(E_ {h}H)$ が加わる。メモリはK個のWorkState、全体最良Snapshot1つ、個体管理配列が中心。個体管理配列は最大256用の固定配列である。CSV HookはLOCAL時だけ記録行をメモリにため、終了時にまとめて書く。
+
+数値を返す `propose` はコンパイル時に数値経路へ振り分けられ、optionalの有無を判定する分岐は入らない。`optional<Cost>` 自体はヒープ確保を行わないが、値の有無の分岐や棄却統計には処理が必要である。重い差分計算の前に無効案を発見できれば、その計算を省ける。性能への影響は近傍の重さ・棄却率・最適化に依存する。
 
 ### 6.9 このガイドのコード例の検証
 
