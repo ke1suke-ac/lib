@@ -3,6 +3,7 @@
 using namespace std;
 
 // FastRng: C++17 / GCC 用、splitmix64 を使う状態 64bit の競技プログラミング用 RNG
+// fork は現在の状態とキーから子を再現する、親は進めず、系列の統計的独立・非重複は保証しない
 // uniform は半開区間、uniform_closed は整数の閉区間を返す
 // uniform_closed_delta は整数の閉区間から 0 を除いた差分を返す
 // 配列は vector / array のみ対応、uniform / uniform_closed は充填、perm は開始値付き順列
@@ -31,6 +32,13 @@ struct FastRng {
         z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
         z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
         return z ^ (z >> 31);
+    }
+
+    // 現在の状態とキーから子を生成する、親は変更しない、同じ状態・キーは同じ子になる
+    inline FastRng fork(result_type key) const noexcept {
+        auto key_rng = FastRng(key);
+        auto seed_rng = FastRng(state ^ key_rng());
+        return FastRng(seed_rng());
     }
 
     // 生乱数の取得、32bit と bool は上位 bit を使う
@@ -1363,6 +1371,144 @@ void test_native_arrays(Tester& t) {
 }
 
 // 全テストを実行する、検査は NDEBUG に依存せず有効
+// 元の fork 検査を C++17 に移植、追加の型制約やメンバーは不要
+static_assert(is_same_v<decltype(declval<const FastRng&>().fork(uint64_t{0})), FastRng>);
+static_assert(noexcept(declval<const FastRng&>().fork(uint64_t{0})));
+static_assert(is_trivially_copyable_v<FastRng> && is_standard_layout_v<FastRng>);
+static_assert(sizeof(FastRng) == sizeof(uint64_t));
+
+// 分岐の参照式、各段階を既存の独立した SplitMix64 参照実装で評価する
+uint64_t reference_fork(uint64_t parent, uint64_t key) {
+    parent ^= reference_raw(key);
+    return reference_raw(parent);
+}
+
+// 端点・参照値・状態分離・CRN の再現と順序非依存を検査する
+void test_fork(Tester& t) {
+    auto before = t.checks;
+    mt19937_64 data(0xf289d7bcd314ed06ULL);
+    // Python の整数演算から作った固定期待値、seed と子の先頭出力を両方確認する
+    const array known{
+        array<uint64_t, 4>{0x0000000000000000ULL, 0x0000000000000000ULL, 0xa706dd2f4d197e6fULL, 0x238275bc38fcbe91ULL},
+        array<uint64_t, 4>{0x0000000000000000ULL, 0x0000000000000001ULL, 0x5e41ab087439611eULL, 0xb18a02f46d8d86c3ULL},
+        array<uint64_t, 4>{0x0000000000000001ULL, 0x0000000000000000ULL, 0x08b4fda8c892b50eULL, 0x44e5b98100c67fb0ULL},
+        array<uint64_t, 4>{0x0000000000000001ULL, 0x0000000000000001ULL, 0xe9fd6049d65af21eULL, 0x5775264a9a7e1b09ULL},
+        array<uint64_t, 4>{0xffffffffffffffffULL, 0x0000000000000000ULL, 0x2dd82c88fa32b270ULL, 0x7985575aa0f03783ULL},
+        array<uint64_t, 4>{0x0000000000000000ULL, 0xffffffffffffffffULL, 0x5dc20aa7b2a27137ULL, 0xfc042709560421daULL},
+        array<uint64_t, 4>{0xffffffffffffffffULL, 0xffffffffffffffffULL, 0x6309143e67a47936ULL, 0xf14a310831123e0aULL},
+        array<uint64_t, 4>{0x123456789abcdef0ULL, 0x123456789abcdef0ULL, 0xb871cfdc202d2253ULL, 0x7726e11754c61b63ULL}
+    };
+    for (auto [parent, key, child_seed, first_word] : known) {
+        const FastRng root(parent);
+        auto child = root.fork(key);
+        t.require(child.state == child_seed, "fork known child seed");
+        t.require(child() == first_word, "fork known first word");
+        t.require(root.state == parent, "fork known parent unchanged");
+    }
+
+    // 全 bit 位置と極値を親・キー双方へ渡し、0 seed の子も排除されないことを確認する
+    vector<uint64_t> edges(raw_edges.begin(), raw_edges.end());
+    for (auto bit = 0; bit < 64; ++bit) {
+        edges.push_back(uint64_t{1} << bit);
+        edges.push_back(~(uint64_t{1} << bit));
+    }
+    for (auto parent : edges) {
+        const FastRng root(parent);
+        for (auto key : edges) {
+            auto a = root.fork(key), b = root.fork(key);
+            auto expected = reference_fork(parent, key);
+            t.require(a.state == expected && b.state == expected, "fork edge reference");
+            for (auto j = 0; j < 4; ++j) {
+                auto word = reference_raw(expected);
+                t.require(a() == word && b() == word, "fork edge stream");
+            }
+            t.require(root.state == parent, "fork edge const parent unchanged");
+        }
+        // F(parent XOR F(key)) の逆算で、子 seed の任意の極値を直接試す
+        for (auto target : raw_edges) {
+            auto key = seed_for_raw(parent ^ seed_for_raw(target));
+            t.require(root.fork(key).state == target, "fork inverse target seed");
+        }
+    }
+
+    // 独立 RNG の入力で親・子・兄弟・孫を動かし、参照式とコピーの再現性を検査する
+    for (auto trial = 0; trial < 50000; ++trial) {
+        auto parent = data(), key = data(), other_key = key ^ (uint64_t{1} << (data() % 64));
+        FastRng root(parent);
+        auto child = root.fork(key), sibling = root.fork(other_key);
+        auto child_seed = reference_fork(parent, key), sibling_seed = reference_fork(parent, other_key);
+        t.require(child.state == child_seed && sibling.state == sibling_seed, "fork random reference");
+        t.require(child_seed != sibling_seed, "fork distinct sibling seeds");
+        for (auto j = uint64_t{0}, n = data() % 32; j < n; ++j) {
+            t.require(child() == reference_raw(child_seed), "fork child stream reference");
+        }
+        t.require(root.state == parent && sibling.state == sibling_seed, "fork child consumption isolated");
+        auto subkey = data();
+        t.require(child.fork(subkey).state == reference_fork(child_seed, subkey), "fork uses current child state");
+        t.require(child.state == child_seed, "fork grandchild leaves parent untouched");
+        auto snapshot = root;
+        auto twin = snapshot.fork(key);
+        t.require(twin.state == reference_fork(parent, key), "fork snapshot and reconstruction");
+        t.require(root() == reference_raw(parent), "fork parent still has original next word");
+        auto advanced = root.fork(key);
+        t.require(advanced.state == reference_fork(parent, key), "fork uses current parent state");
+        t.require(advanced.state != twin.state, "fork advanced parent changes seed");
+        root.seed(snapshot.state);
+        t.require(root.fork(key).state == twin.state, "fork reseed reproduces child");
+        auto expected = sibling_seed;
+        t.require(sibling() == reference_raw(expected), "fork sibling keeps original next word");
+    }
+
+    // 候補間で実行順や別用途の消費を変えても、出来事 ID に結び付けた結果は一致する
+    const FastRng root(0xd59b983d6944638aULL);
+    array<uint64_t, 64> order{};
+    iota(order.begin(), order.end(), uint64_t{0});
+    for (auto trial_id = uint64_t{0}; trial_id < 256; ++trial_id) {
+        const auto trial = root.fork(trial_id);
+        array<uint64_t, 64> expected{};
+        for (auto event : order) {
+            auto rng = trial.fork(event).fork(1);
+            expected[(size_t)event] = rng();
+        }
+        shuffle(order.begin(), order.end(), data);
+        for (auto event : order) {
+            const auto event_root = trial.fork(event);
+            auto nuisance = event_root.fork(0);
+            for (auto j = uint64_t{0}, n = data() % 8; j < n; ++j) (void)nuisance.normal();
+            auto demand = event_root.fork(1);
+            t.require(demand() == expected[(size_t)event], "fork CRN reorder and variable consumption");
+            t.require(event_root.state == trial.fork(event).state, "fork event root unchanged");
+            auto twin = event_root.fork(1);
+            (void)twin();
+            t.require(demand.uniform_closed(-100, 100) == twin.uniform_closed(-100, 100), "fork existing API reproducibility");
+            t.require(demand.state == twin.state, "fork existing API state");
+        }
+        t.require(trial.state == root.fork(trial_id).state, "fork trial root unchanged");
+    }
+    t.require(root.state == 0xd59b983d6944638aULL, "fork root unchanged after CRN trials");
+
+    // 連番キーで子 seed の重複がないことを検査する、全 64bit の証明の代用ではない
+    vector<uint64_t> seeds(65536);
+    for (auto parent : {uint64_t{0}, UINT64_MAX, uint64_t{0x31628af67b2131abULL}}) {
+        const FastRng fixed(parent);
+        for (auto i = size_t{0}; i < seeds.size(); ++i) seeds[i] = fixed.fork((uint64_t)i).state;
+        sort(seeds.begin(), seeds.end());
+        for (auto i = size_t{1}; i < seeds.size(); ++i) t.require(seeds[i - 1] != seeds[i], "fork sequential keys unique seeds");
+    }
+    // 別キーからの列の平均・共分散を見る簡易検査、統計的独立性の保証ではない
+    auto a = root.fork(0), b = root.fork(1);
+    auto sa = 0.0L, sb = 0.0L, product = 0.0L;
+    constexpr auto count = 262144;
+    for (auto i = 0; i < count; ++i) {
+        auto x = (long double)a.uniform() - 0.5L, y = (long double)b.uniform() - 0.5L;
+        sa += x; sb += y; product += x * y;
+    }
+    t.require(abs(sa / count) < 8 / sqrt(12.0L * count), "fork stream A mean smoke");
+    t.require(abs(sb / count) < 8 / sqrt(12.0L * count), "fork stream B mean smoke");
+    t.require(abs(product / count) < 8 / (12 * sqrt((long double)count)), "fork cross stream covariance smoke");
+    cout << "Fork tests passed. checks = " << t.checks - before << '\n';
+}
+
 void run_tests() {
     Tester t;
     mt19937_64 data(0x5b74d03ace197fa2ULL);
@@ -1406,6 +1552,7 @@ void run_tests() {
     test_weighted(t, data);
     test_uniform_sum(t, data);
     test_normal(t, data);
+    test_fork(t);
 
     // 小区間の頻度が極端に崩れていないかを確認する、品質の完全な検証ではない
     for (auto n : {2, 3, 5, 7, 16, 31}) {
@@ -1832,6 +1979,59 @@ void weighted_compare_rows(const array<const char*, sizeof...(F)>& labels, uint6
 
 // 正規乱数は同じ消費処理で比較する、std retained は分布を呼び出し間で保持する参考値
 // 配列側は標準分布を配列 1 本につき 1 個だけ構築し、キャッシュを有効に使う
+// 子の生成と利用をまとめて計測する、Count=0 は子の状態を観測する
+// 子の生成が未使用として削除されないよう、すべて結果へ反映する
+template<int Count>
+uint64_t fork_draws(const FastRng& root, uint64_t key) {
+    auto child = root.fork(key);
+    if constexpr (Count == 0) return child.state;
+    auto result = uint64_t{0};
+    for (auto j = 0; j < Count; ++j) result ^= child();
+    return result;
+}
+
+// 1 操作は分岐と指定個数の生成、入力生成・確保は計測外、最悪値はバッチ平均
+void run_fork_benchmark(uint64_t count, int repeat) {
+    benchmark_heading("Fork: sequential keys, fixed parent (ns/group)");
+    weighted_compare_rows(array{"raw stream control", "seed(key)+1 control", "fork only", "fork+1 word"}, count, repeat,
+        [](FastRng& rng, uint64_t) { return rng(); },
+        [](FastRng& rng, uint64_t i) { return FastRng(rng.state + i)(); },
+        [](const FastRng& rng, uint64_t i) { return fork_draws<0>(rng, i); },
+        [](const FastRng& rng, uint64_t i) { return fork_draws<1>(rng, i); });
+
+    // C++17 の汎用ラムダで、8 個/64 個の生成をそれぞれインスタンス化する
+    auto reuse = [&](auto tag) {
+        constexpr auto words = decltype(tag)::value;
+        auto title = string("Fork reuse: words/group=") + to_string(words);
+        benchmark_heading(title.c_str());
+        weighted_compare_rows(array{"raw stream group", "fork+draw group"}, max(uint64_t{1}, count / words), repeat,
+            [](FastRng& rng, uint64_t) {
+                auto result = uint64_t{0};
+                for (auto j = 0; j < words; ++j) result ^= rng();
+                return result;
+            },
+            [](const FastRng& rng, uint64_t i) { return fork_draws<words>(rng, i); });
+    };
+    reuse(integral_constant<int, 8>{});
+    reuse(integral_constant<int, 64>{});
+
+    // 実行時のキー、階層化、直前の結果に依存するキーを別々に測る
+    mt19937_64 data(0x8ce9f45310ba72d9ULL);
+    array<uint64_t, 1024> keys{}, parents{};
+    for (auto& x : keys) x = data();
+    for (auto& x : parents) x = data();
+    benchmark_heading("Fork: runtime inputs (table loads included, ns/group)");
+    weighted_compare_rows(array{"seed(key)+1 control", "fork only", "fork+1 word", "3-level fork+1 word"}, count, repeat,
+        [&](FastRng&, uint64_t i) { return FastRng(keys[i & 1023])(); },
+        [&](const FastRng& rng, uint64_t i) { return rng.fork(keys[i & 1023]).state; },
+        [&](const FastRng& rng, uint64_t i) { return rng.fork(keys[i & 1023])(); },
+        [&](const FastRng& rng, uint64_t i) { return rng.fork(parents[i & 1023]).fork(keys[i & 1023]).fork(0)(); });
+    benchmark_heading("Fork: dependent key (ns/group, not independent throughput)");
+    weighted_compare_rows(array{"seed(previous)+1", "fork(previous)+1"}, count, repeat,
+        [key = uint64_t{0}](FastRng&, uint64_t) mutable { key = FastRng(key)(); return key; },
+        [key = uint64_t{0}](const FastRng& rng, uint64_t) mutable { key = rng.fork(key)(); return key; });
+}
+
 void run_normal_benchmark(uint64_t count, int repeat) {
     benchmark_heading("Normal scalar N(0,1): ns/op includes accumulation");
     weighted_compare_rows(array{"normal()", "std per call", "std retained"}, count, repeat,
@@ -1991,7 +2191,7 @@ void run_weighted_benchmark(uint64_t count, int repeat) {
 }
 
 // 引数なしはテストと全ベンチ、--tests-only はテストのみ
-// ベンチは --bench-only / --api-bench-only / --rng-bench-only / --array-bench-only / --weighted-bench-only / --sum-bench-only / --normal-bench-only [回数 [反復数]]
+// ベンチは --bench-only / --api-bench-only / --rng-bench-only / --array-bench-only / --weighted-bench-only / --sum-bench-only / --normal-bench-only / --fork-bench-only [回数 [反復数]]
 int main(int argc, char** argv) {
     ios::sync_with_stdio(false);
     cin.tie(nullptr);
@@ -2005,8 +2205,8 @@ int main(int argc, char** argv) {
     };
     if (argc > 4 || (argc > 2 && !parse(argv[2], count)) || (argc > 3 && !parse(argv[3], repeat)) ||
         !(mode.empty() || mode == "--tests-only" || mode == "--bench-only" ||
-          mode == "--api-bench-only" || mode == "--rng-bench-only" || mode == "--array-bench-only" || mode == "--weighted-bench-only" || mode == "--sum-bench-only" || mode == "--normal-bench-only")) {
-        cerr << "Usage: rng [--tests-only|--bench-only|--api-bench-only|--rng-bench-only|--array-bench-only|--weighted-bench-only|--sum-bench-only|--normal-bench-only] [count [repeat]]\n";
+          mode == "--api-bench-only" || mode == "--rng-bench-only" || mode == "--array-bench-only" || mode == "--weighted-bench-only" || mode == "--sum-bench-only" || mode == "--normal-bench-only" || mode == "--fork-bench-only")) {
+        cerr << "Usage: rng [--tests-only|--bench-only|--api-bench-only|--rng-bench-only|--array-bench-only|--weighted-bench-only|--sum-bench-only|--normal-bench-only|--fork-bench-only] [count [repeat]]\n";
         return 2;
     }
     cout << "Compiler: GCC " << __VERSION__ << '\n';
@@ -2017,6 +2217,7 @@ int main(int argc, char** argv) {
     if (mode.empty() || mode == "--bench-only" || mode == "--weighted-bench-only") run_weighted_benchmark(count, repeat);
     if (mode.empty() || mode == "--bench-only" || mode == "--sum-bench-only") run_sum_benchmark(count, repeat);
     if (mode.empty() || mode == "--bench-only" || mode == "--normal-bench-only") run_normal_benchmark(count, repeat);
+    if (mode.empty() || mode == "--bench-only" || mode == "--fork-bench-only") run_fork_benchmark(count, repeat);
     if (mode != "--tests-only") cout << "\nfinal_sink = " << bench_sink << '\n';
 }
 #endif
