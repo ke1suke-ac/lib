@@ -90,7 +90,7 @@ public:
         std::optional<Clock::time_point> deadline;
         uint64_t seed = 0;
         std::optional<std::span<const int>> movable;
-        Acceptance acceptance = Acceptance::greedy;
+        Acceptance acceptance = Acceptance::annealing;
         std::array<int, NeighborhoodCount> weights{60, 18, 12, 2, 7};
         double temperature = 0; // 0: 正の差分から自動推定。正値: 初期温度を指定。
         double final_temperature_ratio = 0.02;
@@ -191,7 +191,7 @@ public:
         current_is_best_ = current_.feasible;
         ++run.stats.construction_attempts;
         restore_feasibility(run, model, true);
-        // 追加構築は合法解の確保後だけ行う。未発見の段階では従来の構築・修復を維持する。
+        // 追加構築は合法解の確保後だけ行う。未発見の段階では修復を優先する。
         if (current_.feasible && !run.stop()) {
             auto alternative = assemble(grow(model, true), model);
             ++run.stats.construction_attempts;
@@ -479,7 +479,8 @@ private:
                 if (parent[a] > parent[b]) std::swap(a, b);
                 parent[a] += parent[b]; parent[b] = a; --components[x[e.u]];
             }
-            for (int r = 0; r < p_.k; ++r) if (p_.regions[r].connected) s.violation += std::max(0, components[r] - 1);
+            // 分断は小さな容量違反より戻しにくいため、修復の案内値では重く扱う。
+            for (int r = 0; r < p_.k; ++r) if (p_.regions[r].connected) s.violation += 8.0 * std::max(0, components[r] - 1);
         }
         s.feasible = s.violation == 0 && extra_feasible(m, s, run);
         if (!s.feasible) { if (!s.violation) s.violation = 1; return s; }
@@ -836,6 +837,15 @@ private:
         for (int r = 0; r < p_.k; ++r) if (!count[r] && (p_.regions[r].required || active < p_.min_active_regions)) {
             for (int v : order) if (x[v] < 0 && allowed(v, r)) { x[v] = r; ++count[r]; q.push_back(v); ++active; break; }
         }
+        // 割当済みの隣接領域との禁止接触を、成長中の選択から除く。
+        auto contact_ok = [&](int v, int r) {
+            if (p_.allow_unlisted_contacts) return true;
+            for (int j = offsets_[v]; j < offsets_[v + 1]; ++j) {
+                auto [e, u] = adjacency_[j];
+                if (role(e, Contact) && x[u] >= 0 && x[u] != r && pair_index(r, x[u]) < 0) return false;
+            }
+            return true;
+        };
         // 個数の不足率が大きい領域を先に成長させる。符号付き資源には単調性を仮定しない。
         std::vector<std::vector<int>> frontier(p_.k);
         auto append = [&](int v, int r) {
@@ -870,14 +880,14 @@ private:
                     if (value < best) { best = value; j = index; }
                 }
                 int v = f[j]; f[j] = f.back(); f.pop_back();
-                if (x[v] >= 0) continue;
+                if (x[v] >= 0 || !contact_ok(v, r)) continue;
                 x[v] = r; ++count[r]; append(v, r); break;
             }
             if (!f.empty()) pending.push({priority(r), r});
         }
         for (int v : order) if (x[v] < 0) {
             x[v] = pick(p_.k);
-            for (int j = 0; j < p_.k; ++j) { int r = (x[v] + j) % p_.k; if (allowed(v, r)) { x[v] = r; break; } }
+            for (int j = 0; j < p_.k; ++j) { int r = (x[v] + j) % p_.k; if (allowed(v, r) && contact_ok(v, r)) { x[v] = r; break; } }
         }
         return x;
     }
@@ -885,7 +895,7 @@ private:
         if (current_.feasible) return;
         if (free_.empty()) { run.exhausted = true; return; }
         auto least = current_.label; double lowest = current_.violation;
-        int stalled = 0;
+        int stalled = 0, restarts = 0;
         // 修復では全体の違反量を用いる。違反中に利用者の目的関数を呼ばない。
         while (!run.stop() && !current_.feasible) {
             ++run.stats.steps;
@@ -905,8 +915,10 @@ private:
                 if (current_.violation < lowest) { lowest = current_.violation; least = current_.label; stalled = 0; }
             }
             if (++stalled == 256 && !run.stop()) {
-                current_ = assemble(restart ? grow(model) : least, model); stalled = 0;
-                if (restart) ++run.stats.construction_attempts;
+                // 良かった途中状態を再利用し、4回に1回は新しい構築へ切り替える。
+                bool rebuild = restart && ++restarts % 4 == 0;
+                current_ = assemble(rebuild ? grow(model, true) : least, model); stalled = 0;
+                if (rebuild) ++run.stats.construction_attempts;
             }
         }
         ready_ = current_.feasible;

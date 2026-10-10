@@ -1,17 +1,17 @@
 # ConnectedPartitionSolver ステップバイステップガイド
 
-対象実装：`connected_partition_solver_v08.hpp`。C++20。確認日：2026-10-07。
+対象実装：`connected_partition_solver_v11.hpp`。C++20。確認日：2026-10-09。
 
 このガイドでは、「つながった区画を作り、その分け方を良くする」という問題を、小さな実行例で学びます。必要な数学は、和・不等式・二乗・平均です。C++ の変数、配列、ループ、関数は知っているものとして、ライブラリ固有の概念と C++ の `optional`・`span` はその都度説明します。
 
-コードは全30例です。各例は独立した `main` を含み、前の例のコードを手で継ぎ足す必要はありません。新しい点を見比べやすくするため、共通部分も省略せず掲載します。設定値は学習用であり、未知の問題に対する最良の調整値ではありません。
+コードは30ステップに全32例あります。ステップ18と20には、山登り法を使う補助例もあります。各例は独立した `main` を含み、前の例のコードを手で継ぎ足す必要はありません。新しい点を見比べやすくするため、共通部分も省略せず掲載します。設定値は学習用であり、未知の問題に対する最良の調整値ではありません。
 
 | 学ぶ順序 | 内容 |
 |---|---|
 | 第1〜3節 | 対象問題、目的関数、類似ソルバー、実行準備 |
 | ステップ01〜09 | 最小例から、個数・費用・負荷・固定・許可集合へ |
 | ステップ10〜15 | 盤面、辺の役割、接触、任意領域、背景の表現 |
-| ステップ16〜21 | 構築、修復、焼きなまし、時間、部分改善、整数費用 |
+| ステップ16〜21 | 構築、修復、焼きなましと山登りの使い分け、時間、部分改善、整数費用 |
 | ステップ22〜28 | 独自評価、追加制約、割当先依存の負荷、モデル変更 |
 | ステップ29〜30 | ターン更新と複数回の探索 |
 | 第9節、付録A〜H | API索引、実装の概要と詳細、参照資料と検証 |
@@ -131,7 +131,7 @@ CP-SATの `FEASIBLE` は「合法解を発見」、`OPTIMAL` は「最適性ま�
 
 ## 3. 実行の準備
 
-`connected_partition_solver_v08.hpp` と、例を貼り付けた `main.cpp` を同じフォルダーに置きます。以下でコンパイルして実行できます。
+`connected_partition_solver_v11.hpp` と、例を貼り付けた `main.cpp` を同じフォルダーに置きます。以下でコンパイルして実行できます。
 
 ```sh
 g++ -std=c++20 -O2 -Wall -Wextra main.cpp -o example
@@ -166,7 +166,7 @@ AHCの提出用に1ファイルへまとめるときは、ヘッダ内のクラ�
 **ファイル：`examples/01_minimal.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -196,9 +196,11 @@ int main() {
 3. 辺の `{0, 1, 1}` は順に、端点 `u=0`、端点 `v=1`、切断費用 `cut_cost=1` です。他の4本も同じ読み方です。省略した `length` は1、`enabled` はtrue、`roles` は接続・接触・費用の3役すべてです。辺は無向として接続を表します。
 4. `Solver solver(p)` は問題をsolverに渡します。solverは問題のコピーを所有するので、後から `p` だけ書き換えてもsolverの問題は変わりません。
 5. `initial[v]` が頂点 `v` の初期ラベルです。配列の長さは6、値は0か1にします。すべての頂点を割り当てます。
-6. `improve(initial)` はこの合法解を出発点に改善します。オプションの省略時は最大1,000,000マイクロ秒、つまり1秒の相対予算です。得られた最良値を `result.best_cost` に持ちます。
+6. `improve(initial)` はこの合法解を出発点に改善します。オプションの省略時は焼きなまし法を使い、最大1,000,000マイクロ秒、つまり1秒の相対予算で探索します。温度は自動推定するため、この例では設定不要です。得られた最良値を `result.best_cost` に持ちます。
 7. `best_cost` は「値がある場合とない場合」を表す `std::optional<double>` です。`if (!result.best_cost)` は値がない場合を判定します。目的値0は正常な値であり、「解なし」ではありません。
 8. 値があれば `*result.best_cost` で目的値を取り出します。`best_labels()` で最良解のラベルを順に表示します。
+
+**焼きなまし法**は、今より目的値が悪くなる変更も、ときどき受け入れる探索です。すぐに良くなる変更だけでは抜け出せない状態から、別の良い分け方へ進む機会を作ります。「温度」は悪化をどれくらい許すかを調整する値です。探索中の現在解とは別に最良解を保存し、返すのはその最良解です。したがって、この例の返却目的値は初期値10以下になります。制約に違反する変更を許すわけではありません。詳しい設定と山登り法の選び方はステップ18で扱います。
 
 目的値1の出力では、たとえば `{0, 1, 1, 1, 1, 1}` のような分割になります。領域番号を反転した解なども同じ目的値です。時間で止める探索なので、表示される配列がいつも同じである必要はありません。最適値1はこの小さな問題について手計算で分かる値であり、solverが最適性を証明したという意味ではありません。
 
@@ -209,7 +211,7 @@ int main() {
 **ファイル：`examples/02_evaluate.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -277,7 +279,7 @@ int main() {
 **ファイル：`examples/03_vertex_bounds.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -324,7 +326,7 @@ int main() {
 **ファイル：`examples/04_unary.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -374,7 +376,7 @@ int main() {
 **ファイル：`examples/05_load.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -420,7 +422,7 @@ int main() {
 **ファイル：`examples/06_multiple_loads.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -474,7 +476,7 @@ int main() {
 **ファイル：`examples/07_balance.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -527,7 +529,7 @@ int main() {
 **ファイル：`examples/08_fixed.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -571,7 +573,7 @@ int main() {
 **ファイル：`examples/09_domains.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -618,7 +620,7 @@ int main() {
 **ファイル：`examples/10_grid.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -679,7 +681,7 @@ int main() {
 **ファイル：`examples/11_edge_roles.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -749,7 +751,7 @@ int main() {
 **ファイル：`examples/12_contacts.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -796,7 +798,7 @@ int main() {
 **ファイル：`examples/13_optional_regions.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -846,7 +848,7 @@ int main() {
 **ファイル：`examples/14_background.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -889,7 +891,7 @@ int main() {
 **ファイル：`examples/15_outside_vertex.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -940,7 +942,7 @@ int main() {
 **ファイル：`examples/16_solve.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -981,7 +983,7 @@ int main() {
 **ファイル：`examples/17_repair.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1020,14 +1022,14 @@ int main() {
 
 修復は「違反のある解を必ず直す関数」ではありません。違反が少ないほど通常は使いやすいものの、成功は問題と時間に依存します。初期解の不正と、存在しないラベル番号などの入力形式の誤りも別です。後者は `assert` の対象で、戻り値による通常の失敗通知ではありません。
 
-### ステップ18：焼きなましと、変更の種類を選ぶ
+### ステップ18：焼きなましと山登りを選び、変更の種類を指定する
 
-ステップ03を出発点に、探索中の採用方針を変えます。ここでは利用に必要な意味だけを扱い、具体的な変更の作り方は付録で説明します。
+ステップ03を出発点に、温度と候補の種類を指定します。この例では既定値を明示し、各設定の意味を確かめます。ここでは利用に必要な意味だけを扱い、具体的な変更の作り方は付録で説明します。
 
 **ファイル：`examples/18_annealing.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1065,13 +1067,13 @@ int main() {
 }
 ```
 
-**近傍**とは、今の割当を少し変更して作る候補です。既定の `Acceptance::greedy` は目的値が悪くなる候補を採用しません。同じ値の候補は採用できます。`annealing` は焼きなましで、合法な候補のうち、悪化するものも確率的に採用して別の改善へ進む可能性を残します。
+**近傍**とは、今の割当を少し変更して作る候補です。既定の `Acceptance::annealing` は焼きなまし法で、合法な候補のうち、目的値が悪化するものも確率的に採用して別の改善へ進む可能性を残します。目的値が良くなる候補や同じ値の候補は採用します。
 
 一時的に悪化しても、返すのはその実行で確認した最良解です。制約違反を許して探索する指定ではありません。
 
 | 項目 | この例の値 | 意味 |
 |---|---|---|
-| `acceptance` | `annealing` | 悪化候補も確率的に採用する |
+| `acceptance` | `annealing` | 既定の焼きなまし法。合法な悪化候補も確率的に採用する |
 | `temperature` | `0` | 悪化量から温度の大きさを自動推定する。正値なら利用者が初期温度を指定 |
 | `final_temperature_ratio` | `0.02` | 終盤の温度を基準の2%へ下げる割合。0より大きく1以下 |
 | `weights[Move]` | `60` | 1頂点の移動を選ぶ重み |
@@ -1080,9 +1082,84 @@ int main() {
 | `weights[Relabel]` | `2` | 領域全体の番号交換・併合を選ぶ重み |
 | `weights[Recombine]` | `7` | 2領域をまとめて分け直す変更を選ぶ重み |
 
-この重みは既定値を明示したもので、合計は99です。60は60%ではなく、提案の種類を選ぶ段階で60/99の割合という意味です。0にすればその種類を無効にできます。非負整数を使い、合計が通常の `int` に収まる範囲にします。
+表の設定はすべて既定値なので、この例で追加した代入行を省略しても同じ設定になります。温度を自分で決めたい場合は、たとえば `opt.temperature = 2.0;` と正の値を指定します。温度は目的値の悪化量に対応する尺度なので、2.0がどの問題にも適した値という意味ではありません。自動推定でも、探索の進み具合に応じて温度を下げる割合は `final_temperature_ratio` で指定します。
+
+近傍の重みの合計は99です。60は60%ではなく、提案の種類を選ぶ段階で60/99の割合という意味です。0にすればその種類を無効にできます。非負整数を使い、合計が通常の `int` に収まる範囲にします。
 
 候補を作れなかった試行や、制約で棄却された試行もあります。選択割合と実際に採用された変更の割合は異なります。焼きなましが常に良いとは限りません。問題ごとに、同じ時間予算で目的値と実行時間を測って決めます。
+
+#### 18.1 山登り法へ切り替える最小の変更
+
+切り替えに必要なのは、探索へ渡す `Options` の `acceptance` を `greedy` にすることだけです。この方式では目的値が悪くなる候補を採用せず、同じ値の候補は採用できます。温度の2項目は使わず、近傍の重みは既定値のままで構いません。同じ問題を山登り法で解く、単独で実行できる例を示します。
+
+**ファイル：`examples/18_greedy.cpp`**
+
+```cpp
+#include "connected_partition_solver_v11.hpp"
+#include <iostream>
+#include <vector>
+
+int main() {
+    using Solver = ConnectedPartitionSolver<double>;
+    Solver::Problem p(6, 2);
+    p.edges = {{0, 1, 1}, {1, 2, 8}, {2, 3, 10},
+               {3, 4, 8}, {4, 5, 1}};
+
+    for (auto& rule : p.regions) rule.min_vertices = 2;
+    Solver solver(p);
+    std::vector<int> initial{0, 0, 0, 1, 1, 1};
+
+    Solver::Options opt;
+    opt.budget_us = -1;
+    opt.max_steps = 2'000;
+
+    opt.acceptance = Solver::Acceptance::greedy;
+    auto result = solver.improve(initial, opt);
+
+    if (!result.best_cost) {
+        std::cout << "no feasible solution found\n";
+        return 1;
+    }
+    std::cout << "cost = " << *result.best_cost << '\n';
+    for (int r : solver.best_labels()) std::cout << r << ' ';
+    std::cout << '\n';
+}
+```
+
+`budget_us=-1` と `max_steps=2'000` はステップ02と同じく、時間ではなく2,000試行を上限にする指定です。ここで設定する `acceptance=greedy` が山登り法への切り替えです。`temperature=0` を指定するだけでは山登りになりません。0は焼きなましの**温度の自動推定**を表す値だからです。
+
+`improve(initial,opt)` の第2引数へ、この設定を渡します。`solve(opt)`、`repair(initial,opt)`、保持した状態から続行する `resume(opt)`（ステップ20）でも同じ設定を使えますが、影響するのは合法解の目的値を改善する段階です。`Options` は呼出しごとの設定であり、solver全体の既定値を書き換えるものではありません。たとえば次の呼出しを `resume()` と省略形にすると、その呼出しは既定の焼きなまし法になります。
+
+山登り法でも近傍を乱数で選ぶため、seedによって探索経路が変わります。同じ値の候補へ移ることもあり、最適解まで必ず到達するという保証はありません。
+
+#### 18.2 どんな場面で山登り法を試すか
+
+まずは既定の焼きなまし法を基準にし、次の場面では山登り法も比較候補にします。表は、この実装の動きから考えられる使い分けです。条件に当てはまる全問題で山登り法の方が良い、と実証された基準ではありません。
+
+| 場面 | 山登り法を試す理由と注意点 |
+|---|---|
+| 良い合法解があり、残りの短い時間で仕上げたい | 悪化してから回復する時間を使わず、出発点から悪化しない変更を試せます。ただし、すでに行き詰まっている解では改善が出ないこともあります。ステップ20の補助例で使い方を示します |
+| ターンごとの変更が小さく、短い呼出しを何度も行う | 焼きなましでは呼出しごとに冷却の進み具合が最初からになります。短い探索を繰り返す実際の使い方で、山登りの方が良い調整を積み重ねられるか比べます。1回を長くした測定だけでは判断できません |
+| 標準の目的関数を使い、連結性の検査が重い | 山登りでは、安い制約検査のあとに目的値が悪化すると分かれば、連結性を調べる前に棄却できます。悪化候補が多い場合は、同じ時間で試せる候補が増える可能性があります。利用者の関数で評価や制約を与える独自モデル（ステップ22以降）では、この早期棄却は使いません |
+| 温度設定が解品質にどう影響するか確かめたい | 山登りを比較の基準にすると、悪化を許すことに効果があるか調べやすくなります。山登りが勝つ場合は、そのまま使うほか、焼きなましの温度や時間配分を見直す材料にもできます |
+
+「短時間なら何マイクロ秒以下」と一律には決められません。同じ時間でも、頂点数、制約、近傍、独自評価の費用によって試せる回数が違うためです。また、試行数が増えることと、返す解が良くなることは別です。
+
+一方、良い解へ進むために一度目的値を悪くする必要がある問題では、焼きなましの方が探索を広げやすくなります。山登りが同じ品質で止まるなら、時間を延ばすだけでなく焼きなましも比較します。どちらも制約違反は受理しないため、制約で候補がほぼ全滅する問題は、方式の切り替えだけで解決するとは限りません。
+
+返却解を初期解より悪くしたくない、という理由だけで山登りにする必要はありません。同じ問題・同じ評価の合法初期解から `improve` する場合、焼きなましも初期解を含む最良解を保持して返します。2方式の違いは、探索途中の現在解の悪化を許すかどうかです。
+
+#### 18.3 実戦では同じ総時間で比べる
+
+この教材は仕組みを追いやすいように試行数を固定しています。採用する方式は、次の手順で決めます。時間指定と統計のAPIは、次のステップ19で説明します。
+
+1. 複数の代表的な入力と探索用seedを用意します。問題の大きさや制約の強さも変えます。
+2. 合法初期解を改善する比較では、同じ初期配列を両方式へ渡します。片方の結果をもう片方の初期解にすると、出発条件が変わってしまいます。初期構築も含めた実際の `solve` 利用は、別に比較します。
+3. `acceptance` 以外は同じ条件にし、各方式へ同じ時間予算を与えます。各試行には新しい締切を設定し、片方が時間を使い切った後の締切をもう片方へ流用しません。実行順も交互にするなど、順序の偏りを抑えます。時間上限より先に `max_steps` へ達すると試行数の比較になるので、時間で評価するときは `max_steps=-1` にします。
+4. 返却された `best_cost` または問題の正式なスコアを比べます。このライブラリの目的値は小さい方が良い値です。平均だけでなく、中央値や悪化した入力も確認します。費用に0や負値を含む場合は、単純な改善率ではなく目的値の差などを使います。`solve`・`repair` では、解が見つからなかった回を除外せず、合法解の発見率も記録します。
+5. 小さなターン更新を繰り返す用途は、その呼出し列全体で比べます。探索・再評価・必要なコピーを含めた時間を使い、温度などの調整に使わなかった入力でも結果を確かめます。
+
+山登りは標準モデルの悪化候補を連結性の検査前に棄却するため、統計の `feasible` の数え方にも影響します。`feasible/proposed` や試行数だけで優劣を決めず、同じ予算で得た最終結果を主に見ます。焼きなましと山登りで同じseedを使っても、受理判断や乱数の消費が変わるので、その後の候補列まで一致するわけではありません。
 
 ### ステップ19：マイクロ秒の予算と探索統計
 
@@ -1091,7 +1168,7 @@ int main() {
 **ファイル：`examples/19_budget_statistics.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1168,7 +1245,7 @@ int main() {
 | `.improved` | 最良目的値を厳密に小さくした回数 |
 | `.elapsed_ns` | その種類の提案・検査などに使ったナノ秒。`profile=true` 時だけ測る |
 
-表示の近傍ごとの5個の数は、表の `proposed` から `elapsed_ns` の順です。既定の貪欲探索では、目的値で先に棄却して連結性を調べない候補があります。このため `feasible/proposed` を「すべての候補の真の合法率」と読むことはできません。修復の内訳もこの近傍別統計には入りません。
+表示の近傍ごとの5個の数は、表の `proposed` から `elapsed_ns` の順です。`proposed` には候補を作れなかった試行も含まれます。また、標準モデルで `Acceptance::greedy` を指定すると、目的値で先に棄却して連結性を調べない候補があります。このため `feasible/proposed` を「すべての候補の真の合法率」と読むことはできません。修復の内訳もこの近傍別統計には入りません。
 
 ### ステップ20：一部分だけを動かし、続きから改善する
 
@@ -1177,7 +1254,7 @@ int main() {
 **ファイル：`examples/20_partial_resume.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1238,6 +1315,61 @@ int main() {
 
 全体のグラフは残るため、変更しない頂点を通る接続も考慮されます。局所領域を別グラフに切り出す方法とは条件が違います。また、`solve` は可動集合を指定しないことを要求します。部分改善には `improve`・`resume`、部分修復には `repair` を使います。
 
+#### 20.1 焼きなましの最良解を山登りで仕上げる
+
+ここでは可動集合の指定を省き、頂点0と5の固定条件を保ったまま全体を改善します。まず焼きなましを2,000試行行い、その**最良解**から山登りを500試行行います。
+
+**ファイル：`examples/20_polish_greedy.cpp`**
+
+```cpp
+#include "connected_partition_solver_v11.hpp"
+#include <iostream>
+#include <vector>
+
+int main() {
+    using Solver = ConnectedPartitionSolver<double>;
+    Solver::Problem p(6, 2);
+    p.edges = {{0, 1, 1}, {1, 2, 8}, {2, 3, 10},
+               {3, 4, 8}, {4, 5, 1}};
+
+    p.fixed = {0, -1, -1, -1, -1, 1};
+    Solver solver(p);
+    std::vector<int> initial{0, 0, 0, 1, 1, 1};
+
+    Solver::Options opt;
+    opt.budget_us = -1;
+    opt.max_steps = 2'000;
+
+    auto first = solver.improve(initial, opt);
+    if (!first.best_cost) return 1;
+    auto view = solver.best_labels();
+    std::vector<int> best(view.begin(), view.end());
+    Solver::Options finish = opt;
+    finish.acceptance = Solver::Acceptance::greedy;
+    finish.max_steps = 500;
+    auto result = solver.improve(best, finish);
+    assert(result.best_cost && *result.best_cost <= *first.best_cost);
+
+    if (!result.best_cost) {
+        std::cout << "no feasible solution found\n";
+        return 1;
+    }
+    std::cout << "cost = " << *result.best_cost << '\n';
+    for (int r : solver.best_labels()) std::cout << r << ' ';
+    std::cout << '\n';
+}
+```
+
+前半の `opt` は `acceptance` を省略しているので、既定の焼きなまし法です。`first.best_cost` を確認してから、`best_labels()` の配列を `best` へコピーします。これは、次の探索で内部の配列が書き換わっても、仕上げの出発点を保つためです。
+
+`finish=opt` は前半の設定をコピーします。その上で `finish.acceptance=greedy` とし、`finish.max_steps=500` を仕上げの試行数上限にします。`budget_us=-1` も引き継ぐので、この例の上限は合計2,500試行です。2,000対500という配分は説明用で、推奨比率を示すものではありません。
+
+仕上げには `improve(best,finish)` を使います。`resume(finish)` にすると、通常は焼きなましが保持している**現在解**から続きます。その現在解は最良解より悪いことがあるため、「最良解の周辺を仕上げる」という目的とは出発点が異なります。`resume` でも同じ問題・同じ評価の最良解は保持しますが、最良解を探索の出発点に選ぶ操作ではありません。
+
+最後の `assert` は、この小さな整数値の費用では、仕上げ後の最良値が前半の最良値以下になることを確認します。改善が見つからず同じ値のままでも正常です。一般の実数費用の照合には、ステップ02で説明した丸め誤差も考慮します。
+
+実時間で使うときは、前半と仕上げの時間を合わせて全体予算に収めます。共通の絶対締切を `deadline` に入れ、前半へ割り当てる相対予算を短くするなどして仕上げ時間を残します。配列のコピーや `improve` の再評価にも時間が掛かります。全時間を焼きなましだけに使う場合と、同じ総時間で比較して採用を決めます。独自モデルを使う場合は両方の `improve` へ同じモデルを渡し、比較する途中で問題や評価基準を変えないようにします。
+
 ### ステップ21：目的値を整数で正確に計算する
 
 ステップ02と同じ問題を、64ビット整数の目的値で解きます。
@@ -1245,7 +1377,7 @@ int main() {
 **ファイル：`examples/21_integer_cost.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1310,7 +1442,7 @@ $$F_ {\mathrm{model}}(x)=\sum_ {v=0}^{N-1} f_ {v}(v,x_ {v})+\sum_ {e\in E_ {\mat
 **ファイル：`examples/22_vertex_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1361,7 +1493,7 @@ int main() {
 **ファイル：`examples/23_edge_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1412,7 +1544,7 @@ int main() {
 **ファイル：`examples/24_region_features.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1496,7 +1628,7 @@ $$\sum_ {i=1}^{n}(z_ {i}-\mu)^{2}=Q-\frac{S^{2}}{n}$$
 **ファイル：`examples/25_global_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1567,7 +1699,7 @@ int main() {
 **ファイル：`examples/26_extra_constraint.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1618,7 +1750,7 @@ solverは組込み条件を通った完全な割当へ `extra_feasible` を適�
 **ファイル：`examples/27_label_dependent_load.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1675,7 +1807,7 @@ $w_ {v,r,d}$ は頂点 $v$ を領域 $r$ に置いたときの種類 $d$ の負�
 **ファイル：`examples/28_model_resume.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1730,6 +1862,8 @@ int main() {
 
 標準モデルで、問題も可動範囲も変えない `resume` は準備を軽くできます。一方、焼きなましの温度の進み具合は呼出しごとの予算で計算し直します。小さな呼出しを多数つなぐことと、1回の長い呼出しは、まったく同じ探索にはなりません。
 
+ターンごとの変更が小さく、短い呼出しを繰り返すなら、ステップ18の山登り法も比較候補です。その場合も毎回の呼出しへ `acceptance=greedy` を設定した `Options` を渡します。最良解から仕切り直したい場合と、現在解から続けたい場合の違いは、ステップ20の補助例を参照してください。
+
 ## 8. ターン更新と複数回の実行を組み合わせる
 
 ### ステップ29：制約が変わったら、保持候補を再評価・修復する
@@ -1739,7 +1873,7 @@ int main() {
 **ファイル：`examples/29_turn_update.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1827,12 +1961,12 @@ int main() {
 
 ### ステップ30：複数の開始点を比較して、良い解を引き継ぐ
 
-ステップ16の `solve` を、乱数の初期値を変えて3回行います。複数の独立した探索の中で最良解を保存し、最後にその解から追加で改善します。
+ステップ16の `solve` を、乱数の初期値を変えて3回行います。各回の合法解の改善には、既定設定の焼きなまし法を使います。複数の独立した探索の中で最良解を保存し、最後にその解から追加で改善します。
 
 **ファイル：`examples/30_multistart.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v08.hpp"
+#include "connected_partition_solver_v11.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1873,6 +2007,8 @@ int main() {
 }
 ```
 
+`acceptance` と温度の指定を省略しているため、各回は自動温度の焼きなまし法で改善します。呼び出すたびに冷却の進み具合は最初からになり、`solve` は温度の自動推定も初期化します。修復中の採用方針は改善用の焼きなましとは別です。
+
 `seed` に1、2、3を使い、それぞれ `max_steps=2'000` の新しい探索を行います。これらの数値は例示であり、選び抜いた乱数値ではありません。各 `solve` は以前の最良解を自動で混ぜないので、全実行を通した最良値 `best_cost` と配列 `best` を利用者側で保持します。
 
 `1ULL` などの `ULL` は、符号なしの整数リテラルを表すC++の接尾辞です。ここでは64ビットの `seed` へ渡す正の値として使っています。
@@ -1882,6 +2018,8 @@ int main() {
 最後は `improve(best,opt)` により、全実行の最良解を初期解として、さらに最大2,000試行改善します。`resume` なら最後の `solve` の内部状態から続くので、外で選んだ最良解を戻したいこの場面とは使い方が異なります。
 
 この例は総試行数が増えます。方法を比較するときは、開始点を増やす側と1回を長くする側で、同じ総時間予算を使います。目的値だけでなく、構築・再評価・コピーの時間も含めて比較します。
+
+新しい構築が不要なら、同じ合法な配列を渡して `improve(initial,opt)` を繰り返す方法もあります。この場合も乱数の初期値を変えます。`resume` を繰り返す方法は、保持中の状態から探索を続けるため、独立したマルチスタートとは異なります。どの方法が有利かは、初期解の作りやすさと予算に依存し、回数を増やせば必ず良くなるわけではありません。
 
 ## 9. APIを使う前に確認すること
 
@@ -1935,7 +2073,7 @@ int main() {
 
 ## 付録A. 実装アルゴリズムの全体像
 
-ここからは、使い方ではなく実装の仕組みを説明します。対象はv08です。パラメータや内部処理は、将来の版で変更される可能性があります。
+ここからは、使い方ではなく実装の仕組みを説明します。対象は `connected_partition_solver_v11.hpp` です。
 
 ### A.1 入口から結果まで
 
@@ -2001,7 +2139,9 @@ int main() {
 
 各領域の隣にある未割当頂点を候補とし、領域を少しずつ成長させます。頂点数の目安に対して小さい領域を優先し、最大頂点数を越えて成長させないようにします。負荷が符号付きの場合もあるため、「頂点を増やせば負荷も増える」という仮定には頼りません。
 
-接続辺をたどって割り当てられなかった頂点も、最後には許可先を探して完全な配列にします。この構築だけで、連結性・負荷・接触などの全制約が必ず満たされるわけではありません。完成後に全体評価し、違反があれば修復へ進みます。
+未登録の領域ペアの接触が禁止されている場合は、すでに割り当てた隣接頂点との禁止接触が生じる成長先を避けます。ここでは `Contact` の辺だけを使います。これは部分的な割当を見た局所的な判定で、すべての接触数の下限・上限や、今後必要になる接触を先読みするものではありません。
+
+接続辺をたどって割り当てられなかった頂点も、最後には許可先と禁止接触を確認して割当先を探します。条件に合う候補が見つからなくても、修復へ渡すため完全な配列にします。この構築だけで、固定・許可集合・連結性・負荷・接触などの全制約が必ず満たされるわけではありません。完成後に全体評価し、違反があれば修復へ進みます。
 
 合法解を確保でき、まだ予算があれば、もう1つの構築候補も試します。この追加構築では、各成長先で最大12個のランダムな候補を比べ、既定の配置費用・辺費用を手掛かりにします。独自関数で置換された費用は、この部分割当の段階では呼びません。最終的な比較には、完成した候補の全制約と独自モデルを含む目的値を使います。
 
@@ -2009,7 +2149,7 @@ int main() {
 
 ### C.2 修復で使う「違反量」
 
-修復中は、目的値の良さより先に、合法な割当を得ることを目指します。そのため、固定・許可違反、頂点数の不足や超過、負荷範囲からのずれ、接触違反、余分な連結成分などをまとめた内部の違反量を使います。
+修復中は、目的値の良さより先に、合法な割当を得ることを目指します。そのため、固定・許可違反、頂点数の不足や超過、負荷範囲からのずれ、接触違反、余分な連結成分などをまとめた内部の違反量を使います。余分な連結成分1個には重み8を付け、負荷を直すために領域を細かく分断し、その後につなぎ直せなくなる状態を避けやすくします。この重みは修復の案内用で、合法な解の目的値や連結性の判定条件は変えません。
 
 負荷範囲の判定自体は整数で行います。その後、修復の案内に使うずれの大きさだけを実数へ変換し、負荷の単位が大きいだけでその違反ばかりが支配しないよう、領域の規模を使って調整します。追加条件だけが違反する場合の違反量は1です。独自の追加条件の「あとどれくらいで満たせるか」までは分かりません。
 
@@ -2017,7 +2157,17 @@ int main() {
 
 修復では、Move・Swap・Block・Recombineを内部の固定比率6:2:1:1で選びます。`Options.weights` は合法解の改善探索用で、この修復比率は変更しません。違反量が減る候補・同じ候補を採用し、ときには違反量の増える候補も採用します。この採用方針も修復用で、`Acceptance::greedy` を指定していても修復が常に単調に違反を減らすわけではありません。
 
-違反量の最小だった候補を保存し、進展が256試行停滞するとそこへ戻します。`solve` の修復では、新しく構築し直す選択を行います。合法解を得たら、その時点から通常の目的値による改善へ切り替わります。
+違反量の最小だった候補を保存し、進展が256試行停滞するとそこへ戻します。`solve` の修復では、停滞からの復帰4回のうち最初の3回はこの候補を再利用し、4回目に新しく構築し直します。良い途中状態を十分に試しつつ、別の構築へ移る機会も残す方針です。新しい構築には、C.1の追加構築と同じ、既定の費用を手掛かりにする方法を使います。部分割当で利用者の独自コストを呼ばない点も同じです。`repair` は新規構築へ切り替えず、最良だった途中状態へ戻します。合法解を得たら、その時点から通常の目的値による改善へ切り替わります。
+
+ここでの再スタートは、まだ合法解を得ていない修復段階のものです。合法解の改善が止まると自動的に新しい初期解へ切り替わる機能ではありません。
+
+### C.3 強い制約がある場合の使い方
+
+山登りも焼きなましも、合法解の改善中に制約違反の候補を受理しません。焼きなましで許すのは「合法だが目的値が悪化する変更」です。そのため、制約を一度破らなければ移れない別の解へ、温度を上げるだけで必ず到達できるわけではありません。
+
+一方、本ライブラリは1頂点の移動だけでなく、交換、ブロック操作、領域全体の操作、2領域の再分割も使います。これらが単独の頂点移動では越えられない障壁を越えられる場合があります。詳細は付録Dで説明します。
+
+強い制約を持つ問題では、問題固有の規則で合法な初期解を作り、`improve` へ渡せると有用です。別の初期解を何度も構築する方法は、構築や修復が安く、異なる形の合法解を得られる場合に候補になります。各回の `solve` や `improve` は以前の最良解を引き継がないため、複数回を比較するときは利用者側で最良ラベルをコピーし、全体の締切も共有してください。`resume` は別の出発点を作る操作ではなく、保持した探索状態を継続する操作です。
 
 ## 付録D. 5種類の近傍
 
@@ -2067,7 +2217,7 @@ int main() {
 
 変更前の集計値を保存してから、候補のラベルを一度に適用します。その後に制約を検査するため、Swapの片側だけ適用した中間状態を完成候補と誤認しません。
 
-標準の貪欲探索では、安い個数・負荷・接触などの検査を済ませたあと、費用が悪化するなら連結性の検査前に棄却できます。独自モデルの費用は、連結性と追加条件にも通った場合だけ呼びます。
+標準モデルで山登り法を選ぶと、安い個数・負荷・接触などの検査を済ませたあと、費用が悪化するなら連結性の検査前に棄却できます。独自モデルの費用は、連結性と追加条件にも通った場合だけ呼びます。
 
 領域費用の差分は、変更後の領域集計による値から、保存した変更前の集計による値を引いて求めます。そのため `region_cost` は渡された集計に従って計算する必要があります。現在の全体状態を別の場所から読んでしまうと、変更前の評価が正しく計算できません。
 
@@ -2093,7 +2243,7 @@ int main() {
 
 ### F.1 悪化をどれくらい許すか
 
-現在の目的値を $C$、候補の目的値を $C'$ とし、悪化量を $\Delta=C'-C$ とします。$\Delta\le0$ なら採用します。焼きなましで $\Delta>0$ の場合は、次の確率で採用します。
+改善探索の既定は `Acceptance::annealing` です。以下は制約検査を通った候補の採用判断です。現在の目的値を $C$、候補の目的値を $C'$ とし、悪化量を $\Delta=C'-C$ とします。$\Delta\le0$ なら採用します。焼きなましで $\Delta>0$ の場合は、次の確率で採用します。
 
 $$p=\exp(-\Delta/T)$$
 
@@ -2131,11 +2281,11 @@ $q$ は時間予算と試行数予算のうち、より上限へ近づいてい�
 
 特徴を足し算で管理して領域評価を軽くする、合法な初期解を利用する、問題を変えないターンでは `resume` を使う、といった利用側の表現も費用に影響します。`update` の内部再利用は有用ですが、全更新が一定時間になるものではありません。
 
-v08のホットパスは通常の整数・`double` を使い、`long double`・`__int128` を既定利用していません。IDと要素数は `int`、整数の合計・差・中間積は `int64_t` に収まる入力を前提にします。内部の世代番号の累積増分も、それぞれ $2^{32}$ 未満を前提とします。これらの制限を越える極端な実行を、この小さなライブラリ内で特別扱いする設計ではありません。
+v11のホットパスは通常の整数・`double` を使い、`long double`・`__int128` を既定利用していません。IDと要素数は `int`、整数の合計・差・中間積は `int64_t` に収まる入力を前提にします。内部の世代番号の累積増分も、それぞれ $2^{32}$ 未満を前提とします。これらの制限を越える極端な実行を、この小さなライブラリ内で特別扱いする設計ではありません。
 
 ## 付録H. 参照資料と検証情報
 
-類似ソルバーの節で参照した資料です。APIと内部アルゴリズムの説明の一次資料は、付属のv08ヘッダそのものです。
+類似ソルバーの節で参照した資料です。APIと内部アルゴリズムの説明の一次資料は、付属のv11ヘッダそのものです。
 
 1. [AtCoder Library — MinCostFlow](https://atcoder.github.io/ac-library/production/document_ja/mincostflow.html)。最小費用流のAPIと入力制約。下限付き容量やモデル変換は利用者側の作業です。
 2. [OR-Tools — Assignment as a Minimum Cost Flow Problem](https://developers.google.com/optimization/flow/assignment_min_cost_flow)。割当問題の特殊ケースと最小費用流との対応。
@@ -2144,15 +2294,15 @@ v08のホットパスは通常の整数・`double` を使い、`long double`・`
 5. [OR-Tools — CP-SAT Solver](https://developers.google.com/optimization/cp/cp_solver)。整数によるモデル化と `OPTIMAL`・`FEASIBLE` などの状態の意味。
 6. [KarypisLab — METIS](https://github.com/KarypisLab/METIS)。グラフ分割の公式実装と対象用途。
 
-検証環境は `g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0` です。全30例をC++20・C++23の両方でコンパイル・実行し、計60実行が成功しました。`-O2 -Wall -Wextra -pedantic` を使い、警告はありませんでした。各例の出力について、別実装のPythonで連結性・主要な制約・目的値を照合しています。例内の `assert` では再評価、可動範囲、更新後の固定条件なども確認しています。これは教材の実行検証であり、未知の入力に対する解品質保証や厳密な時間保証ではありません。
+検証環境は `g++ (Ubuntu 13.3.0-6ubuntu2~24.04) 13.3.0` です。全32例をC++20・C++23の両方でコンパイル・実行し、計64実行の成功を確認しています。`-O2 -Wall -Wextra -pedantic` を使い、警告はありませんでした。各例の出力について、別実装のPythonで連結性・主要な制約・目的値を照合しています。例内の `assert` では再評価、可動範囲、更新後の固定条件なども確認しています。これは教材の実行検証であり、未知の入力に対する解品質保証や厳密な時間保証ではありません。
 
 付属ZIPの `validation/examples-both.json` に各例の実際の出力があります。時間依存の値や、同点の解のラベル配列は実行ごとに変わる場合があります。GCC15.2など、上記以外のコンパイラでは今回の実行検証を行っていません。
 
 本文のC++コードは付属の `.cpp` と同じ内容です。数式は `$...$` または `$$...$$` に対応するMarkdown表示器を想定します。表示数式のソースは各1行とし、数式内の下付き添字がMarkdownの強調へ変わらない形を使用しています。数式対応のCommonMark処理で、数式の内容・コードブロック・見出しを確認し、全97箇所の数式をKaTeXでエラーなく処理できることを確認しています。数式非対応の表示器ではLaTeX記法のまま表示されます。
 
-対象ヘッダのSHA-256：`9f909389b841a7ffbd8fdea1b22b72254d1b1127fa8958a23a93d93f0ea3f8cd`。
+対象ヘッダのSHA-256：`e16ac58bbe0de22d19594c124895842a3c552264c22b9425c5be5c7b560ba400`。
 
-再検証はZIPのルートから次のコマンドで行えます。Python 3とGCCが必要です。コンパイルが30例×2回あるため、例を1個実行するより時間が掛かります。
+再検証はZIPのルートから次のコマンドで行えます。Python 3とGCCが必要です。コンパイルが32例×2回あるため、例を1個実行するより時間が掛かります。
 
 ```sh
 python3 verify_examples.py --std both --jobs 3
