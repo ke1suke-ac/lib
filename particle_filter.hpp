@@ -13,10 +13,20 @@ public:
     struct UpdateResult {
         bool ok;
         double log_normalizer;
+
+        friend std::ostream& operator<<(std::ostream& os, const UpdateResult& result) {
+            return os << "UpdateResult{ok=" << (result.ok ? "true" : "false")
+                      << ", log_normalizer=" << result.log_normalizer << '}';
+        }
     };
     struct MoveResult {
         int attempted = 0;
         int accepted = 0;
+
+        friend std::ostream& operator<<(std::ostream& os, const MoveResult& result) {
+            return os << "MoveResult{attempted=" << result.attempted
+                      << ", accepted=" << result.accepted << '}';
+        }
     };
     template<class Undo>
     struct MoveProposal {
@@ -27,6 +37,22 @@ public:
     struct Estimate {
         Value mean;
         double selected_mass;
+
+        friend std::ostream& operator<<(std::ostream& os, const Estimate& result) {
+            os << "Estimate{mean=";
+            if constexpr (std::is_arithmetic_v<Value>) os << result.mean;
+            else {
+                os << '[';
+                const auto count = std::size(result.mean);
+                for (std::size_t i = 0; i < std::min<std::size_t>(count, 20); ++i) {
+                    if (i) os << ", ";
+                    os << result.mean[i];
+                }
+                if (count > 20) os << ", ... (size=" << count << ')';
+                os << ']';
+            }
+            return os << ", selected_mass=" << result.selected_mass << '}';
+        }
     };
 
 private:
@@ -699,6 +725,13 @@ public:
         double log_predictive;
         bool resampled;
         MoveResult moves;
+
+        friend std::ostream& operator<<(std::ostream& os, const ObserveResult& result) {
+            return os << "ObserveResult{ok=" << (result.ok ? "true" : "false")
+                      << ", log_predictive=" << result.log_predictive
+                      << ", resampled=" << (result.resampled ? "true" : "false")
+                      << ", moves=" << result.moves << '}';
+        }
     };
 
     explicit ParticleFilter(Model model, Param param = {}, Rng rng = Rng(0))

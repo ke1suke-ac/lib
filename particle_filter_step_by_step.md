@@ -1,6 +1,6 @@
 # particle_filter ステップバイステップガイド
 
-対象は `particle_filter_v11.hpp`、C++20です。未知の値を観測から推定するプログラムを、動く最小例から少しずつ組み立てます。数学は高校で学ぶ確率、平均、指数・対数を出発点にし、新しい道具は登場した場所で説明します。
+対象は `particle_filter_v12.hpp`、C++20です。未知の値を観測から推定するプログラムを、動く最小例から少しずつ組み立てます。数学は高校で学ぶ確率、平均、指数・対数を出発点にし、新しい道具は登場した場所で説明します。
 
 これは順番に学ぶための独立したガイドです。最初に全APIを覚える必要はありません。ステップ01〜06で、基本的な推定と結果の読み方まで使えるようになります。その後は必要な題材まで読み進めてください。
 
@@ -18,17 +18,17 @@
 
 ## 最初の準備
 
-ZIPを展開すると、ヘッダー、このMarkdown、40個の独立した `.cpp` ファイルが入っています。各コード例を `main.cpp` にコピーし、同じディレクトリへ `particle_filter_v11.hpp` を置いてください。入力データは各例の `main` に入っているので、標準入力を用意する必要はありません。
+ZIPを展開すると、ヘッダー、このMarkdown、40個の独立した `.cpp` ファイルが入っています。各コード例を `main.cpp` にコピーし、同じディレクトリへ `particle_filter_v12.hpp` を置いてください。入力データは各例の `main` に入っているので、標準入力を用意する必要はありません。
 
 ```bash
 g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic main.cpp -o main
 ./main
 ```
 
-同梱ファイルをそのまま使う場合は、ZIPから展開した `particle_filter_step_by_step_v01` ディレクトリで次を実行します。
+同梱ファイルをそのまま使う場合は、ZIPから展開した `particle_filter_step_by_step_v02` ディレクトリで次を実行します。
 
 ```bash
-g++ -std=c++20 -O2 -I. particle_filter_step_by_step_examples_v01/step_01.cpp -o step_01
+g++ -std=c++20 -O2 -I. particle_filter_step_by_step_examples_v02/step_01.cpp -o step_01
 ./step_01
 ```
 
@@ -43,7 +43,7 @@ g++ -std=c++20 -O2 -I. particle_filter_step_by_step_examples_v01/step_01.cpp -o 
 最初は0から1までのどの成功率も同じ程度に考えます。実際に1回動かすと成功しました。この結果を取り込んで、成功率の代表値を表示します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -115,7 +115,7 @@ $$\frac{0.2\times0.2+0.5\times0.5+0.8\times0.8}{0.2+0.5+0.8}=0.62$$
 出発点は01です。装置の成功率は変わらないまま、8回分の成否が得られた場合に広げます。変更する中心は、`observe` を新しい観測ごとに1回ずつ呼ぶことです。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -170,7 +170,7 @@ int main() {
 出発点は02です。問題の確率モデルは変えず、計算に使う候補の個数と、乱数の出発点だけを明示します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -223,7 +223,7 @@ int main() {
 出発点は01です。推定の規則を変えず、「現在どういう状態か」を表示します。最初から内部の粒子を操作する必要はなく、読み取りだけに使います。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -251,6 +251,7 @@ int main() {
         std::cout << i << ' ' << particles[i] << ' '
                   << weights[i] << ' ' << log_weights[i] << '\n';
     }
+    std::cout << result << '\n'; // 結果構造体をそのまま出力できる。
 }
 ```
 
@@ -258,9 +259,9 @@ int main() {
 
 `weights()[i]` は、粒子 `particles()[i]` の重みです。大きい粒子ほど、平均や行動評価への寄与が大きくなります。`log_weights()[i]` はその重みの自然対数です。対数を使った尤度の書き方は14で学びます。ここでは「同じ重みの、別の数値表現」と考えておけば十分です。
 
-`ESS` は、重みが何個分に広がっているかの目安です。粒子数を $N$、正規化済みの重みを $w_1,\ldots,w_N$ とすると、次の式です。
+`ESS` は、重みが何個分に広がっているかの目安です。粒子数を $N$、正規化済みの重みを $w_ {1},\ldots,w_ {N}$ とすると、次の式です。
 
-$$\mathrm{ESS}=\frac{1}{w_1^2+\cdots+w_N^2}$$
+$$\mathrm{ESS}=\frac{1}{w_ {1}^2+\cdots+w_ {N}^2}$$
 
 全員の重みが同じならESSは $N$。1個だけに全重みが集まると1です。ただし、**値の異なる粒子が何種類あるかを数えた数字ではありません。** 同じ値のコピーが並んでも、等重みならESSは大きくなります。
 
@@ -285,18 +286,23 @@ resampled 0 moves 0/0
 0 0.159793 0.000306392 -8.09064
 1 0.992145 0.00190237 -6.26466
 2 0.039569 7.58707e-05 -9.48648
+ObserveResult{ok=true, log_predictive=-0.674701, resampled=false, moves=MoveResult{attempted=0, accepted=0}}
 ```
 
 今回の観測は1回の成功なので、`log_predictive` はおよそ $\log(0.5)$ になります。確率の代わりに確率密度を使う問題では、この値が正になる場合もあります。
 
 viewは安価な読み取り口ですが、粒子や配列を変更する操作をまたいで保存しないでください。`observe`、`set_param`、`reset`、代入などの後は取り直します。更新に失敗した場合でも作業領域は使われ得るため、失敗ならviewが必ず有効とは考えません。
 
+最後の `std::cout << result << '\n';` は、観測結果の構造体をそのまま表示しています。項目名が付くので、`ok`、`log_predictive`、`resampled`、再探索の回数を1行で確認できます。`cout` を `cerr` に変えれば標準エラー出力へ出せるため、インタラクティブ問題で解答の標準出力と分けたいときに使えます。
+
+出力演算子自体は改行しません。末尾の `'\n'` は呼び出し側が付けています。数値は出力先の精度や表示形式に従い、必要なら `std::setprecision(10)` などで指定できます。表示のために `observe` を再び呼ぶと観測を二重に取り込むので、例のように保存した `result` を出力します。
+
 ## 05. 全粒子平均と、上位k粒子の平均を使い分ける
 
 出発点は02です。観測は同じまま、代表値の取り方を3種類比べます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -322,6 +328,7 @@ int main() {
     std::cout << "all " << all.mean << ' ' << all.selected_mass << '\n';
     std::cout << "top " << top.mean << ' ' << top.selected_mass << '\n';
     std::cout << "one " << one.mean << ' ' << one.selected_mass << '\n';
+    std::cout << top << '\n'; // meanとselected_massを、項目名付きで表示。
 }
 ```
 
@@ -344,11 +351,15 @@ int main() {
 all 0.694825 1
 top 0.751243 0.326962
 one 0.749947 0.00261888
+Estimate{mean=0.751243, selected_mass=0.326962}
 ```
 
 最初は全粒子平均を使い、上位kを使う理由がある場合に絞ります。再サンプリング直後は重みが等しいため、上位kは単に同点から選ばれた一部になります。また、`estimate(1)` は現在の最大重み粒子であり、「事前の考え方と全観測を反映した確率・密度が最大の仮説」を常に返すAPIではありません。
 
+`std::cout << top << '\n';` は、平均と選択質量をまとめて表示します。平均が配列になる問題でも同じ書き方を使えます。配列は先頭20要素までで、残りがあると `... (size=25)` のように総要素数を表示します。これは表示だけの省略で、`mean` の内容や推定結果は変わりません。
+
 ## 06. 平均以外を求める：2連続成功と、成功率の不確実性
+
 
 出発点は02です。成功率の平均だけでなく、次の3つを知りたいとします。
 
@@ -357,7 +368,7 @@ one 0.749947 0.00261888
 - 本当の成功率が0.6以上である可能性。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -421,7 +432,7 @@ P(p>=0.6) 0.757238
 出発点は06です。推定値を表示するだけでなく、次の行動を選びます。安全策なら確実に5点。挑戦すると参加費1点を払い、2回とも成功すれば12点を獲得するルールです。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -479,7 +490,7 @@ int main() {
 出発点は07です。行動評価が大きなシミュレーションになり、全粒子を毎回試すと重い場合を考えます。推定器自体の粒子数を減らさず、その分布から256個だけ抽出して評価します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -538,7 +549,7 @@ int main() {
 出発点は01です。装置の表示に0・1以外の記号2が現れました。しかし、今のモデルでは2が出る経路を一切想定していません。その観測の尤度を、全粒子で0にする例です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -589,7 +600,7 @@ int main() {
 出発点は02です。観測は8件のままですが、行動を選ぶまで少し計算時間が残っています。`observe` の再呼び出しではなく、`refine` で候補を追加探索します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -613,6 +624,7 @@ int main() {
     const auto moved = filter.refine(4); // 各粒子に4回の追加再探索。新観測は追加しない。
     std::cout << moved.accepted << '/' << moved.attempted << '\n';
     std::cout << before << ' ' << filter.observation_count() << ' ' << filter.estimate().mean << '\n';
+    std::cout << moved << '\n'; // 保存した再探索結果を出力。refineを重ねて呼ばない。
 }
 ```
 
@@ -630,16 +642,19 @@ int main() {
 ```text
 2127/4096
 8 8 0.698884
+MoveResult{attempted=4096, accepted=2127}
 ```
 
 `refine` は粒子の値を変更し、重みと履歴を維持します。回数を増やせば必ず推定誤差が単調に下がるわけではありません。まず数回にし、計算時間と平均的な誤差で調整してください。時間とともに状態が動くモデルには、この高水準の `refine` はありません。32で理由を説明します。
+
+最後の `std::cout << moved << '\n';` で、`MoveResult{attempted=..., accepted=...}` という項目名付きの表示を確認できます。`moved` は既に終わった再探索の結果なので、これを出力しても再探索は増えません。
 
 ## 11. 自動処理と、途中からの計算量調整
 
 出発点は10です。手動の追加計算を理解したところで、観測時に自動で行われる処理を調整します。ここでは初めて、`Param` の全項目をまとめて扱います。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -707,7 +722,7 @@ int main() {
 出発点は02です。「もし次が成功だったら」を試したい場合、実際の推定器を変更せずコピーを作ります。続いて、コピーの戻し方と再初期化の違いを確認します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -779,7 +794,7 @@ $$L(\mu,y)=\frac{1}{\sigma\sqrt{2\pi}}\exp\left(-\frac{(y-\mu)^2}{2\sigma^2}\rig
 ここで $L$ は今回の密度、$\mu$ は粒子が表す温度、$y$ は実測値、$\sigma$ は標準偏差、$\pi$ は円周率です。`exp(x)` は $e^x$ を計算します。実測値と仮説の温度が近いほど、二乗誤差が小さくなり、密度が高くなります。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;    // 一定の温度 mu。
@@ -835,7 +850,7 @@ $$\log L(\mu,y)=-\frac{(y-\mu)^2}{2\sigma^2}-\log\sigma-\frac{1}{2}\log(2\pi)$$
 変数の意味は13と同じです。`exp` で非常に小さい数を作らず、右辺を直接計算します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;    // 一定の温度 mu。
@@ -883,7 +898,7 @@ int main() {
 `UniformBox<1>` は、1個の連続パラメータについて下限・上限を指定する型です。`struct Model : UniformBox<1>` はC++の継承で、`UniformBox` が持つ型や関数をこのモデルでも使えるようにします。この例では `Particle`、`sample`、`log_prior`、`propose` が用意されるため、自分で書く中心は観測の尤度です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<1> {
     using Observation = double;
@@ -932,7 +947,7 @@ int main() {
 1回の観測に必要なのは、「どの入力 $x$ を与えたか」「表示 $y$ は何か」「その測定の誤差の標準偏差 $\sigma$ はいくつか」です。これら3個を `Observation` へまとめます。粒子は未知の2個 $[a,b]$ を持ちます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<2> {
     struct Observation { double x, y, sigma; };
@@ -997,7 +1012,7 @@ int main() {
 出発点は16です。今度は倍率と固定ずれに加えて、測定誤差の標準偏差も分からないとします。粒子を $[a,b,\sigma]$ の3成分に増やし、観測から既知の `sigma` を取り除きます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<3> {
     struct Observation { double x, y; };
@@ -1047,14 +1062,14 @@ int main() {
 
 出発点は16です。倍率と固定ずれという固定の2成分から、入力によって個数が変わるパラメータへ広げます。
 
-道路が複数の地域に分かれ、地域ごとに「距離1あたりの所要時間」が違うとします。各地域で走った距離と、合計所要時間だけが観測できます。例では3地域で、未知の単位時間を $c_0,c_1,c_2$ とします。各地域を走る距離が $d_0,d_1,d_2$ なら、予測時間は次の足し算です。
+道路が複数の地域に分かれ、地域ごとに「距離1あたりの所要時間」が違うとします。各地域で走った距離と、合計所要時間だけが観測できます。例では3地域で、未知の単位時間を $c_ {0},c_ {1},c_ {2}$ とします。各地域を走る距離が $d_ {0},d_ {1},d_ {2}$ なら、予測時間は次の足し算です。
 
-$$\text{予測時間}=c_0d_0+c_1d_1+c_2d_2$$
+$$t_ {\mathrm{pred}}=c_ {0}d_ {0}+c_ {1}d_ {1}+c_ {2}d_ {2}$$
 
-`c` は粒子が持つ未知の単位時間、`d` は観測に含める既知の距離です。合計時間には、標準偏差0.2の正規分布の誤差が加わるとします。
+式の $t_ {\mathrm{pred}}$ は予測時間、`c` は粒子が持つ未知の単位時間、`d` は観測に含める既知の距離です。合計時間には、標準偏差0.2の正規分布の誤差が加わるとします。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<> {
     struct Observation { std::vector<double> distance; double time, sigma; };
@@ -1110,7 +1125,7 @@ int main() {
 出発点は18です。毎ターン、地域ごとの平均と、2本の候補経路の所要時間を求めます。推定モデルは変更せず、集計先を自分で用意する `estimate_into` を使います。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<> {
     struct Observation { std::vector<double> distance; double time, sigma; };
@@ -1181,14 +1196,14 @@ int main() {
 
 出発点は15の一定温度です。観測が増えると、再探索で候補を評価するたびに、過去の測定を全部読むのが重くなります。正規分布の二乗誤差は、先に和を計算しておくと短い式へまとめられます。
 
-測定値が $y_1,\ldots,y_n$ のとき、件数を $n$、合計を $S=y_1+\cdots+y_n$、二乗の合計を $Q=y_1^2+\cdots+y_n^2$ とします。候補温度 $\mu$ に対する二乗誤差の合計は、二乗を展開すると次の形です。
+測定値が $y_ {1},\ldots,y_ {n}$ のとき、件数を $n$、合計を $S=y_ {1}+\cdots+y_ {n}$、二乗の合計を $Q=y_ {1}^2+\cdots+y_ {n}^2$ とします。候補温度 $\mu$ に対する二乗誤差の合計は、二乗を展開すると次の形です。
 
-$$\sum_{j=1}^{n}(y_j-\mu)^2=Q-2\mu S+n\mu^2$$
+$$\sum_ {j=1}^{n}(y_ {j}-\mu)^2=Q-2\mu S+n\mu^2$$
 
 右辺なら、測定を1件ずつ読み直さず、$n,S,Q$ と候補 $\mu$ だけで評価できます。これを `log_likelihood_history` に実装します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<1> {
     struct Observation { double y, sum, squares; int count; };
@@ -1258,7 +1273,7 @@ $$L(\mu,d)=F\left(\frac{d+0.5-\mu}{\sigma}\right)-F\left(\frac{d-0.5-\mu}{\sigma
 $\mu$ は候補温度、$d$ は表示された整数、$\sigma$ は内部測定の標準偏差です。大きい区間の確率から小さい区間の確率を引くと、間の区間だけが残ります。$F$ を自分で積分して実装する必要はなく、標準関数 `erfc` から計算できます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<1> {
     using Observation = int; // 四捨五入された温度表示。
@@ -1309,7 +1324,7 @@ int main() {
 観測を、通常の実測値・上限だけが分かる値・下限だけが分かる値の3種類に分けます。「以下」は左側全体の面積、「以上」は右側全体の面積を返します。種類は装置の出力規則に従って決めます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<1> {
     enum class Kind { Exact, AtMost, AtLeast };
@@ -1369,7 +1384,7 @@ int main() {
 ある行動が選ばれる道筋は、「ランダムで選ばれる」と「最大評価なので選ばれる」の2つです。例えば最大評価が1個だけなら、その行動の確率は $\varepsilon/3+(1-\varepsilon)$、他の行動は $\varepsilon/3$ になります。全部を足すと1です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<2> {
     struct Action { double reward, risk; };
@@ -1434,7 +1449,7 @@ int main() {
 粒子には種類を表す整数0または1を入れます。ただし、種類番号をそのまま平均した値を「新しい種類」として使うのは適切ではありません。今回は各種類の確率を取り出す射影を、モデルに用意します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = int;     // 0=正常、1=故障。
@@ -1492,7 +1507,7 @@ int main() {
 未知の種類と数値を1個の構造体にまとめます。ライブラリは、この構造体全体を1個の仮説として保持します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     struct Particle { bool reversed; double gain; };
@@ -1549,7 +1564,7 @@ gain 1.50657 P(reversed) 1
 再探索で現在値を1だけ増減する `propose` を追加します。これは真の距離が時間とともに動くという意味ではありません。「同じ固定距離について、別の仮説を試す」操作です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = int; // 整数の距離0..4。
@@ -1620,7 +1635,7 @@ moves 3459/8192
 大きい整数を提案しやすくしただけで、推定結果まで大きい整数へ偏ってはいけません。そのため、候補を出しやすくした分を、採否判定で補正します。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = int; // 整数の距離0..4。
@@ -1691,7 +1706,7 @@ $$\log q(u\mid v)-\log q(v\mid u)$$
 提案では1個の重量だけを変更します。毎回12個をコピーせず、その場で1個を書き換え、採用されなければ戻す仕組みを使います。これは履歴の差分追加とは別の、**候補の変更を軽くするための差分提案**です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     struct Particle { std::vector<double> value; double sum; };
@@ -1780,7 +1795,7 @@ int main() {
 そこで、角度を「横成分 `cos`、縦成分 `sin`」へ変換して平均し、最後に角度へ戻します。数学の三角比を、同じ向きを近い値で表すために使います。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model : UniformBox<1> {
     using Observation = std::array<double, 2>; // 方位センサーの横成分・縦成分。
@@ -1839,7 +1854,7 @@ int main() {
 粒子を `[赤の割合, 緑の割合, 青の割合]` にします。赤を観測した確率は赤の割合そのものなので、尤度は単純です。少し考える必要があるのは、合計1を保つ生成と提案です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = std::array<double, 3>; // 赤・緑・青の割合。非負、合計1。
@@ -1908,7 +1923,7 @@ int main() {
 粒子には「Aは開、Bは閉、Cは開」のような、地図全体の仮説を入れます。3個の真偽値を整数の3ビットで表すとコンパクトです。例えば `0b101` はAとCが開いている仮説です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = std::uint32_t; // bit 0,1,2は、それぞれ扉A,B,Cが開いているか。
@@ -1988,7 +2003,7 @@ int main() {
 1ターンに「指定した移動量だけ進む。ただし移動誤差が加わる。その後、位置センサーで測る」とします。移動誤差の標準偏差は0.3、測定誤差の標準偏差は0.5です。粒子が表すのは、そのターンの現在位置です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double; // 現在位置x。固定のパラメータではない。
@@ -2057,7 +2072,7 @@ int main() {
 「測定がないこと自体は、位置について何も教えない」と仮定すれば、どの候補にも同じ尤度1を返せばよく、対数尤度では0です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double; // 現在位置x。固定のパラメータではない。
@@ -2114,16 +2129,16 @@ int main() {
 
 ### この小例で提案位置を作る計算
 
-ある古い粒子の位置を $x_{\mathrm{old}}$、移動量を $u$、測定値を $y$ とします。移動後の中心予測は $m_0=x_{\mathrm{old}}+u$ です。移動誤差の分散を $q=0.3^2$、測定誤差の分散を $r=0.1^2$ とします。分散は標準偏差の二乗です。
+ある古い粒子の位置を $x_ {\mathrm{old}}$、移動量を $u$、測定値を $y$ とします。移動後の中心予測は $m_ {0}=x_ {\mathrm{old}}+u$ です。移動誤差の分散を $q=0.3^2$、測定誤差の分散を $r=0.1^2$ とします。分散は標準偏差の二乗です。
 
 この粒子からの提案分布は、正規分布の式を整理すると、次の平均 $m$ と標準偏差 $s$ になります。
 
-$$g=\frac{q}{q+r},\qquad m=m_0+g(y-m_0),\qquad s=\sqrt{\frac{qr}{q+r}}$$
+$$g=\frac{q}{q+r},\qquad m=m_ {0}+g(y-m_ {0}),\qquad s=\sqrt{\frac{qr}{q+r}}$$
 
 $g$ は0〜1の混ぜる割合です。移動の方が曖昧で測定が正確なら、$g$ が大きくなり、中心を測定値へ近づけます。これは古い粒子1個を固定したときの計算であり、全粒子の分布が1個の正規分布だと仮定しているわけではありません。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;
@@ -2196,7 +2211,7 @@ int main() {
 ここからは、初期粒子や処理の順番を自分で管理したい場合に使う低水準の `ParticleCloud` を扱います。最初は24の正常・故障の問題へ戻ります。仮説が2個だけなら、各種類を必ず1個ずつ用意し、正確な事前重みを付けて全列挙できます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = int;     // 0=正常、1=故障。
@@ -2224,6 +2239,7 @@ int main() {
             return std::log(model.likelihood(type, red)); // 今回1件分だけ。
         });
         if (!result.ok) return 1;
+        std::cout << result << '\n'; // 低水準の重み更新の結果も直接表示できる。
         log_evidence += result.log_normalizer;
     }
     const auto probabilities = cloud.estimate([&](int type) { return model.project(type); }).mean;
@@ -2255,6 +2271,9 @@ int main() {
 実行結果：
 
 ```text
+UpdateResult{ok=true, log_normalizer=-1.17118}
+UpdateResult{ok=true, log_normalizer=-0.443267}
+UpdateResult{ok=true, log_normalizer=-1.49333}
 0.14094 0.85906 -3.10778
 ```
 
@@ -2264,6 +2283,8 @@ int main() {
 
 このモデルの `sample` は、高水準版と同じモデルを掲載するため残していますが、今回の `ParticleCloud` は自動では呼びません。観測履歴も自動保存されません。
 
+各回の `std::cout << result << '\n';` は、`UpdateResult{ok=..., log_normalizer=...}` と表示します。`update_log` と、後で扱う `propose_update_log` は、同じ結果型を返します。
+
 ## 36. 初期生成と再サンプリングを手動で行う
 
 出発点は35です。有限の2仮説から、01の未知の成功率へ戻します。連続値なので、`initialize` で乱数から1024粒子を生成します。
@@ -2271,7 +2292,7 @@ int main() {
 6回の成功を反映した後、重みの偏りを表示し、条件付き再サンプリング、コピー先への再サンプリング、粒子数を変える再サンプリングを順に試します。高水準の自動処理で何が行われるかを、明示的な呼び出しで確かめる例です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 struct Model {
     using Particle = double;  // 成功率についての仮説 p。
@@ -2337,7 +2358,7 @@ conditional 1 1024
 比較のため、一方は `predict` で直接移動し、その後で重み更新を失敗させます。もう一方は `propose_update_log` で、移動と重み更新を一括で試して失敗させます。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 
 
@@ -2400,14 +2421,14 @@ int main() {
 
 ### 対象密度に何を入れるか
 
-候補温度を $\mu$、保存した測定値を $y_1,y_2,y_3$ とします。事前分布の対数密度は、共通定数を除けば $-\mu^2/2$ です。各測定の対数密度も、共通定数を除けば $-(y_j-\mu)^2/2$ です。したがって比較したい対象は次の和です。
+候補温度を $\mu$、保存した測定値を $y_ {1},y_ {2},y_ {3}$ とします。事前分布の対数密度は、共通定数を除けば $-\mu^2/2$ です。各測定の対数密度も、共通定数を除けば $-(y_ {j}-\mu)^2/2$ です。したがって比較したい対象は次の和です。
 
-$$\log T(\mu)=-\frac{\mu^2}{2}-\frac{1}{2}\sum_{j=1}^{3}(y_j-\mu)^2$$
+$$\log T(\mu)=-\frac{\mu^2}{2}-\frac{1}{2}\sum_ {j=1}^{3}(y_ {j}-\mu)^2$$
 
 $T$ は再探索で目標とする、事前と全観測を反映した未正規化の密度です。MHでは新旧の密度の比だけを使うため、全候補に共通な定数は省略できます。今回のような定数の省略と、17の粒子ごとに変わる標準偏差の項を省略することは違います。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 
 
@@ -2469,7 +2490,7 @@ int main() {
 出発点は38です。問題と目標分布は変えず、`rejuvenate` の提案方法だけを28と同じ差分方式にします。この例は実数1個なので速度面の利点は小さく、引数の役割を理解するためのものです。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 
 
@@ -2533,12 +2554,12 @@ int main() {
 
 38の式を二乗展開して整理します。測定件数を $n$、測定値の合計を $S$ とすると、$\mu$ に関係する部分は次のようになります。
 
-$$-\frac{1}{2}\left((n+1)\mu^2-2S\mu\right)=-\frac{n+1}{2}\left(\mu-\frac{S}{n+1}\right)^2+\text{共通定数}$$
+$$-\frac{1}{2}\left((n+1)\mu^2-2S\mu\right)=-\frac{n+1}{2}\left(\mu-\frac{S}{n+1}\right)^2+K$$
 
-平方完成の形です。正規分布の式と比べると、平均は $S/(n+1)$、標準偏差は $\sqrt{1/(n+1)}$ です。この例では $n=3$、$S=2.8$ なので、平均0.7・標準偏差0.5です。
+ここで $K$ は候補温度に依存しない共通定数です。平方完成の形を正規分布の式と比べると、平均は $S/(n+1)$、標準偏差は $\sqrt{1/(n+1)}$ です。この例では $n=3$、$S=2.8$ なので、平均0.7・標準偏差0.5です。
 
 ```cpp
-#include "particle_filter_v11.hpp"
+#include "particle_filter_v12.hpp"
 
 
 
@@ -2651,6 +2672,25 @@ int main() {
 
 低水準の集計・抽出の意味は高水準と同じです。ただし低水準の `estimate` と `estimate_into` では射影関数を省略できません。`top_k` は既定値0です。`UpdateResult` は `ok, log_normalizer`、`MoveResult` は `attempted, accepted`、`MoveProposal<Undo>` は `undo, log_correction` を持ちます。
 
+### 結果構造体のデバッグ出力
+
+次の4型は、`std::cout << result` や `std::cerr << result` で表示できます。戻り値を `const auto` で受け取っても使えます。出力後には必要に応じて改行を付けてください。
+
+| 結果型 | 返すメソッド | 表示する内容 |
+| --- | --- | --- |
+| `ObserveResult` | `ParticleFilter.observe` | 成否、対数予測値、再サンプリングの有無、再探索の試行・採用数 |
+| `UpdateResult` | `ParticleCloud.update_log`、`propose_update_log` | 成否と対数正規化定数 |
+| `MoveResult` | `ParticleFilter.refine`、MH版の `ParticleCloud.rejuvenate` | 試行数と採用数 |
+| `Estimate<Value>` | 高水準・低水準の `estimate` | 平均と選択質量。数値列は先頭20要素まで |
+
+例えば、25成分の平均が0、1、…、24なら、表示は次のようになります。
+
+```text
+Estimate{mean=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ... (size=25)], selected_mass=1}
+```
+
+`ok` と `resampled` は常に `true` / `false` で表示します。演算子は `boolalpha` や数値の精度・表示形式を変更せず、数値については出力先の設定を使います。これは簡易なデバッグ表示であり、保存・読み戻し用の形式ではありません。`estimate_into` など、構造体ではなく数値を返すメソッドには、通常の数値のストリーム出力をそのまま使います。
+
 ## 適用するときの確認点
 
 ### 観測とモデル
@@ -2686,7 +2726,7 @@ int main() {
 
 40個のコードは、それぞれが単独の `main` を持ち、外部入力なしで動きます。MarkdownのC++コードブロックは、同梱の `step_01.cpp`〜`step_40.cpp` と一致することを機械的に確認しています。
 
-GCC 13.3.0、C++20で、通常の最適化ビルド、`NDEBUG` ビルド、ASan/UBSanビルドの全40例をコンパイル・実行しています。検証は終了コードだけでなく、次の内容も含みます。
+GCC 13.3.0、C++20の通常の最適化ビルドで全40例をコンパイル・実行しています。結果構造体の出力については、通常・`NDEBUG`・ASan/UBSanの3構成で、空配列・20要素・省略表示・失敗結果・ストリーム設定などを別途検証しています。例の検証は終了コードだけでなく、次の内容も含みます。
 
 - 成功率や正規分布の例を、解析的に求まる平均や確率と比較する。
 - 有限の種類・整数・扉の例を、独立した全列挙計算と比較する。
@@ -2694,12 +2734,12 @@ GCC 13.3.0、C++20で、通常の最適化ビルド、`NDEBUG` ビルド、ASan/
 - 通常尤度版と対数尤度版、コピー提案と差分提案で結果が一致することを確認する。
 - 確率の和、範囲、観測数、失敗時の状態維持、出力の有限性を確認する。
 
-検証を実行する場合は、ZIPから展開した `particle_filter_step_by_step_v01` ディレクトリで次を使います。Python 3とGCCが必要です。検証スクリプトはガイドを書き換えません。
+検証を実行する場合は、ZIPから展開した `particle_filter_step_by_step_v02` ディレクトリで次を使います。Python 3とGCCが必要です。検証スクリプトはガイドを書き換えません。
 
 ```bash
-python3 particle_filter_step_by_step_examples_v01/verify_examples.py --mode normal --markdown particle_filter_step_by_step_v01.md
-python3 particle_filter_step_by_step_examples_v01/verify_examples.py --mode release
-python3 particle_filter_step_by_step_examples_v01/verify_examples.py --mode sanitized
+python3 particle_filter_step_by_step_examples_v02/verify_examples.py --mode normal --markdown particle_filter_step_by_step_v02.md
+python3 particle_filter_step_by_step_examples_v02/verify_examples.py --mode release
+python3 particle_filter_step_by_step_examples_v02/verify_examples.py --mode sanitized
 ```
 
 掲載した数値は実行結果であり、全てのモデルや入力に対する精度保証ではありません。粒子による近似では複数seedでの確認も必要です。この一式はAPIとモデルの学習例であり、公式のAHCテスターやコンテストスコアの比較ではありません。サニタイザー実行時はリーク検査を無効にしています。

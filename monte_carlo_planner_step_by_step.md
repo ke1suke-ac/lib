@@ -1,6 +1,6 @@
 # MonteCarloPlanner ステップバイステップガイド
 
-対象ヘッダ：`monte_carlo_planner_v07.hpp`。ガイド第6版。C++20/23。
+対象ヘッダ：`monte_carlo_planner_v08.hpp`。ガイド第7版。C++20/23。
 
 このガイドは、確率・統計や探索法を専門に学んだことがなくても、動く例から使い方を理解できるように構成しています。必要な数学は、高校で扱う平均、確率、平方根、指数程度です。C++の構造体、関数、参照、`vector`の基本は知っているものとします。`optional`やライブラリ特有の用語は登場時に説明します。
 
@@ -115,7 +115,7 @@ $$a^{\ast}\in\arg\max_ {a\in A(I_ {0})}Q_ {\pi}(a\mid I_ {0})$$
 
 ## 3. 準備と読み進め方
 
-`monte_carlo_planner_v07.hpp`と、以下の例を保存した`main.cpp`を同じディレクトリへ置きます。
+`monte_carlo_planner_v08.hpp`と、以下の例を保存した`main.cpp`を同じディレクトリへ置きます。
 
 ```sh
 g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic main.cpp -o main
@@ -148,7 +148,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wpedantic main.cpp -o main
 三つの候補0、1、2を比較します。基本得点は10、12、11で、実際の得点は上下に2未満の幅で変動します。各候補の期待得点は、それぞれ10、12、11です。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 int main() {
     std::array<int, 3> candidates{0, 1, 2};
@@ -188,7 +188,7 @@ int main() {
 配送費用が小さい経路を選びます。変更点は、評価値を`-cost`にしたことと、二つの任意引数を明示したことです。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 int main() {
     std::array<int, 3> routes{0, 1, 2};
@@ -218,7 +218,7 @@ seedを同じにしても、時間制限で試せた回数が違えば推薦が�
 例01と同じ採点を、`MonteCarloPlanner`へ移します。これにより、追加探索、統計の取得、複数ターンへ進めるようになります。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -273,7 +273,7 @@ int main() {
 今度は根の候補を`start`へ明示します。探索前と探索後の違いを`result`で確認します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -296,23 +296,11 @@ int main() {
     assert(before.status == Planner::Status::ready);
     Planner::Limits limits;
     limits.max_simulations = 1000;
-    planner.search(limits);
-    auto result = planner.result();
-    if (result.action) {
-        std::cout << "action=" << *result.action
-                  << " provisional=" << result.provisional << '\n';
-    }
-    for (const auto& candidate : result.candidates) {
-        std::cout << "id=" << candidate.id.index
-                  << " trials=" << candidate.trials;
-        if (candidate.mean) std::cout << " mean=" << *candidate.mean;
-        else std::cout << " mean=unevaluated";
-        std::cout << '\n';
-    }
-    const auto& run = result.last_run;
-    std::cout << "started=" << run.started << " completed=" << run.simulations
-              << " transitions=" << run.transitions << " us=" << run.elapsed_us
-              << " count_limit=" << (run.stop == Planner::Stop::simulations) << '\n';
+    std::cout << "before: " << before << '\n';
+    const auto run = planner.search(limits);
+    const auto result = planner.result();
+    std::cout << run << '\n';
+    std::cout << result << '\n';
     assert(!result.provisional);
     assert(planner.result(false).candidates.empty());
 }
@@ -321,6 +309,27 @@ int main() {
 `start(root, horizon, candidates)`は、根で比較する候補をその場で登録します。これに対し、例03の自動候補生成では、実際の候補生成は`search`開始後です。自動生成の直後にまだ探索していなければ、推薦がないことがあります。
 
 まだ評価していない段階でも、明示的に登録した先頭の候補0を返せます。このとき`provisional=true`です。「良いと分かった」という意味ではなく、**未評価なので、とりあえず返せる候補**という意味です。
+
+### 結果をそのまま表示する
+
+`search(limits)`が返す`run`は、一回の探索についての記録です。`result()`が返す`result`には、推薦行動と現在までに蓄積した候補統計が入ります。この二つは構造体ですが、整数と同じように`std::cout << run`や`std::cout << result`で表示できます。
+
+ライブラリ側が`std::ostream& operator<<(std::ostream&, const Xxx&)`を用意しています。左側の出力先へ右側の構造体の内容を書き込み、同じ出力先を返すので、末尾に`<< '\n'`と続けられます。演算子自身は改行を付けず、明示的なflushも行いません。この独立した例では`cout`を使っていますが、AHCのプログラムに組み込むときは、同じ書き方で`cerr`へデバッグ情報を出せます。
+
+| 出力できる型 | 表示内容 |
+|---|---|
+| `RunStats` | `RunStats{started=..., simulations=..., transitions=..., elapsed_us=..., stop=...}`。停止理由も`simulations`などの名前で表示 |
+| `Result` | `Result{status=..., action=..., id=..., provisional=..., candidates(...)= [...], last_run=...}`。各項目の意味は次の表で確認 |
+| `Candidate` | `Candidate{id=..., trials=..., mean=...}`。`result.candidates`の要素も単独で出力可能 |
+| `ActionId` | `generation:index`。例えば`1:0`は世代1の内部ID 0 |
+
+この表の`...`は出力形式を説明するための省略です。実際の出力では、行動がない場合は`action=none`、候補が未評価なら`mean=unevaluated`と表示します。`provisional`は`true`または`false`です。得点は出力先の精度指定に従い、ライブラリ自身は精度や書式フラグを変更しません。
+
+`candidates(25)`のような括弧内の数は、結果構造体に入っている候補統計の総数です。一覧は保存されている順に先頭20件まで表示し、25件あれば末尾を`... (+5)`として省略件数を示します。出力を省略しても、構造体内のデータは全件残っています。`result(false)`で候補統計の取得を省いた場合は`candidates(0)=[]`となり、これだけでは合法な候補がないとは判断できません。
+
+行動が`int`なら、その値も表示されます。独自の構造体や配列を行動に使う場合の表示方法は、付録A.1にまとめています。
+
+構造体を表示する演算子は、保存済みの値を読むだけで、探索やモデルの呼び出し、RNGの消費は行いません。出力のために`planner.result()`を呼ぶ処理自体とは区別してください。
 
 ### 結果に含まれる情報
 
@@ -335,7 +344,7 @@ int main() {
 
 各`Candidate`の`trials`は、現在の根で蓄積された完了試行数です。`mean`はその平均得点ですが、一度も完了していない候補では`nullopt`です。未評価を0点と解釈しないよう、型でも区別しています。候補の行動値そのものは、この統計配列にはコピーしません。
 
-`ActionId`は`generation`と`index`からなる識別子です。`index`を表示していますが、**行動番号ではありません**。本例で番号が一致するのは登録順による偶然です。IDは取得元の探索器・現在の根でのみ使い、内部フィールドから独自に生成しないでください。
+`ActionId`は`generation`と`index`からなる識別子です。出力のコロンの右側にある`index`は、**行動番号ではありません**。本例で番号が一致するのは登録順による偶然です。IDは取得元の探索器・現在の根でのみ使い、内部フィールドから独自に生成しないでください。行動がない結果のIDは初期値の`0:-1`で、`advance`に渡せません。
 
 ### 一回の実行統計
 
@@ -356,7 +365,7 @@ int main() {
 設備を使って生産します。行動0は生産、行動1は費用2で設備を1段階改良することです。設備レベルが高いほど、一回の生産の得点が上がります。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -421,7 +430,7 @@ int main() {
 例05を「3回生産したら終了」という問題へ変えます。また、最後に設備を売却でき、改良1段階につき0.5点が戻るものとします。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1, produced = 0; };
@@ -467,7 +476,7 @@ int main() {
 3回の生産を終えたらボーナス5点、6手で終えられなければペナルティ5点を付けます。さらに、将来の報酬へ0.9の割引を掛けます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1, produced = 0; };
@@ -520,7 +529,7 @@ int main() {
 既存シミュレータが、最後にまとめてスコアを返す形になっていることもあります。その場合は`step`を`void`にできます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int level = 1; double total = 0; };
@@ -555,7 +564,7 @@ int main() {
 ここからは、終了条件を追加する前の例05へ戻ります。新しく`rollout_action`だけを追加し、残りが長い間に設備を改良するルールを与えます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -606,7 +615,7 @@ int main() {
 最後の一手で設備を改良しても、この問題では生産に使えず費用だけ掛かります。残り一手では、生産だけを候補にします。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -656,7 +665,7 @@ int main() {
 6手先まで毎回進める代わりに、2手だけ進め、残りは「今のレベルで生産を続けたら得られる期待得点」で近似します。例09からの変更です。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -737,7 +746,7 @@ int main() {
 例09のモデルを使い、複数の停止条件を指定します。次の値は短時間で実行を確認するための教材用です。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -804,7 +813,7 @@ AHCで全体1950ミリ秒を使うなら、たとえばプログラムの早い�
 1試行は6手ですが、最初の呼び出しでは3手しか許しません。次の呼び出しで、その続きを含めて57手進めます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; };
@@ -854,7 +863,7 @@ int main() {
 最初は候補0と2だけを比較し、後から候補1を追加します。問題の採点ルールは変えません。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -901,7 +910,7 @@ int main() {
 推薦がない場合と、まだ評価していない場合を、動くコードで区別します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -962,7 +971,7 @@ int main() {
 例09までは、根の一手を比較し、その後は継続方策へ任せていました。`tree=true`にすると、将来の判断点も保存し、繰り返し訪れる場所では次の行動も比較できます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {
@@ -1011,7 +1020,7 @@ int main() {
 状態に、あとで表示したい過去の行動履歴を入れます。しかし、この例の将来の候補・報酬は`turn`と`level`だけで決まります。履歴全体を比較せず、この二つをキーにします。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, level = 1; std::vector<int> past_actions; };
@@ -1063,7 +1072,7 @@ int main() {
 例16の問題を実際に6ターン進めます。各ターンで探索して一手を実行し、観測した次状態へ根を移します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {
@@ -1146,7 +1155,7 @@ int main() {
 今度は、辺の費用が変わる経路計画です。大きな不変・共有データはモデルから参照し、状態は現在頂点だけにします。これはデータの持ち方を示す小さな例であり、この規模・条件なら実用上は厳密な最短路で解けます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct Edge { int to; double cost; };
@@ -1215,7 +1224,7 @@ int main() {
 行動を0以上1以下の投入量とし、すべてを列挙する代わりに一つずつ提案します。`Action`は整数でなくても構いません。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -1289,7 +1298,7 @@ int main() {
 例16の木探索に、ノード数と行動数の小さな保存上限を設定します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {
@@ -1342,7 +1351,7 @@ int main() {
 同じ一手問題を、CRNだけOFFとONにして比較します。評価回数、探索設定、seedは揃え、共有の有無だけを変えます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -1436,7 +1445,7 @@ CRNがONなら、対応する候補の評価関数は同じ乱数列から始め
 ### 動くコードと、追加した引数
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 int main() {
     std::array<int, 2> candidates{0, 1};
@@ -1532,10 +1541,10 @@ OFFの通常RNGは、根が同じ間は一つを使い続けます。その`rng.
 
 ## 27. 発展㉓：ユーザー指定の乱数生成器を使う（例24）
 
-例05の生産モデルのまま、添付の`fast_rng.hpp`にある`FastRng`を直接使います。この例では`monte_carlo_planner_v07.hpp`と`fast_rng.hpp`を同じ場所へ置いてください。通常利用では後者のincludeは不要です。
+例05の生産モデルのまま、添付の`fast_rng.hpp`にある`FastRng`を直接使います。この例では`monte_carlo_planner_v08.hpp`と`fast_rng.hpp`を同じ場所へ置いてください。通常利用では後者のincludeは不要です。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 #include "fast_rng.hpp"
 
@@ -1602,7 +1611,7 @@ RNG型は`std::uniform_random_bit_generator`を満たし、`uint64_t`のseedか�
 二つの箱のどちらか一つに当たりがあり、当たりの箱を選ぶと10点です。今はどちらが当たりか分かりません。費用1を払えば中身を観測でき、その後でもう一手使って箱を選べます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int winner; };
@@ -1726,7 +1735,7 @@ int main() {
 真の状態の仮定を、外部の粒子集合から作るようにします。「粒子」は、あり得る状態の候補です。さらに、観測情報のキーを与えて木探索をONにします。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int winner; };
@@ -1797,7 +1806,7 @@ int main() {
 通常は既定の`std::chrono::steady_clock`を使います。時間による停止を、実時間を待たずにテストしたい場合に限り、時計型を差し替えられます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State {};
@@ -1853,7 +1862,7 @@ int main() {
 例24のRNG指定を、例25の部分観測と例20の逐次提案へ広げます。需要の真の値は見えず、三手の生産量を決める小さな問題です。1手の損失は、生産量とその日の需要の差の二乗です。ライブラリは最大化するため、その負数を返します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 #include "fast_rng.hpp"
 
@@ -1919,7 +1928,7 @@ int main() {
 最後に、例22のON/OFF比較を三手へ広げます。ここは解品質の例ではなく、共有の動作を見るための教材です。二つの根行動にラベル0・1を付け、返す得点を常に0にします。状態のラベルはログの行き先にだけ使い、後続の状態や得点には影響させません。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int turn = 0, label = -1; };
@@ -1981,7 +1990,7 @@ ONでは両方が1になります。最初の手で乱数を余分に捨てて�
 例25の箱を簡単にし、「1手目で箱を決め、2手目で代金を受け取る」問題にします。観測する行動はなく、一度決めた箱は変えられません。当たりなら10点、外れなら0点です。先に1手だけシミュレーションし、まだ受け取っていない得点を`leaf_value`で評価します。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int winner; };
@@ -2051,7 +2060,7 @@ State＋Infoの3引数形と従来のInfoだけの2引数形が両方あれば�
 例30を、本来の2手目まで進める形にします。`simulation_depth`を0へ変え、終了時の得点を`finish_value`へ追加するだけです。浅い評価の定義は残せるので、深さの設定を変えて使い分けられます。
 
 ```cpp
-#include "monte_carlo_planner_v07.hpp"
+#include "monte_carlo_planner_v08.hpp"
 
 struct Model {
     struct State { int winner; };
@@ -2141,6 +2150,12 @@ int main() {
 | `Planner::Stop` | `none`、`time`、`simulations`、`transitions`、`not_ready`、`terminal` |
 
 `Stop::none`は、構築後やリセット後など、まだ`search`の停止理由がない状態です。`Result::id`は`action`が存在するときだけ行動IDとして使います。
+
+`ActionId`・`RunStats`・`Candidate`・`Result`は、const参照を受ける`operator<<`に対応します。例えば`std::cerr << planner.search(limits) << '\n'`で今回の実行統計を、`std::cerr << planner.result() << '\n'`で結果を表示できます。候補一覧は先頭20件と省略件数、配列形式の行動は入れ子全体で20要素までを表示します。個別の行動型の出力演算子は優先され、未対応型は`<unprintable>`になります。詳細は例04を参照してください。`mc_choose`と`best_action`の戻り値は`optional<Action>`であり、このデバッグ演算子の対象ではありません。値があれば`*action`を取り出して扱います。
+
+行動が`int`や文字列のように`<<`で表示できる型なら、その出力を使います。独自の`Action`に出力演算子がなくても、結果全体の出力は利用でき、行動部分が`<unprintable>`になります。その場合もID・試行数・平均値を確認でき、行動の中身も見たければ、その型に出力演算子を定義できます。
+
+`vector`・`array`・`span`など、const参照から繰り返し走査できる行動は、出力演算子がなければ`[1, 2, ...]`形式で表示します。ここも先頭20要素までで、入れ子では内側の配列自体も1要素として合計20要素までに抑え、残りを`...`で示します。文字列やユーザー定義の出力演算子がある型はその演算子を優先するため、表示長はその出力に従います。
 
 ### A.2 `Options`の全項目
 
@@ -2283,7 +2298,7 @@ rolloutで使う`actions`は、次の一手を選ぶたびに呼びます。保�
 
 ## 付録B. 実装アルゴリズムの概要と流れ
 
-ここまでは使い方を中心に説明しました。この付録は、対象ヘッダv07の実装に沿って、なぜ各APIがそのように振る舞うかを説明します。数式は実装の判断を読み解くためのもので、統計的な最良候補の確定保証を与えるものではありません。
+ここまでは使い方を中心に説明しました。この付録は、対象ヘッダv08の実装に沿って、なぜ各APIがそのように振る舞うかを説明します。数式は実装の判断を読み解くためのもので、統計的な最良候補の確定保証を与えるものではありません。
 
 ### B.1 全体像
 
@@ -2467,18 +2482,18 @@ OFFでは探索器内の`std::optional<Rng>`に一つだけ保持します。根
 - 両規格で`-O2 -Wall -Wextra -Wpedantic -D_GLIBCXX_ASSERTIONS`を使用し、警告なし。
 - ASan/UBSan：途中再開、状態キー、部分木再利用、モデル更新、粒子による再計画、指定RNG、CRN、State＋Infoの採点の10例を検証し、成功。環境上の制約によりリーク検査は無効化。
 - Markdown内のC++コード31本と、実際にコンパイルしたファイルが一致することを確認。
-- ガイド第6版では例23の配置を変更して再コンパイル・実行。変更のない例は、本体・RNG・ソースのハッシュが一致する検証記録を継承。
+- ガイド第7版では例04を構造体の直接出力へ更新し、v08ヘッダで全例を再コンパイル・実行。
 - 数式は外部Markdown向けの`$...$`・`$$...$$`で記述。表示数式を一行にし、Markdown前処理で強調やHTMLへ変形しないことを確認。
 
-部分観測の採点形式を追加したv07を使用しています。CRN ON/OFFの乱数生成と評価配分はv06から変更していません。OFFでは引き続き一つのRNGを連続使用します。例24・28用の`fast_rng.hpp`は添付版を変更せず同梱しています。対象ヘッダのSHA-256は次の値です。
+結果構造体のデバッグ出力を追加したv08を使用しています。探索処理はv07のままで、CRN ON/OFFの乱数生成と評価配分はv06から変更していません。OFFでは引き続き一つのRNGを連続使用します。例24・28用の`fast_rng.hpp`は添付版を変更せず同梱しています。対象ヘッダのSHA-256は次の値です。
 
-`97e23a68db447244dedff6687ede02f3ab3faa4fd941814af7bebf53ab011a9b`
+`95a722af99ada6e43e232949d19895f2d7e5ca2ad9a89f0bc3d337b4af9b506d`
 
 固定予算による動作確認は、APIの意味や例の整合性を確認するためのものです。未知のAHC問題で、この例のパラメータが最善であることを検証したものではありません。時間制限を使う例の実行回数や実行時間も、環境によって変わります。
 
 ### C.2 参照資料
 
-本ガイドのAPI・既定値・優先順位・内部処理は、配布対象の`monte_carlo_planner_v07.hpp`と、そのREADMEを確認して記述しました。一般的な手法の背景を読み進める場合は、次の資料が対応します。
+本ガイドのAPI・既定値・優先順位・内部処理は、配布対象の`monte_carlo_planner_v08.hpp`と、そのREADMEを確認して記述しました。一般的な手法の背景を読み進める場合は、次の資料が対応します。
 
 - Mykel J. Kochenderfer, Tim A. Wheeler, Kyle H. Wray, [Algorithms for Decision Making](https://algorithmsbook.com/decisionmaking/), MIT Press, 2022。厳密計画、近似価値関数、オンライン計画、部分観測の体系的な背景。
 - David Silver, Joel Veness, [Monte-Carlo Planning in Large POMDPs](https://papers.nips.cc/paper_files/paper/2010/hash/edfbe1afcf9246bb0d40eb4d8027d90f-Abstract.html), 2010。部分観測の信念更新と木探索を組み合わせるPOMCP。本ライブラリと同一の実装仕様ではない。

@@ -1,11 +1,13 @@
 # qap_solver ユーザーガイド
 
-対象: `qap_solver_v07.hpp`（v0.7.3）。このヘッダー1ファイルで利用できます。想定環境はGCC・C++20・単一スレッドです。
+対象: `qap_solver_v09.hpp`（v0.9.1）。このヘッダー1ファイルで利用できます。想定環境はGCC・C++20以降・単一スレッドです。2026-10-14更新。
+
+初めて読む方には、新しい [ステップバイステップガイド](qap_solver_step_by_step_guide.md) を用意しました。高校数学を前提に、目的式から24本のmain付き実行例へ順に進みます。本書は従来のユースケース別リファレンスとして使えます。
 
 本書は現行ソースの仕様と使い方を説明します。4章・6章・8章は同じユースケース番号で対応します。まず4章で目的に近い用途を選び、5章で入力を準備し、6章と8章で呼出し方を確認してください。8章の関数は利用側でコピーする例であり、ヘッダーに追加されている公開APIではありません。
 
 1. 何を解くライブラリか？
-2. 厳密解アルゴリズム
+2. 厳密解と類似ソルバー
 3. 差分更新
 4. ユースケース
 5. 利用準備
@@ -28,9 +30,9 @@
 
 配置を表す置換 $p$ に対し、次の値を最小化します。
 
-$$C(p)=\sum_{i=0}^{n-1}U_{i,p_i}+\sum_{i=0}^{n-1}\sum_{j=0}^{n-1}F_{i,j}D_{p_i,p_j}$$
+$$C(p)=\sum_ {i=0}^{n-1}U_ {i,p_ i}+\sum_ {i=0}^{n-1}\sum_ {j=0}^{n-1}F_ {i,j}D_ {p_ i,p_ j}$$
 
-$$\{p_0,p_1,\ldots,p_{n-1}\}=\{0,1,\ldots,n-1\}$$
+$$\lbrace p_0,p_1,\ldots,p_ {n-1}\rbrace =\lbrace 0,1,\ldots,n-1\rbrace $$
 
 | 記号 | 意味 | 入力・出力との対応 |
 | --- | --- | --- |
@@ -38,10 +40,10 @@ $$\{p_0,p_1,\ldots,p_{n-1}\}=\{0,1,\ldots,n-1\}$$
 | $i,j$ | 物体の番号。0以上、$n$ 未満 | 物体間行列の行と列 |
 | $x,y$ | 位置の番号。0以上、$n$ 未満 | 位置間行列の行と列 |
 | $p$ | すべての物体の配置をまとめた置換 | 出力の `location_of` |
-| $p_i$ | 物体 $i$ が使う位置番号 | `location_of[i]` |
-| $F_{i,j}$ | 物体 $i$ から物体 $j$ への関係の強さ、通信量、相互作用量 | 入力の `flow` |
-| $D_{x,y}$ | 位置 $x$ から位置 $y$ への距離、移動単価、位置ペアの係数 | 入力の `distance` |
-| $U_{i,x}$ | 物体 $i$ を位置 $x$ に置くことだけで決まる費用 | 任意入力の `unary`。省略時はすべて0 |
+| $p_ i$ | 物体 $i$ が使う位置番号 | `location_of[i]` |
+| $F_ {i,j}$ | 物体 $i$ から物体 $j$ への関係の強さ、通信量、相互作用量 | 入力の `flow` |
+| $D_ {x,y}$ | 位置 $x$ から位置 $y$ への距離、移動単価、位置ペアの係数 | 入力の `distance` |
+| $U_ {i,x}$ | 物体 $i$ を位置 $x$ に置くことだけで決まる費用 | 任意入力の `unary`。省略時はすべて0 |
 | $C(p)$ | 配置 $p$ に対する全費用 | 出力の `cost` |
 
 第1項は、物体と位置の組だけで決まる費用を足します。例えば「機器0を位置2へ置くと移設費が10かかる」という費用です。
@@ -50,9 +52,9 @@ $$\{p_0,p_1,\ldots,p_{n-1}\}=\{0,1,\ldots,n-1\}$$
 
 ### 1.3 向き、対角成分、二重計上
 
-二重和には $(i,j)$ と $(j,i)$ が別々に現れます。送信と受信で量が異なっても、そのまま表せます。また、$i=j$ も含むので、自己相互作用を使う場合は $F_{i,i}D_{p_i,p_i}$ が加算されます。不要な対角成分は0にします。
+二重和には $(i,j)$ と $(j,i)$ が別々に現れます。送信と受信で量が異なっても、そのまま表せます。また、$i=j$ も含むので、自己相互作用を使う場合は $F_ {i,i}D_ {p_ i,p_ i}$ が加算されます。不要な対角成分は0にします。
 
-例えば配置が $p=(0,2,1)$、$F_{0,1}=5$、$F_{1,0}=2$、$D_{0,2}=3$、$D_{2,0}=4$ で、ほかの二次項が0とします。単項費用が $U_{0,0}=4$、$U_{1,2}=6$、$U_{2,1}=0$ なら、全費用は次の値です。
+例えば配置が $p=(0,2,1)$、$F_ {0,1}=5$、$F_ {1,0}=2$、$D_ {0,2}=3$、$D_ {2,0}=4$ で、ほかの二次項が0とします。単項費用が $U_ {0,0}=4$、$U_ {1,2}=6$、$U_ {2,1}=0$ なら、全費用は次の値です。
 
 $$C(p)=4+6+0+5\cdot3+2\cdot4=33$$
 
@@ -66,11 +68,11 @@ $$C(p)=4+6+0+5\cdot3+2\cdot4=33$$
 
 人数などの容量を「位置の個数」で表せる場合と、物体ごとに異なる重さが容量を消費する場合も区別してください。前者は4.3のように表現できますが、後者を一般に保証する容量制約APIはありません。
 
-## 2. 厳密解アルゴリズム
+## 2. 厳密解と類似ソルバー
 
 ### 2.1 全体が非常に小さければ全列挙する
 
-物体数 $n$ の全置換は $n!$ 個です。すべてを列挙し、各置換を `evaluate` で評価すれば厳密最適解が得られます。単純な実装の時間計算量は $O(n!\,n^2)$ です。
+物体数 $n$ の全置換は $n!$ 個です。すべてを列挙し、各置換を `evaluate` で評価すれば厳密最適解が得られます。単純な実装の時間計算量は $O(n!\thinspace n^2)$ です。
 
 階乗は急増します。8物体で40,320通り、10物体で3,628,800通りあり、各通りでさらに全評価が必要です。「10以下なら2秒に収まる」のような一律の保証はありません。制限時間内に列挙を完走できる大きさなら、近似探索に任せるより厳密列挙が明快です。
 
@@ -82,28 +84,28 @@ $$C(p)=4+6+0+5\cdot3+2\cdot4=33$$
 
 `make_qap_subproblem` は、固定した外部物体との相互作用を単項費用へまとめた、小さいQAPを作ります。この変換で目的値の対応は失われません。その小さいQAPを全列挙し、`restore` で全体へ戻すと、「外部を固定した条件のもとでの厳密最適解」が得られます。全体問題の厳密最適解という意味ではありません。
 
-8.16に関数形の実装を載せます。列挙部分は $O(k!\,k^2)$、その前に縮約構築の時間が必要です。例の `k <= 10` は誤って巨大な列挙を始めないための上限であり、実用上の推奨値ではありません。
+8.16に関数形の実装を載せます。列挙部分は $O(k!\thinspace k^2)$、その前に縮約構築の時間が必要です。例の `k <= 10` は誤って巨大な列挙を始めないための上限であり、実用上の推奨値ではありません。
 
 ### 2.3 二次項がなくなるなら線形割当を使う
 
 例えば `flow` がすべて0なら、残るのは次の式です。
 
-$$C(p)=\sum_{i=0}^{n-1}U_{i,p_i}$$
+$$C(p)=\sum_ {i=0}^{n-1}U_ {i,p_ i}$$
 
-これは「各物体を各位置へ置く費用だけ」がある線形割当問題です。Hungarian法などで厳密解を $O(n^3)$ で求められるため、QAPの近似探索を使う必要性は小さくなります。[Hungarian法の実装と計算量](https://cp-algorithms.com/graph/hungarian-algorithm.html)
+これは「各物体を各位置へ置く費用だけ」がある線形割当問題です。Hungarian法などで厳密解を $O(n^3)$ で求められるため、QAPの近似探索を使う必要性は小さくなります。[線形割当の公式API資料](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html)
 
 次の条件も、同じ判断ができます。以下は本書の目的式を直接整理して分かる条件です。
 
 | 入力の条件 | 線形割当へ直せる理由 |
 | --- | --- |
 | `flow` または `distance` がすべて0 | 二次項が0 |
-| `flow` の非対角成分がすべて0 | $F_{i,i}D_{x,x}$ を物体 $i$・位置 $x$ の単項費用へ加えればよい |
+| `flow` の非対角成分がすべて0 | $F_ {i,i}D_ {x,x}$ を物体 $i$・位置 $x$ の単項費用へ加えればよい |
 | `distance` の非対角成分がすべて0 | 一対一配置では異なる物体が同じ位置を使わないため、対角項しか残らない |
 | `flow` の全要素が同じ定数 | 位置ペアの総和は置換で変わらず、二次項全体が定数 |
 | `distance` の全要素が同じ定数 | 二次項は物体ペアの総和に比例し、置換で変わらない |
 
-例えば対角項だけが残る場合は、線形割当用の費用を $U_{i,x}+F_{i,i}D_{x,x}$ とします。
-これらの判定をして別の厳密solverへ自動切替する機能は、本ヘッダーにはありません。
+例えば対角項だけが残る場合は、線形割当用の費用を $U_ {i,x}+F_ {i,i}D_ {x,x}$ とします。
+これらすべてを判定して別の厳密solverへ自動切替する機能は、本ヘッダーにはありません。v09では支配的な単項費用への割当候補生成を追加していますが、予備判定・時間制限・候補生成方式があるため、線形割当の厳密解を常に返すAPIとしては使いません。詳細は9.2.1です。
 
 ### 2.4 純粋な小規模TSPなら部分集合DPを比較する
 
@@ -112,6 +114,17 @@ $$C(p)=\sum_{i=0}^{n-1}U_{i,p_i}$$
 この状態数は一般QAPにはそのまま使えません。一般QAPでは、最後の都市だけでなく、既に配置した各物体がどの位置にあるかによって将来の費用が変わるためです。
 
 対称である、グラフが疎である、値が非負である、という条件だけを理由に厳密解が容易になるとは限りません。厳密化できる構造がなければ、全体を近似的に解く用途や、小さい部分問題を繰り返し改善する用途を検討します。
+
+### 2.5 類似ソルバーとの使い分け
+
+| 選択肢 | 適した用途・違い |
+| --- | --- |
+| [SciPy quadratic_assignment](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.quadratic_assignment.html) | PythonでQAP・グラフ対応を試す場合。FAQと2-optの近似法、部分対応の固定を提供する。任意のunary行列を直接渡す同名引数はない |
+| [SciPy linear_sum_assignment](https://docs.scipy.org/doc/scipy/reference/generated/scipy.optimize.linear_sum_assignment.html) / [OR-Tools Linear Sum Assignment](https://developers.google.com/optimization/assignment/linear_assignment) | 2.3の線形割当を厳密に解きたい場合。一般の二次費用をそのまま扱うものではない |
+| [OR-Tools CP-SAT](https://developers.google.com/optimization/cp/cp_solver)など | 配置禁止や容量を明示し、実行可能性・最適性の証明を必要とする場合。別のモデル化が必要で、時間制限内に証明まで終わるとは限らない |
+| 本ヘッダー | C++への単一ヘッダー組込み、整数の二次・単項費用、部分改善や独自swap探索との連携を使う場合 |
+
+これは機能・保証による使い分けで、ソルバー間の性能優劣を測定した結果ではありません。外部APIは2026-10-11に公式資料で確認しました。
 
 ## 3. 差分更新
 
@@ -307,13 +320,13 @@ QAPで表せる費用に加え、別の状態や追加費用も動かす必要�
 
 ### 5.1 導入と型
 
-`qap_solver_v07.hpp` をプログラムと同じディレクトリへ置き、次をincludeします。
+`qap_solver_v09.hpp` をプログラムと同じディレクトリへ置き、次をincludeします。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 ```
 
-標準ライブラリ以外の追加ヘッダーは不要です。実装は `bits/stdc++.h`、`__uint128_t`、`__INCLUDE_LEVEL__` などのGCC環境を使います。C++20で利用し、本書の検証環境はGCC 13.3.0です。GCC 12.2での今回の実行確認はしていません。
+標準ライブラリ以外の追加ヘッダーは不要です。実装は `bits/stdc++.h`、`__uint128_t`、`__INCLUDE_LEVEL__` などのGCC環境を使います。C++20以降で利用します。今回の検証環境はGCC 13.3.0で、新しい段階別24例はC++20・C++23の両方で実行確認しました。GCC 15.2自体での実行確認はしていません。
 
 `qap_problem`・`qap_prepared`・`qap_swap_state`・`qap_subproblem` は共通の型引数を使います。
 
@@ -381,6 +394,23 @@ const long long initial_cost = problem.evaluate(initial);
 `is_valid_permutation` は長さ・範囲・重複を検査して `bool` を返します。`evaluate` は渡した配置のcostを全再計算します。これらは準備にも検証にも使える公開メソッドです。
 
 返却値 `qap_result<Score>` は、`vector<int> location_of` と `Score cost` を持ちます。`cost` の初期値は0ですが、`qap_result<> result;` と宣言するだけで非空問題の解になるわけではありません。
+
+#### 5.3.1 結果をcout・cerrへ表示する
+
+v0.9.1から、`std::ostream& operator<<(std::ostream&, const qap_result<Score>&)` を利用できます。探索APIから受け取った `result` に対して次のように書きます。
+
+```cpp
+std::cout << result << '\n';
+std::cerr << "result: " << result << '\n';
+```
+
+表示例は `qap_result{cost=30, location_of=[0, 1, 2]}` です。型名、費用、物体番号順の配置を1行に表示し、改行は呼出し側で付けます。出力先と同じ `std::ostream&` を返すため、文字列や改行を続けて挿入できます。`const` な結果と `std::ostringstream` にも対応します。
+
+配列は先頭20要素までです。21要素以上なら、例えば `location_of=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ...] (size=25)` と省略と全要素数を表示します。空配列は `[]` で、結果自体は変更しません。
+
+`solve_qap`、`improve_qap`、`prepared.solve/improve`、`improve_qap_subset`、`sub.restore` はすべて同じ結果型に対応します。第8章・配布adapterの9種類の用途別結果型も、費用・スコア・採否など全スカラーと配列を表示できます。配列が複数ある場合はそれぞれ先頭20要素まで、採否のboolは `true` / `false` です。
+
+128bit整数のcostも変換関数なしで結果全体を表示でき、10進数で出力します。通常の整数は出力先の書式に従います。出力はストリームの書式フラグを変えず、費用の再評価も行いません。全配置の保存には配列の全要素を別途読み出してください。入力から動かせる完全な例は、ステップバイステップガイドの例24を参照してください。
 
 ### 5.4 deadlineとseed
 
@@ -817,7 +847,7 @@ const auto result = solve_qap_with_soft_constraints(
     seed);
 ```
 
-**戻り値と利用。** `qap_result<long long>`。costは罰則込みです。返却後に希望・禁止の充足を利用側で調べます。
+**戻り値と利用。** `qap_result<long long>`。costは罰則込みです。返却後に希望・禁止の充足を利用側で調べます。v09の単項候補生成は、この確認を不要にするものではありません。既知の実行可能配置があれば保持し、条件を満たす改善候補だけを採用する構成は、新しいステップバイステップガイドの例21に示します。
 
 **制限・注意。** penaltyは物理的な違反費用や許容交換条件から選びます。無根拠に巨大な値を入れると中間値があふれたり、探索尺度が偏ったりします。元の費用が必要なら呼出し元problemで配置を再評価します。
 
@@ -844,10 +874,10 @@ const auto result = solve_wide_score_qap(
     unary,
     deadline,
     seed);
-const std::string cost_text = qap_int128_to_string(result.cost);
+std::cerr << result << '\n';
 ```
 
-**戻り値と利用。** `qap_result<__int128_t>`。配置は通常と同じintのvectorです。costの表示には同じ例の`qap_int128_to_string`(result.cost)を使います。
+**戻り値と利用。** `qap_result<__int128_t>`。配置は通常と同じintのvectorです。結果全体は `std::cout << result` で表示できます。costだけを文字列にする場合は同じ例の `qap_int128_to_string(result.cost)` を使います。
 
 **制限・注意。** Scoreを先に広げた演算が必要です。呼出し前にlong longで乗算してあふれた値を`__int128_t`へキャストしても直りません。GNU拡張を使います。
 
@@ -1113,9 +1143,9 @@ const auto result = match_weighted_graphs_by_qap(
 
 第1グラフを $A$、第2グラフを $B$、頂点対応を $p$、単項対応費用を $U$ とすると、元の目的式は次です。
 
-$$E(p)=\sum_{i=0}^{n-1}\sum_{j=0}^{n-1}(A_{i,j}-B_{p_i,p_j})^2+\sum_{i=0}^{n-1}U_{i,p_i}$$
+$$E(p)=\sum_ {i=0}^{n-1}\sum_ {j=0}^{n-1}(A_ {i,j}-B_ {p_ i,p_ j})^2+\sum_ {i=0}^{n-1}U_ {i,p_ i}$$
 
-二乗を展開すると、$\sum A_{i,j}^2+\sum B_{x,y}^2$ は定数で、対応に依存する交差項は $-2A_{i,j}B_{p_i,p_j}$ です。このためQAPのflowを $-2A$、distanceを $B$ とできます。返却時には定数を戻し、QAP内部の負のcostをそのまま二乗誤差として出力しません。
+二乗を展開すると、$\sum A_ {i,j}^2+\sum B_ {x,y}^2$ は定数で、対応に依存する交差項は $-2A_ {i,j}B_ {p_ i,p_ j}$ です。このためQAPのflowを $-2A$、distanceを $B$ とできます。返却時には定数を戻し、QAP内部の負のcostをそのまま二乗誤差として出力しません。
 
 ## 7. 制約・注意点
 
@@ -1149,7 +1179,7 @@ $$E(p)=\sum_{i=0}^{n-1}\sum_{j=0}^{n-1}(A_{i,j}-B_{p_i,p_j})^2+\sum_{i=0}^{n-1}U
 
 目的値の絶対値については、少なくとも次の上界を見積もれます。
 
-$$B=\sum_{i=0}^{n-1}\max_x \lvert U_{i,x}\rvert+\left(\sum_{i=0}^{n-1}\sum_{j=0}^{n-1}\lvert F_{i,j}\rvert\right)\max_{x,y}\lvert D_{x,y}\rvert$$
+$$B=\sum_ {i=0}^{n-1}\max_ x \lvert U_ {i,x}\rvert+\left(\sum_ {i=0}^{n-1}\sum_ {j=0}^{n-1}\lvert F_ {i,j}\rvert\right)\max_ {x,y}\lvert D_ {x,y}\rvert$$
 
 $B$ は最終目的値の絶対値の上界です。すべての中間式の上界という意味ではないため、差分や補正式にも余裕を持たせます。計算型の最小値の絶対値化や符号反転は、その型に収まらない点にも注意します。
 
@@ -1202,7 +1232,7 @@ QAP外の定数費用は通常の `qap_result::cost` に自動では含まれま
 
 ### 7.7 実時間と再現性
 
-deadlineは強制停止機構ではありません。初期配置、全評価、対称性判定、CSR構築、縮約構築などに時刻確認を細かく挟まない処理があります。期限を過ぎてから呼んでも、6.0の表にある処理は行われます。
+deadlineは強制停止機構ではありません。初期配置、全評価、対称性判定、CSR構築、縮約構築などに時刻確認を細かく挟まない処理があります。v09の追加割当も、時間枠に達した後の未割当補完と全評価にさらにO(n^2)かかる場合があります。期限を過ぎてから呼んでも、6.0の表にある処理は行われます。
 
 同じseedで厳密に同じ最終配置になる保証もありません。単一スレッドでの使用・検証を前提にし、実時間の比較中にほかの重い計測を同時実行すると条件が変わります。
 
@@ -1223,7 +1253,7 @@ deadlineは強制停止機構ではありません。初期配置、全評価、
 呼出しと返却値の説明は6.1、概念説明は4.1です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数＝位置数。0以上
@@ -1276,7 +1306,7 @@ inline qap_result<long long> solve_symmetric_facility_layout(
 呼出しと返却値の説明は6.2、概念説明は4.2です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - vertex_count: 実頂点数。0以上、height*width以下
@@ -1298,6 +1328,16 @@ struct qap_grid_layout_result {
     std::vector<int> cell_of_vertex;
     std::vector<int> empty_cells;
     long long cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_grid_layout_result& result) {
+        out << "qap_grid_layout_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", cell_of_vertex=";
+        qap_debug_detail::write(out, result.cell_of_vertex);
+        out << ", empty_cells=";
+        qap_debug_detail::write(out, result.empty_cells);
+        return out << '}';
+    }
 };
 
 inline qap_grid_layout_result solve_sparse_graph_on_grid(
@@ -1354,7 +1394,7 @@ costは無向辺の重み付き距離和の2倍です。実頂点の返却値は
 呼出しと返却値の説明は6.3、概念説明は4.3です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - group_count: グループ数。0以上
@@ -1369,6 +1409,14 @@ costは無向辺の重み付き距離和の2倍です。実頂点の返却値は
 struct qap_fixed_partition_result {
     std::vector<int> group_of_object;
     long long cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_fixed_partition_result& result) {
+        out << "qap_fixed_partition_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", group_of_object=";
+        qap_debug_detail::write(out, result.group_of_object);
+        return out << '}';
+    }
 };
 
 inline qap_fixed_partition_result solve_fixed_capacity_partition(
@@ -1422,7 +1470,7 @@ inline qap_fixed_partition_result solve_fixed_capacity_partition(
 呼出しと返却値の説明は6.4、概念説明は4.4です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数。例では2以上
@@ -1436,6 +1484,16 @@ struct qap_cycle_result {
     std::vector<int> order_of_object;
     std::vector<int> object_at_order;
     long long cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_cycle_result& result) {
+        out << "qap_cycle_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", order_of_object=";
+        qap_debug_detail::write(out, result.order_of_object);
+        out << ", object_at_order=";
+        qap_debug_detail::write(out, result.object_at_order);
+        return out << '}';
+    }
 };
 
 inline qap_cycle_result solve_cyclic_order_as_qap(
@@ -1470,7 +1528,7 @@ inline qap_cycle_result solve_cyclic_order_as_qap(
 呼出しと返却値の説明は6.5、概念説明は4.5です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数＝位置数
@@ -1514,7 +1572,7 @@ inline qap_result<long long> solve_directed_transport_layout(
 呼出しと返却値の説明は6.6、概念説明は4.6です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数＝位置数
@@ -1576,7 +1634,7 @@ inline qap_result<long long> solve_qap_reconfiguration(
 呼出しと返却値の説明は6.7、概念説明は4.7です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数＝位置数
@@ -1591,6 +1649,14 @@ inline qap_result<long long> solve_qap_reconfiguration(
 struct qap_maximization_result {
     std::vector<int> location_of;
     long long score;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_maximization_result& result) {
+        out << "qap_maximization_result{score=";
+        qap_debug_detail::write(out, result.score);
+        out << ", location_of=";
+        qap_debug_detail::write(out, result.location_of);
+        return out << '}';
+    }
 };
 
 inline qap_maximization_result maximize_qap_affinity(
@@ -1635,7 +1701,7 @@ flowとdistanceの両方を反転しないでください。単項報酬も別�
 呼出しと返却値の説明は6.8、概念説明は4.8です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - real_object_count: 実物体数m。0以上、location_count以下
@@ -1652,6 +1718,16 @@ struct qap_with_empty_locations_result {
     std::vector<int> location_of_real_object;
     std::vector<int> empty_locations;
     long long cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_with_empty_locations_result& result) {
+        out << "qap_with_empty_locations_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", location_of_real_object=";
+        qap_debug_detail::write(out, result.location_of_real_object);
+        out << ", empty_locations=";
+        qap_debug_detail::write(out, result.empty_locations);
+        return out << '}';
+    }
 };
 
 inline qap_with_empty_locations_result solve_qap_with_empty_locations(
@@ -1710,7 +1786,7 @@ inline qap_with_empty_locations_result solve_qap_with_empty_locations(
 呼出しと返却値の説明は6.9、概念説明は4.9です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - candidate_count: 候補数c
@@ -1728,6 +1804,16 @@ struct qap_selection_placement_result {
     std::vector<int> object_at_real_location;
     std::vector<int> unselected_objects;
     long long cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_selection_placement_result& result) {
+        out << "qap_selection_placement_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", object_at_real_location=";
+        qap_debug_detail::write(out, result.object_at_real_location);
+        out << ", unselected_objects=";
+        qap_debug_detail::write(out, result.unselected_objects);
+        return out << '}';
+    }
 };
 
 inline qap_selection_placement_result select_and_place_by_qap(
@@ -1794,7 +1880,7 @@ inline qap_selection_placement_result select_and_place_by_qap(
 呼出しと返却値の説明は6.10、概念説明は4.10です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 構築済みqap_problem<int,long long>。値渡しなので呼出し元は変更されない
@@ -1851,7 +1937,7 @@ penaltyは物理的な違反費用や許容交換条件から選びます。無�
 呼出しと返却値の説明は6.11、概念説明は4.11です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 物体数＝位置数
@@ -1860,7 +1946,7 @@ penaltyは物理的な違反費用や許容交換条件から選びます。無�
 // - unary: 空または__int128_tのn*n要素
 // - deadline: std::chrono::steady_clockの絶対締切。省略不可。入力構築やコピーの前に設定する
 // - seed: std::uint64_tの乱数seed。既定値1
-// 出力: qap_result<__int128_t>。配置は通常と同じintのvectorです。costの表示には同じ例のqap_int128_to_string(result.cost)を使います。
+// 出力: qap_result<__int128_t>。配置は通常と同じintのvectorです。結果全体はstd::cout << resultで表示できます。costだけを文字列にする場合はqap_int128_to_string(result.cost)を使います。
 // 前提: 行列サイズ・添字計算はint、各値と全中間演算は宣言した型に収まること。
 
 inline qap_result<__int128_t> solve_wide_score_qap(
@@ -1909,7 +1995,7 @@ Scoreを先に広げた演算が必要です。呼出し前にlong longで乗算
 呼出しと返却値の説明は6.12、概念説明は4.12です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 構築済みの不変なQAP
@@ -1936,7 +2022,7 @@ inline qap_result<long long> improve_existing_qap_solution(
 呼出しと返却値の説明は6.13、概念説明は4.13です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 全候補に共通する不変のQAP
@@ -1984,7 +2070,7 @@ inline qap_result<long long> improve_best_qap_initial_candidate(
 呼出しと返却値の説明は6.14、概念説明は4.14です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 構築済みの不変なQAP
@@ -2021,7 +2107,7 @@ inline qap_result<long long> repair_affected_qap_objects(
 呼出しと返却値の説明は6.15、概念説明は4.15です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 反復中に変更しないQAP
@@ -2093,7 +2179,7 @@ seedは例の関数では必須引数です。selectorの処理時間も外側�
 呼出しと返却値の説明は6.16、概念説明は4.16です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 構築済みの不変なQAP
@@ -2136,7 +2222,7 @@ inline qap_result<long long> exact_repair_small_qap_subset(
 呼出しと返却値の説明は6.17、概念説明は4.17です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 探索中に不変のQAP
@@ -2153,6 +2239,16 @@ struct qap_combined_search_result {
     std::vector<int> location_of;
     long long qap_cost;
     long long extra_cost;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_combined_search_result& result) {
+        out << "qap_combined_search_result{qap_cost=";
+        qap_debug_detail::write(out, result.qap_cost);
+        out << ", extra_cost=";
+        qap_debug_detail::write(out, result.extra_cost);
+        out << ", location_of=";
+        qap_debug_detail::write(out, result.location_of);
+        return out << '}';
+    }
 };
 
 template <class ExtraDelta, class ApplyExtra>
@@ -2200,7 +2296,7 @@ seedは必須です。extra_deltaは状態を変更せず、apply_extraは必ず
 呼出しと返却値の説明は6.18、概念説明は4.18です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 代理目的を表す不変のQAP
@@ -2219,6 +2315,18 @@ struct qap_true_score_result {
     long long qap_cost;
     long long true_score;
     bool accepted;
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_true_score_result& result) {
+        out << "qap_true_score_result{qap_cost=";
+        qap_debug_detail::write(out, result.qap_cost);
+        out << ", true_score=";
+        qap_debug_detail::write(out, result.true_score);
+        out << ", accepted=";
+        qap_debug_detail::write(out, result.accepted);
+        out << ", location_of=";
+        qap_debug_detail::write(out, result.location_of);
+        return out << '}';
+    }
 };
 
 template <class TrueScore>
@@ -2256,7 +2364,7 @@ seedは必須です。本来スコアの再評価時間も確保します。最�
 呼出しと返却値の説明は6.19、概念説明は4.19です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - problem: 変更前のqap_problem<int,long long>。コピーに変更を適用する
@@ -2321,7 +2429,7 @@ inline qap_result<long long> reoptimize_qap_after_updates(
 呼出しと返却値の説明は6.20、概念説明は4.20です。
 
 ```cpp
-#include "qap_solver_v07.hpp"
+#include "qap_solver_v09.hpp"
 
 // 入力:
 // - n: 両グラフ共通の頂点数
@@ -2336,6 +2444,14 @@ inline qap_result<long long> reoptimize_qap_after_updates(
 struct qap_graph_matching_result {
     std::vector<int> vertex_in_b;  // 第1グラフの頂点i→第2グラフの頂点
     long long cost;  // 全向き付きペアの二乗誤差＋単項費用
+
+    friend std::ostream& operator<<(std::ostream& out, const qap_graph_matching_result& result) {
+        out << "qap_graph_matching_result{cost=";
+        qap_debug_detail::write(out, result.cost);
+        out << ", vertex_in_b=";
+        qap_debug_detail::write(out, result.vertex_in_b);
+        return out << '}';
+    }
 };
 
 inline qap_graph_matching_result match_weighted_graphs_by_qap(
@@ -2372,18 +2488,19 @@ inline qap_graph_matching_result match_weighted_graphs_by_qap(
 
 ### 9.1 全体の流れ
 
-内蔵探索は、初期配置、Threshold Accepting、tabu探索を組み合わせます。動かす近傍は「2物体の位置を交換するswap」です。
+内蔵探索は、初期配置、単項費用に基づく追加候補、Threshold Accepting、tabu探索を組み合わせます。近傍探索では「2物体の位置を交換するswap」を使います。
 
 1. `solve_qap` なら初期配置を生成する。`improve_qap` なら利用側の初期配置を使う。
 2. 開始配置を全評価し、最良解として保存する。物体数が2未満、または締切到達なら返す。
 3. 通常APIは評価器を準備する。prepared APIは構築済みの評価器を使う。
-4. 探索ドライバへ入った時点の残り時間を基準に、最初の1/4までThreshold Acceptingを行う。
-5. それまでの最良配置から、残り時間の基準の1/2まで2回目のThreshold Acceptingを行う。
-6. 現在の最良配置でswap差分の計算時間を標本計測し、全swap差分表を作る余裕があるか推定する。
-7. 余裕があると判断したら差分表を作り、tabu探索する。余裕がないと判断したらThreshold Acceptingを継続する。
-8. 探索中に保存した最良配置と目的値を返す。
+4. 有望な単項費用がある場合、入口の残り時間の約1/4を目安に追加割当候補を作り、全目的値が改善したときだけ保存する。
+5. 追加処理を終えた後の残り時間を基準に、その最初の1/4までThreshold Acceptingを行う。
+6. それまでの最良配置から、同じ残り時間基準の1/2まで2回目のThreshold Acceptingを行う。
+7. 現在の最良配置でswap差分の計算時間を標本計測し、全swap差分表を作る余裕があるか推定する。
+8. 余裕があると判断したら差分表を作り、tabu探索する。構築前の判定で余裕がない場合はThreshold Acceptingを継続する。
+9. 探索中に保存した最良配置と目的値を返す。
 
-「最初の1/4」は呼出し前の全時間予算の1/4ではなく、初期評価・必要な前処理を終えて探索ドライバへ入った時点からの配分です。各フェーズの標本化にも、そのフェーズの時間を使います。
+追加割当の時間枠と、TAの1/4・1/2の基準時刻は別です。TAの配分は追加処理後の残り時間から計算し、各フェーズの標本化にもその時間を使います。差分表を実際に構築し始めてから打切られた場合は、そのまま最良解を返します。
 
 問題を表す `qap_problem` と結果の `qap_result` は公開です。前処理・乱数・差分表・探索処理は `qap_prepared` の非公開実装が保持します。通常の入口とpreparedの入口は、共通の非公開探索ドライバを使います。
 
@@ -2396,13 +2513,47 @@ inline qap_graph_matching_result match_weighted_graphs_by_qap(
 
 2番目では、物体ごとにflowの入出絶対値和、位置ごとにdistanceの入出和を求めます。
 
-$$s_i=\sum_{j=0}^{n-1}(\lvert F_{i,j}\rvert+\lvert F_{j,i}\rvert)$$
+$$s_ i=\sum_ {j=0}^{n-1}(\lvert F_ {i,j}\rvert+\lvert F_ {j,i}\rvert)$$
 
-$$c_x=\sum_{y=0}^{n-1}(D_{x,y}+D_{y,x})$$
+$$c_ x=\sum_ {y=0}^{n-1}(D_ {x,y}+D_ {y,x})$$
 
-$s_i$ は物体 $i$ の関係量、$c_x$ は位置 $x$ の係数和です。$s_i$ の大きい順の物体と、$c_x$ の小さい順の位置を対応させます。同値の場合は番号で順序が決まります。行を連続走査し、行側の和と列側の和を同時に集計します。
+$s_ i$ は物体 $i$ の関係量、$c_ x$ は位置 $x$ の係数和です。$s_ i$ の大きい順の物体と、$c_ x$ の小さい順の位置を対応させます。同値の場合は番号で順序が決まります。行を連続走査し、行側の和と列側の和を同時に集計します。
 
 この構成だけではunaryを見ませんが、2配置を比べる全評価にはunaryも含みます。構成解が厳密に良いときだけそちらを使い、同点ならランダム置換を使います。負値や一般の位置係数にも計算自体はできますが、「中央ほど有利」という解釈が常に成り立つわけではありません。
+
+### 9.2.1 強い単項費用に対する追加候補（v09）
+
+禁止に相当する大きな罰点があると、数物体をまとめて入れ替えれば解消できても、2物体交換の途中で罰点が増えることがあります。v09はこのような場合へ、単項費用を手掛かりにした割当候補を追加します。この処理はsolveだけでなく、通常の探索ドライバへ進むimproveや部分問題の改善からも使われます。
+
+まずunaryがなければ何もしません。存在するときは、入口で残る時間の約1/4を追加処理の時間枠にします。以下の順番で処理します。
+
+1. **安価な予備判定。** unaryの第0行と、約1/4、1/2、3/4の位置にある行との差の幅を調べます。flowとdistanceの16標本から得た尺度と比較し、弱そうなら追加処理を省きます。
+2. **整数範囲の確認。** unaryの絶対値が `Score` 最大値の `8*n` 分の1を超える場合、追加処理を省きます。これはこの処理の差や累積のための保守的な検査で、ライブラリ全体のオーバーフロー検査ではありません。
+3. **二次項との比較。** 全flowの絶対値和とdistanceの最大値−最小値を掛け、二次項が変わり得る幅の上界を求めます。
+4. **単項の改善余地を確認。** 列ごとの平均を引いたunaryについて、現在の位置と各行の最小値との差を合計し、二次項の幅と比較します。
+5. **安い候補辺で完全割当を試す。** 各行の最安値から、二次項の幅以内の位置だけを候補にします。候補が少ない物体から順に、交互道を使って割り当てます。
+6. **完成しない場合の最小費用割当。** 残った時間でHungarian法を試します。時間切れなら、既に完成した割当を保ち、残りを空き位置へ貪欲に埋めます。
+7. **完全目的値で採否。** 完成した置換をunaryと二次項の両方で全評価し、保存済み最良値を厳密に改善した場合だけ採用します。
+
+予備判定は全行を見ないため、観測外の強いunaryを見落とすことがあります。尺度の比較にはlong doubleも使うため、丸めの影響もあります。数値が大きいだけで常に発動するわけではありません。
+
+二次項の変動幅の上界を $R$ とすると、実装で使う値は次の形です。
+
+$$R=\left(\sum_ {i=0}^{n-1}\sum_ {j=0}^{n-1}\lvert F_ {i,j}\rvert\right)(D_ {\max}-D_ {\min})$$
+
+$D_ {\max},D_ {\min}$ はdistance表の最大値と最小値です。どの配置でも各flowに掛かるdistanceはこの範囲内なので、その変化を全項で足せば上界になります。
+
+列平均を整数のまま扱うため、実装は次のn倍した値を使います。
+
+$$V_ {i,x}=nU_ {i,x}-\sum_ {r=0}^{n-1}U_ {r,x}$$
+
+ここで $r$ は同じ列を足すための物体番号、$V$ は判定用の一時的な費用です。物体ごとの定数、位置ごとの定数をunaryへ加えても、すべての置換で同じ合計が加わるだけです。そのような配置と無関係な成分を判定から減らします。ただし、丸めや範囲検査もあり、追加処理全体が定数の加算に対して完全に同じ挙動になる保証はありません。特に候補辺を選ぶ段階は元のunaryの行最小値を使います。
+
+**交互道**は、ある物体が欲しい位置を別の物体が使っているとき、占有者をさらに別の位置へ動かす連鎖です。空き位置までつながれば、連鎖を逆にたどって一対一対応を保ちながら割当を増やせます。幅優先にこの連鎖を探します。候補辺で完全割当ができても、単項費用の最小割当を求めたことにはなりません。
+
+Hungarian法の段階では、行・列の調整値（双対変数）を持ち、調整後の費用が小さい辺をたどって割当を増やします。`row_potential` と `column_potential` がその調整値、`minimum` が各未訪問列へ到達する追加費用、`previous` が経路の復元先です。1物体ずつ空き位置までの経路を完成させ、対応を更新します。完走した場合は単項費用の最小割当ですが、QAP全体の最適解という意味ではありません。
+
+追加処理で使う候補辺は、利用者が指定したハード制約ではありません。その後の探索にも禁止表として引き継がれません。時間枠に達した後の未割当補完と全評価に、さらに $O(n^2)$ の処理が必要なことがあります。最悪時間は $O(n^3)$、一時メモリは $O(n^2)$ です。
 
 ### 9.3 対称性判定と疎なflowのCSR
 
@@ -2422,33 +2573,33 @@ CSRは、各物体に関係する非ゼロ辺を連続した配列へまとめ�
 
 `evaluate` は目的式をそのまま行優先で計算します。疎CSRを使った全評価ではなく、常に全物体ペアを走査します。
 
-swapする物体を $r,s$、交換前の位置を $a=p_r$、$b=p_s$ とします。目的値のうち変わるのは、rまたはsに関係する項だけです。差分は「交換後−交換前」で、次の3部分に分けられます。
+swapする物体を $r,s$、交換前の位置を $a=p_ r$、$b=p_ s$ とします。目的値のうち変わるのは、rまたはsに関係する項だけです。差分は「交換後−交換前」で、次の3部分に分けられます。
 
 単項費用の変化:
 
-$$\Delta_U=U_{r,b}-U_{r,a}+U_{s,a}-U_{s,b}$$
+$$\Delta_ U=U_ {r,b}-U_ {r,a}+U_ {s,a}-U_ {s,b}$$
 
 ほかの物体 $k$ との関係の変化:
 
-$$A_k=(F_{r,k}-F_{s,k})(D_{b,p_k}-D_{a,p_k})$$
+$$A_ k=(F_ {r,k}-F_ {s,k})(D_ {b,p_ k}-D_ {a,p_ k})$$
 
-$$B_k=(F_{k,r}-F_{k,s})(D_{p_k,b}-D_{p_k,a})$$
+$$B_ k=(F_ {k,r}-F_ {k,s})(D_ {p_ k,b}-D_ {p_ k,a})$$
 
-$$\Delta_{\mathrm{ext}}=\sum_{k\ne r,s}(A_k+B_k)$$
+$$\Delta_ {\mathrm{ext}}=\sum_ {k\ne r,s}(A_ k+B_ k)$$
 
-$A_k$ はr・sからkへ出る関係、$B_k$ はkからr・sへ入る関係の変化です。
+$A_ k$ はr・sからkへ出る関係、$B_ k$ はkからr・sへ入る関係の変化です。
 
 r・s自身と、その間の関係の変化:
 
-$$\Delta_{\mathrm{pair}}=(F_{r,r}-F_{s,s})(D_{b,b}-D_{a,a})+(F_{r,s}-F_{s,r})(D_{b,a}-D_{a,b})$$
+$$\Delta_ {\mathrm{pair}}=(F_ {r,r}-F_ {s,s})(D_ {b,b}-D_ {a,a})+(F_ {r,s}-F_ {s,r})(D_ {b,a}-D_ {a,b})$$
 
-$$\Delta=\Delta_U+\Delta_{\mathrm{ext}}+\Delta_{\mathrm{pair}}$$
+$$\Delta=\Delta_ U+\Delta_ {\mathrm{ext}}+\Delta_ {\mathrm{pair}}$$
 
 これが `qap_problem::swap_delta` の一般式です。rとsを除く走査は、2つの番号の前・間・後の3区間に分けます。各反復で「kがrまたはsか」を調べる分岐を避け、必要な行の先頭ポインタも再利用します。
 
 両行列が対称かつ対角0なら、次の式へ簡約できます。
 
-$$\Delta=\Delta_U+2\sum_{k\ne r,s}(F_{r,k}-F_{s,k})(D_{b,p_k}-D_{a,p_k})$$
+$$\Delta=\Delta_ U+2\sum_ {k\ne r,s}(F_ {r,k}-F_ {s,k})(D_ {b,p_ k}-D_ {a,p_ k})$$
 
 疎経路ではflowが非ゼロの項だけを調べます。対称ならr・sの出辺を走査して2倍し、一般形なら出辺と入辺を別々に走査します。r・s自身とその間の項は、重複しないよう分けて加算します。
 
@@ -2488,15 +2639,15 @@ tabu探索では、すべての組 `i<j` のswap差分を表へ保持します�
 4. rまたはsを含むswapは、片方を通常の差分式で再計算し、もう片方を3物体の恒等式から復元する。
 5. r・sをもう1回交換する差分は、適用した差分の符号反転にする。
 
-4の恒等式を具体的に書きます。交換前の差分を $\delta_{u,v}$、r・s交換後の差分を $\delta'_{u,v}$、3物体の交換前位置を $a=p_r$、$b=p_s$、$c=p_i$ とすると、次が成り立ちます。
+4の恒等式を具体的に書きます。交換前の差分を $\delta_ {u,v}$、r・s交換後の差分を $\delta'_ {u,v}$、3物体の交換前位置を $a=p_ r$、$b=p_ s$、$c=p_ i$ とすると、次が成り立ちます。
 
-$$G_F=F_{r,s}-F_{s,r}+F_{s,i}-F_{i,s}+F_{i,r}-F_{r,i}$$
+$$G_ F=F_ {r,s}-F_ {s,r}+F_ {s,i}-F_ {i,s}+F_ {i,r}-F_ {r,i}$$
 
-$$G_D=D_{a,b}-D_{b,a}+D_{b,c}-D_{c,b}+D_{c,a}-D_{a,c}$$
+$$G_ D=D_ {a,b}-D_ {b,a}+D_ {b,c}-D_ {c,b}+D_ {c,a}-D_ {a,c}$$
 
-$$\delta'_{r,i}+\delta'_{s,i}=\delta_{r,i}+\delta_{s,i}-\delta_{r,s}+G_FG_D$$
+$$\delta'_ {r,i}+\delta'_ {s,i}=\delta_ {r,i}+\delta_ {s,i}-\delta_ {r,s}+G_ FG_ D$$
 
-$G_F$ と $G_D$ は3頂点の有向サイクルに沿った差です。3物体の6通りの置き方の交代和では、単項費用、自己対角項、ほかの物体との相互作用が相殺され、この積だけが残ります。flowまたはdistanceが対称なら対応するGが0になります。非対称の場合も積の補正を含めるため、一般の入力で使えます。
+$G_ F$ と $G_ D$ は3頂点の有向サイクルに沿った差です。3物体の6通りの置き方の交代和では、単項費用、自己対角項、ほかの物体との相互作用が相殺され、この積だけが残ります。flowまたはdistanceが対称なら対応するGが0になります。非対称の場合も積の補正を含めるため、一般の入力で使えます。
 
 この差分表は内蔵探索用の非公開状態です。`qap_swap_state` がn*nの表を公開保持しているわけではありません。
 
@@ -2518,25 +2669,25 @@ $$\mathrm{low}=\max(1,\lfloor n/10\rfloor),\qquad \mathrm{high}=\max(\mathrm{low
 
 ### 9.8 部分QAPの縮約と復元
 
-可動物体を利用側が渡した順に $m_0,\ldots,m_{k-1}$、その現在位置を $l_a=p_{m_a}$ とします。縮約の物体番号aは元物体 $m_a$、縮約位置番号xは元位置 $l_x$ に対応します。可動集合の順序をソートすることはありません。
+可動物体を利用側が渡した順に $m_0,\ldots,m_ {k-1}$、その現在位置を $l_ a=p_ {m_ a}$ とします。縮約の物体番号aは元物体 $m_ a$、縮約位置番号xは元位置 $l_ x$ に対応します。可動集合の順序をソートすることはありません。
 
 縮約行列は次の式です。$I$ は固定物体の集合です。
 
-$$F'_{a,b}=F_{m_a,m_b},\qquad D'_{x,y}=D_{l_x,l_y}$$
+$$F'_ {a,b}=F_ {m_ a,m_ b},\qquad D'_ {x,y}=D_ {l_ x,l_ y}$$
 
-$$U'_{a,x}=U_{m_a,l_x}+\sum_{f\in I}(F_{m_a,f}D_{l_x,p_f}+F_{f,m_a}D_{p_f,l_x})$$
+$$U'_ {a,x}=U_ {m_ a,l_ x}+\sum_ {f\in I}(F_ {m_ a,f}D_ {l_ x,p_ f}+F_ {f,m_ a}D_ {p_ f,l_ x})$$
 
 固定物体と可動物体の関係は、可動物体の行き先さえ分かれば決まるため、単項費用へ移せます。固定物体同士の費用は配置によらない定数です。
 
 縮約の初期配置を恒等置換idとし、完全初期costから縮約初期costを引いて定数を求めます。
 
-$$K=C(p)-C_{\mathrm{sub}}(\mathrm{id})$$
+$$K=C(p)-C_ {\mathrm{sub}}(\mathrm{id})$$
 
 任意の縮約置換qを復元して得る完全配置を $p^{(q)}$ とすると、次の対応が成り立ちます。
 
-$$p^{(q)}_{m_a}=l_{q_a},\qquad p^{(q)}_f=p_f\ (f\in I)$$
+$$p^{(q)}_ {m_ a}=l_ {q_ a},\qquad p^{(q)}_ f=p_ f\ (f\in I)$$
 
-$$C(p^{(q)})=K+C_{\mathrm{sub}}(q)$$
+$$C(p^{(q)})=K+C_ {\mathrm{sub}}(q)$$
 
 $K$ が `constant_offset` です。既知cost版では式の $C(p)$ に渡された値をそのまま使うため、誤った値を渡すとこの対応が壊れます。
 
@@ -2553,9 +2704,11 @@ $K$ が `constant_offset` です。既知cost版では式の $C(p)$ に渡され
 | 内部値 | 設定 | 役割 |
 | --- | --- | --- |
 | 初期配置候補 | ランダム置換と関係量による構成配置 | 開始点を比較する |
+| 追加の単項候補 | 予備判定後、候補辺の完全割当。失敗時は時間制限付きHungarian法 | 全QAP costで厳密に改善した場合だけ保持 |
+| 単項候補の時間枠 | 追加処理入口の残り時間の約1/4 | 補完と全評価は時間枠後にも必要になり得る |
 | TAの標本数 | 最大256試行 | 正の差分の尺度を求める |
 | TA初期閾値係数 | 0.1171875 | 尺度から初期許容悪化量を決める |
-| 前半2フェーズの締切 | 探索開始から残り時間の1/4、1/2 | 最良配置から閾値を再設定する |
+| 前半2フェーズの締切 | 単項候補処理後の残り時間の1/4、1/2 | 最良配置から閾値を再設定する |
 | 疎経路 | flowの非ゼロ率が厳密に1/3未満 | 非ゼロ辺だけの差分を使う |
 | 表構築判定 | 推定構築時間の2倍が残り時間未満 | 構築だけで時間を使い切るのを避ける |
 | tabu期限への加算値 | 9.7のlow〜high | 元の配置への復帰を抑える |
@@ -2579,6 +2732,7 @@ $K$ が `constant_offset` です。既知cost版では式の $C(p)$ に渡され
 | state構築・cost省略 | $O(n^2)$ | 配置 $O(n)$ |
 | state構築・既知cost | 配置のコピー込み $O(n)$ | 配置 $O(n)$ |
 | stateのapply_swap | 利用する差分経路と同じ | $O(1)$ |
+| 単項候補の追加生成 | 最悪 $O(n^3)$、予備判定は $O(n)$ | 一時領域 $O(n^2)$ |
 | 全swap差分表の構築 | 密な一般経路で $O(n^3)$ | $O(n^2)$ |
 | 表の1回更新・tabuの1手選択 | 各 $O(n^2)$ | 表に加え更新作業領域 $O(n)$ |
 | 既知costからの縮約 | $O(n+k^2n)$ | $O(n+k^2)$ |
@@ -2591,18 +2745,23 @@ stateへ配置をmoveし、入力検査も無効なら、既知cost版構築の�
 
 ### 9.11 検証用コードの使い方
 
-ライブラリヘッダーを直接コンパイルすると、末尾の自己テスト10群とmainが有効になります。includeした場合はそれらが無効になります。
+v09ヘッダーを直接コンパイルすると、末尾の自己テスト13群とmainが有効になります。includeした場合は無効です。
 
 ```bash
-g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -x c++ qap_solver_v07.hpp -o qap_selftest
+g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -x c++ qap_solver_v09.hpp -o qap_selftest
 ./qap_selftest
-g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror qap_solver_examples_test_v04.cpp -o qap_examples
-./qap_examples
-g++ -std=c++20 -O3 -march=native -DNDEBUG -Wall -Wextra -Wshadow -Wconversion -Werror qap_solver_benchmark_v08.cpp -o qap_bench
-./qap_bench test
-./qap_bench audit
 ```
 
-外部テストには `qap_solver_test_access.hpp` を同じディレクトリへ置きます。コード例テストには `qap_solver_usecase_examples.hpp` も必要です。通常のアプリケーションには `qap_solver_v07.hpp` だけで足ります。ヘッダーの直接コンパイル時に出る `#pragma once in main file` という警告は想定内です。
+通常のアプリケーションには `qap_solver_v09.hpp` だけで足ります。直接コンパイル時の `#pragma once in main file` 警告は想定内です。
 
-コード例の検証は、全例を呼び出すだけでなく、返却配置の範囲・重複、独立した目的式の再計算、固定物体、ダミー復元、型の境界、入力更新後のcostを確認します。実際の検証結果とコマンドは配布一式の `qap_solver_guide_validation.md` にまとめています。
+新しい配布ZIP `qap_solver_guides_v09_examples.zip` には、更新した本書、第8章のadapter20例、新しいステップバイステップガイドと独立実行例24本、検証スクリプトを収録しています。ZIPのルートで次を実行できます。
+
+```bash
+python3 verify_examples.py
+python3 verify_reference_examples.py
+python3 verify_debug_output.py
+```
+
+`verify_examples.py` は新ガイドのコードとの一致確認、C++20・C++23での全24例のビルドと実行、置換・目的値・変換・固定配置などの検査です。`verify_reference_examples.py` は本書第8章の20ブロックの単独コンパイル、配布adapterとの一致確認、既存の20ユースケースと追加1000ケースの実行検査を行います。`verify_debug_output.py` は全10種類の結果型、省略表示、128bit整数の最小値、複数ソースファイルからの利用を検査し、未定義動作検出（UBSan）付きでも実行します。具体的な環境と結果はZIPの `VALIDATION.txt` に記載しています。
+
+v09の採否に用いた解品質ベンチマークは別配布の `qap_solver_feasibility_benchmark_v02.zip` と `qap_solver_feasibility_report_v02.md` を参照してください。教材の検査はその統計比較をやり直すものではなく、コード例とAPI契約の確認です。

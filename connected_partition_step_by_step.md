@@ -1,6 +1,6 @@
 # ConnectedPartitionSolver ステップバイステップガイド
 
-対象実装：`connected_partition_solver_v11.hpp`。C++20。確認日：2026-10-09。
+対象実装：`connected_partition_solver_v12.hpp`。C++20。確認日：2026-10-14。
 
 このガイドでは、「つながった区画を作り、その分け方を良くする」という問題を、小さな実行例で学びます。必要な数学は、和・不等式・二乗・平均です。C++ の変数、配列、ループ、関数は知っているものとして、ライブラリ固有の概念と C++ の `optional`・`span` はその都度説明します。
 
@@ -131,7 +131,7 @@ CP-SATの `FEASIBLE` は「合法解を発見」、`OPTIMAL` は「最適性ま�
 
 ## 3. 実行の準備
 
-`connected_partition_solver_v11.hpp` と、例を貼り付けた `main.cpp` を同じフォルダーに置きます。以下でコンパイルして実行できます。
+`connected_partition_solver_v12.hpp` と、例を貼り付けた `main.cpp` を同じフォルダーに置きます。以下でコンパイルして実行できます。
 
 ```sh
 g++ -std=c++20 -O2 -Wall -Wextra main.cpp -o example
@@ -166,7 +166,7 @@ AHCの提出用に1ファイルへまとめるときは、ヘッダ内のクラ�
 **ファイル：`examples/01_minimal.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -211,7 +211,7 @@ int main() {
 **ファイル：`examples/02_evaluate.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -224,11 +224,10 @@ int main() {
     Solver solver(p);
     std::vector<int> initial{0, 0, 0, 1, 1, 1};
     auto before = solver.evaluate(initial);
-    std::cout << "initial feasible = " << before.feasible << '\n';
-    if (before.cost) std::cout << "initial cost = " << *before.cost << '\n';
+    std::cerr << "initial: " << before << '\n';
     std::vector<int> broken{0, 1, 0, 1, 1, 1};
     auto bad = solver.evaluate(broken);
-    std::cout << "broken feasible = " << bad.feasible << '\n';
+    std::cerr << "broken: " << bad << '\n';
     Solver::Options opt;
     opt.budget_us = -1;
     opt.max_steps = 2'000;
@@ -252,7 +251,16 @@ int main() {
 }
 ```
 
-`evaluate(labels)` は、渡した配列について制約と目的値を全体から計算します。探索は行いません。戻り値 `Evaluation` の `feasible` が合法性、`cost` が合法な場合の目的値です。初期解は `feasible=1, cost=10`、`broken` は領域0が分断されるので `feasible=0`、`cost` に値はありません。
+`evaluate(labels)` は、渡した配列について制約と目的値を全体から計算します。探索は行いません。戻り値 `Evaluation` の `feasible` が合法性、`cost` が合法な場合の目的値です。初期解は `feasible=true, cost=10`、`broken` は領域0が分断されるので `feasible=false`、`cost` に値はありません。
+
+`Evaluation` は `std::cerr << before` のように、そのまま出力できます。`<<` はストリームへ値を出力する演算子で、この構造体のための表示方法をライブラリが用意しています。この例の診断出力は次のようになります。
+
+```text
+initial: Evaluation{feasible=true, cost=10}
+broken: Evaluation{feasible=false, cost=none}
+```
+
+`none` は目的値がないことを表し、目的値0とは区別します。`std::cout` でも同じ形式で出せます。AHCの提出では解答用の標準出力と混ぜないよう、確認用の出力には標準エラー出力の `std::cerr` を使うと便利です。末尾の改行は呼出し側で `<< '\n'` を付けます。
 
 `Options` には探索の設定を入れます。
 
@@ -279,7 +287,7 @@ int main() {
 **ファイル：`examples/03_vertex_bounds.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -326,7 +334,7 @@ int main() {
 **ファイル：`examples/04_unary.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -376,7 +384,7 @@ int main() {
 **ファイル：`examples/05_load.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -422,7 +430,7 @@ int main() {
 **ファイル：`examples/06_multiple_loads.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -476,7 +484,7 @@ int main() {
 **ファイル：`examples/07_balance.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -529,7 +537,7 @@ int main() {
 **ファイル：`examples/08_fixed.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -573,7 +581,7 @@ int main() {
 **ファイル：`examples/09_domains.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -620,7 +628,7 @@ int main() {
 **ファイル：`examples/10_grid.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -681,7 +689,7 @@ int main() {
 **ファイル：`examples/11_edge_roles.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -751,7 +759,7 @@ int main() {
 **ファイル：`examples/12_contacts.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -798,7 +806,7 @@ int main() {
 **ファイル：`examples/13_optional_regions.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -848,7 +856,7 @@ int main() {
 **ファイル：`examples/14_background.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -891,7 +899,7 @@ int main() {
 **ファイル：`examples/15_outside_vertex.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -942,7 +950,7 @@ int main() {
 **ファイル：`examples/16_solve.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -983,7 +991,7 @@ int main() {
 **ファイル：`examples/17_repair.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1029,7 +1037,7 @@ int main() {
 **ファイル：`examples/18_annealing.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1095,7 +1103,7 @@ int main() {
 **ファイル：`examples/18_greedy.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1168,7 +1176,7 @@ int main() {
 **ファイル：`examples/19_budget_statistics.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1195,21 +1203,7 @@ int main() {
     for (int r : solver.best_labels()) std::cout << r << ' ';
     std::cout << '\n';
 
-    switch (result.reason) {
-        case Solver::StopReason::time_limit: std::cout << "time limit\n"; break;
-        case Solver::StopReason::step_limit: std::cout << "step limit\n"; break;
-        case Solver::StopReason::no_moves: std::cout << "no moves\n"; break;
-        case Solver::StopReason::invalid_initial: std::cout << "invalid initial\n"; break;
-    }
-    const auto& s = result.statistics;
-    std::cout << "steps = " << s.steps << ", constructions = " << s.construction_attempts
-              << ", elapsed_us = " << s.elapsed_us << '\n';
-    const char* names[] = {"Move", "Swap", "Block", "Relabel", "Recombine"};
-    for (int i = 0; i < Solver::NeighborhoodCount; ++i) {
-        const auto& n = s.neighborhood[i];
-        std::cout << names[i] << ' ' << n.proposed << ' ' << n.feasible << ' '
-                  << n.accepted << ' ' << n.improved << ' ' << n.elapsed_ns << '\n';
-    }
+    std::cerr << result << '\n';
 }
 ```
 
@@ -1245,7 +1239,25 @@ int main() {
 | `.improved` | 最良目的値を厳密に小さくした回数 |
 | `.elapsed_ns` | その種類の提案・検査などに使ったナノ秒。`profile=true` 時だけ測る |
 
-表示の近傍ごとの5個の数は、表の `proposed` から `elapsed_ns` の順です。`proposed` には候補を作れなかった試行も含まれます。また、標準モデルで `Acceptance::greedy` を指定すると、目的値で先に棄却して連結性を調べない候補があります。このため `feasible/proposed` を「すべての候補の真の合法率」と読むことはできません。修復の内訳もこの近傍別統計には入りません。
+例の最後の `std::cerr << result << '\n';` は、探索結果の `Result` をまとめて表示します。`solve`・`improve`・`resume`・`repair` の戻り値はいずれもこの型なので、同じ書き方で出力できます。たとえば、次のような形式です。数値は読み方を示すための例示であり、実際の試行数や時間は実行ごとに異なります。
+
+```text
+Result{best_cost=1, reason=time_limit, statistics=Statistics{steps=200, construction_attempts=0, elapsed_us=5000, neighborhood={
+  Move: {proposed=120, feasible=40, accepted=12, improved=2, elapsed_ns=3000000}
+  Swap: {proposed=36, feasible=4, accepted=1, improved=0, elapsed_ns=500000}
+  Block: {proposed=24, feasible=3, accepted=1, improved=0, elapsed_ns=400000}
+  Relabel: {proposed=4, feasible=4, accepted=4, improved=0, elapsed_ns=100000}
+  Recombine: {proposed=16, feasible=8, accepted=3, improved=0, elapsed_ns=900000}
+}}}
+```
+
+`best_cost` は最良目的値で、合法解を得ていない場合は `none` です。終了理由は数字ではなく `time_limit` などの名前で出ます。`elapsed_us` はマイクロ秒、各近傍の `elapsed_ns` はナノ秒です。`profile=false` のとき、各近傍の `elapsed_ns` は計測せず0になりますが、全体の `elapsed_us` は計測します。
+
+近傍の配列は `Move`・`Swap`・`Block`・`Relabel`・`Recombine` の固定5件だけを、1件ずつ改行して表示します。頂点数や領域数に応じて行数が増えることはありません。`Result` はラベル配列を持たないため、分割の配列はこの出力に含まれません。必要なときは `best_labels()` を参照します。
+
+統計だけなら `std::cerr << result.statistics << '\n';`、1種類だけなら `std::cerr << result.statistics.neighborhood[Solver::Move] << '\n';` と書けます。出力演算子は渡されたストリームを返すので、このように改行などを続けて書けます。出力するだけでは探索状態を変更しません。実数の小数点以下の桁数は、`std::fixed` と `std::setprecision` など、通常のストリーム設定を使えます。表示処理がストリームのフラグや精度設定を変更することはありません。
+
+`proposed` には候補を作れなかった試行も含まれます。また、標準モデルで `Acceptance::greedy` を指定すると、目的値で先に棄却して連結性を調べない候補があります。このため `feasible/proposed` を「すべての候補の真の合法率」と読むことはできません。修復の内訳もこの近傍別統計には入りません。
 
 ### ステップ20：一部分だけを動かし、続きから改善する
 
@@ -1254,7 +1266,7 @@ int main() {
 **ファイル：`examples/20_partial_resume.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1322,7 +1334,7 @@ int main() {
 **ファイル：`examples/20_polish_greedy.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1377,7 +1389,7 @@ int main() {
 **ファイル：`examples/21_integer_cost.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1442,7 +1454,7 @@ $$F_ {\mathrm{model}}(x)=\sum_ {v=0}^{N-1} f_ {v}(v,x_ {v})+\sum_ {e\in E_ {\mat
 **ファイル：`examples/22_vertex_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1493,7 +1505,7 @@ int main() {
 **ファイル：`examples/23_edge_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1544,7 +1556,7 @@ int main() {
 **ファイル：`examples/24_region_features.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1628,7 +1640,7 @@ $$\sum_ {i=1}^{n}(z_ {i}-\mu)^{2}=Q-\frac{S^{2}}{n}$$
 **ファイル：`examples/25_global_model.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1699,7 +1711,7 @@ int main() {
 **ファイル：`examples/26_extra_constraint.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1750,7 +1762,7 @@ solverは組込み条件を通った完全な割当へ `extra_feasible` を適�
 **ファイル：`examples/27_label_dependent_load.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1807,7 +1819,7 @@ $w_ {v,r,d}$ は頂点 $v$ を領域 $r$ に置いたときの種類 $d$ の負�
 **ファイル：`examples/28_model_resume.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1873,7 +1885,7 @@ int main() {
 **ファイル：`examples/29_turn_update.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -1966,7 +1978,7 @@ int main() {
 **ファイル：`examples/30_multistart.cpp`**
 
 ```cpp
-#include "connected_partition_solver_v11.hpp"
+#include "connected_partition_solver_v12.hpp"
 #include <iostream>
 #include <vector>
 
@@ -2043,6 +2055,7 @@ int main() {
 |---|---|
 | `Problem.n`, `k`, `regions`, `edges`; `Edge.u`, `v`, `cut_cost` | 01 |
 | `Evaluation`, `Result`; `best_cost`, `cost`, `feasible` | 01〜02 |
+| `Evaluation`, `Result`, `Statistics`, `NeighborhoodStats` のストリーム出力 | 02、19 |
 | `RegionRule.min_vertices`, `max_vertices` | 03 |
 | `unary_cost` | 04 |
 | `load_dim`, `load`, `load_bounds`, `IntRange.lower`, `upper` | 05〜06 |
@@ -2073,7 +2086,7 @@ int main() {
 
 ## 付録A. 実装アルゴリズムの全体像
 
-ここからは、使い方ではなく実装の仕組みを説明します。対象は `connected_partition_solver_v11.hpp` です。
+ここからは、使い方ではなく実装の仕組みを説明します。対象は `connected_partition_solver_v12.hpp` です。
 
 ### A.1 入口から結果まで
 
@@ -2281,11 +2294,11 @@ $q$ は時間予算と試行数予算のうち、より上限へ近づいてい�
 
 特徴を足し算で管理して領域評価を軽くする、合法な初期解を利用する、問題を変えないターンでは `resume` を使う、といった利用側の表現も費用に影響します。`update` の内部再利用は有用ですが、全更新が一定時間になるものではありません。
 
-v11のホットパスは通常の整数・`double` を使い、`long double`・`__int128` を既定利用していません。IDと要素数は `int`、整数の合計・差・中間積は `int64_t` に収まる入力を前提にします。内部の世代番号の累積増分も、それぞれ $2^{32}$ 未満を前提とします。これらの制限を越える極端な実行を、この小さなライブラリ内で特別扱いする設計ではありません。
+v12のホットパスは通常の整数・`double` を使い、`long double`・`__int128` を既定利用していません。IDと要素数は `int`、整数の合計・差・中間積は `int64_t` に収まる入力を前提にします。内部の世代番号の累積増分も、それぞれ $2^{32}$ 未満を前提とします。これらの制限を越える極端な実行を、この小さなライブラリ内で特別扱いする設計ではありません。
 
 ## 付録H. 参照資料と検証情報
 
-類似ソルバーの節で参照した資料です。APIと内部アルゴリズムの説明の一次資料は、付属のv11ヘッダそのものです。
+類似ソルバーの節で参照した資料です。APIと内部アルゴリズムの説明の一次資料は、付属のv12ヘッダそのものです。
 
 1. [AtCoder Library — MinCostFlow](https://atcoder.github.io/ac-library/production/document_ja/mincostflow.html)。最小費用流のAPIと入力制約。下限付き容量やモデル変換は利用者側の作業です。
 2. [OR-Tools — Assignment as a Minimum Cost Flow Problem](https://developers.google.com/optimization/flow/assignment_min_cost_flow)。割当問題の特殊ケースと最小費用流との対応。
@@ -2300,7 +2313,7 @@ v11のホットパスは通常の整数・`double` を使い、`long double`・`
 
 本文のC++コードは付属の `.cpp` と同じ内容です。数式は `$...$` または `$$...$$` に対応するMarkdown表示器を想定します。表示数式のソースは各1行とし、数式内の下付き添字がMarkdownの強調へ変わらない形を使用しています。数式対応のCommonMark処理で、数式の内容・コードブロック・見出しを確認し、全97箇所の数式をKaTeXでエラーなく処理できることを確認しています。数式非対応の表示器ではLaTeX記法のまま表示されます。
 
-対象ヘッダのSHA-256：`e16ac58bbe0de22d19594c124895842a3c552264c22b9425c5be5c7b560ba400`。
+対象ヘッダのSHA-256：`7c5053622250e406d8c155bc8c337389efab559ab0236178e28ab0db897072f0`。
 
 再検証はZIPのルートから次のコマンドで行えます。Python 3とGCCが必要です。コンパイルが32例×2回あるため、例を1個実行するより時間が掛かります。
 

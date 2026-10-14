@@ -1,6 +1,8 @@
 # 容量制約付きグラフラベリング ユーザーガイド
 
-対象ソース: `capacitated_graph_labeling_v22.hpp`。C++20の単一ヘッダを利用するためのガイドです。
+対象ソース: `capacitated_graph_labeling_v25.hpp`。C++20の単一ヘッダを利用するためのガイドです。
+
+ガイドv15／2026-10-14更新。v25で結果構造体とstatusの`operator<<`を追加しました。6.0節に表示仕様を記載し、8章の補助関数が返す結果にも同じ形式の出力を追加しています。探索アルゴリズムと入力契約はv24と同じです。初めて読む方には、独立して実行できる小さなプログラムで学ぶ[ステップバイステップガイド](capacitated_graph_labeling_step_by_step_v02.md)も用意しています。
 
 問題をモデル化するには1〜4章、コードへ組み込むには5〜8章、探索処理を理解するには9章を参照してください。8章の関数例は、入力から結果の利用までを一つのまとまりとしてコピーできます。
 
@@ -18,7 +20,7 @@
 
 求めたいのは、次の合計コストを小さくするラベル列です。
 
-$$\min_{\ell} C(\ell),\qquad C(\ell)=\sum_{v=0}^{N-1}U(v,\ell_v)+\sum_{e=0}^{M-1}P_e(\ell_{u_e},\ell_{v_e})$$
+$$\min_ {\ell} C(\ell),\qquad C(\ell)=\sum_ {v=0}^{N-1}U(v,\ell_ {v})+\sum_ {e=0}^{M-1}P_ {e}(\ell_ {u_ {e}},\ell_ {v_ {e}})$$
 
 | 記号 | 意味 | 利用者が決めるものか |
 |---|---|---|
@@ -27,11 +29,11 @@ $$\min_{\ell} C(\ell),\qquad C(\ell)=\sum_{v=0}^{N-1}U(v,\ell_v)+\sum_{e=0}^{M-1
 | $M$ | 辺数。評価する対象間の関係の個数 | 入力 |
 | $v$ | 頂点番号。$0$から$N-1$ | 入力上の番号 |
 | $e$ | 辺番号。$0$から$M-1$ | 入力配列の順序 |
-| $u_e,v_e$ | 辺$e$の両端の頂点番号 | 入力 |
-| $\ell_v$ | 頂点$v$へ割り当てるラベル。$0$から$K-1$ | 求める値 |
-| $\ell$ | 全頂点のラベル列$(\ell_0,\ldots,\ell_{N-1})$ | 求める解 |
+| $u_ {e},v_ {e}$ | 辺$e$の両端の頂点番号 | 入力 |
+| $\ell_ {v}$ | 頂点$v$へ割り当てるラベル。$0$から$K-1$ | 求める値 |
+| $\ell$ | 全頂点のラベル列$(\ell_ {0},\ldots,\ell_ {N-1})$ | 求める解 |
 | $U(v,a)$ | 頂点$v$だけをラベル$a$へ置く単項コスト | 入力 |
-| $P_e(a,b)$ | 辺$e$の一方をラベル$a$、他方を$b$へ置く二項コスト | 入力するコスト規則 |
+| $P_ {e}(a,b)$ | 辺$e$の一方をラベル$a$、他方を$b$へ置く二項コスト | 入力するコスト規則 |
 | $a,b$ | ラベルを表す引数。ともに$0$から$K-1$ | 関数の引数 |
 | $C(\ell)$ | ラベル列全体の目的値。小さいほどよい | 解から計算される値 |
 
@@ -41,19 +43,19 @@ $$\min_{\ell} C(\ell),\qquad C(\ell)=\sum_{v=0}^{N-1}U(v,\ell_v)+\sum_{e=0}^{M-1
 
 ### 1.3 必ず守る制約
 
-各頂点は分割せず、一つのラベルへ丸ごと置きます。頂点$v$の需要量を$d_v$、ラベル$a$の総需要量を$W_a$、割当頂点数を$n_a$とすると、次を満たします。
+各頂点は分割せず、一つのラベルへ丸ごと置きます。頂点$v$の需要量を$d_ {v}$、ラベル$a$の総需要量を$W_ {a}$、割当頂点数を$n_ {a}$とすると、次を満たします。
 
-$$W_a=\sum_{v:\ell_v=a}d_v,\qquad L_a\leq W_a\leq R_a$$
+$$W_ {a}=\sum_ {v:\ell_ {v}=a}d_ {v},\qquad L_ {a}\leq W_ {a}\leq R_ {a}$$
 
-$$n_a=\sum_{v=0}^{N-1}[\ell_v=a],\qquad A_a\leq n_a\leq B_a$$
+$$n_ {a}=\sum_ {v=0}^{N-1}[\ell_ {v}=a],\qquad A_ {a}\leq n_ {a}\leq B_ {a}$$
 
 | 記号 | 意味 |
 |---|---|
-| $d_v$ | 頂点$v$の非負整数の需要量。工数、面積、荷物量など。省略すると1 |
-| $W_a$ | ラベル$a$に割り当てた需要量の合計 |
-| $L_a,R_a$ | ラベル$a$の需要量の下限・上限。省略時は0・全頂点の総需要量 |
-| $n_a$ | ラベル$a$へ割り当てた頂点の個数 |
-| $A_a,B_a$ | 頂点数の下限・上限。省略時は0・$N$ |
+| $d_ {v}$ | 頂点$v$の非負整数の需要量。工数、面積、荷物量など。省略すると1 |
+| $W_ {a}$ | ラベル$a$に割り当てた需要量の合計 |
+| $L_ {a},R_ {a}$ | ラベル$a$の需要量の下限・上限。省略時は0・全頂点の総需要量 |
+| $n_ {a}$ | ラベル$a$へ割り当てた頂点の個数 |
+| $A_ {a},B_ {a}$ | 頂点数の下限・上限。省略時は0・$N$ |
 | $[\text{condition}]$ | 条件が真なら1、偽なら0となる記号 |
 
 需要量と頂点数は別に指定できます。例えば「担当者ごとに工数は20以下、担当件数は3〜6件」とできます。需要量0の仕事も1件として数えます。需要量をすべて1にすると、需要量制約と件数制約は同じ量を制限します。
@@ -64,13 +66,13 @@ $$n_a=\sum_{v=0}^{N-1}[\ell_v=a],\qquad A_a\leq n_a\leq B_a$$
 
 **同じグループかどうか**だけを見るPotts型は、次の式です。
 
-$$P_e(a,b)=w_e[a\neq b]$$
+$$P_ {e}(a,b)=w_ {e}[a\neq b]$$
 
-$w_e$は辺の重みです。正なら別グループへ分かれたときに費用を払い、負なら分かれたときに報酬を得ます。ゼロならその辺は目的値に影響しません。
+$w_ {e}$は辺の重みです。正なら別グループへ分かれたときに費用を払い、負なら分かれたときに報酬を得ます。ゼロならその辺は目的値に影響しません。
 
 **割当先の組合せ**まで見る場合は、共通の表$D$を使えます。
 
-$$P_e(a,b)=w_eD(a,b)$$
+$$P_ {e}(a,b)=w_ {e}D(a,b)$$
 
 $D(a,b)$はラベル$a,b$の組合せ単価です。位置間の距離、時間帯の順序違反、設備間の通信単価などを入れます。$D(a,b)$と$D(b,a)$が違っても構いません。その場合は辺の両端の順序に意味があります。
 
@@ -111,7 +113,7 @@ $$P(0,0)+P(1,1)\leq P(0,1)+P(1,0)$$
 
 ### 2.4 順序付きラベルと凸コスト
 
-ラベルが高さ・深度などの順序を持ち、二項コストが非負重み付きの$|a-b|$や$(a-b)^2$などの凸な差分費用である場合、ラベルを段階に展開したグラフの最小カットを検討できます。単項コストは任意に設定できます。これは[石川の凸事前分布に対する厳密最適化](https://waseda.elsevierpure.com/en/publications/exact-optimization-for-markov-random-fields-with-convex-priors/)の対象となる代表形です。
+ラベルが高さ・深度などの順序を持ち、二項コストが非負重み付きの$\lvert a-b\rvert$や$(a-b)^2$などの凸な差分費用である場合、ラベルを段階に展開したグラフの最小カットを検討できます。単項コストは任意に設定できます。これは[石川の凸事前分布に対する厳密最適化](https://waseda.elsevierpure.com/en/publications/exact-optimization-for-markov-random-fields-with-convex-priors/)の対象となる代表形です。
 
 全体のラベル別容量や件数制約を追加しても、そのまま同じ解法が適用できるとは限りません。また、費用を一定値で打ち切ると凸性を失うことがあります。「ラベル間距離」という名前だけで条件を満たすとは判断しないでください。
 
@@ -123,11 +125,23 @@ $$P(0,0)+P(1,1)\leq P(0,1)+P(1,0)$$
 
 ### 2.6 小さい部分問題と汎用の厳密解法
 
-変更してよい頂点集合を$S$とすると、単純全探索は最大$K^{|S|}$通りです。各頂点の許可ラベルだけに絞れば組合せ数を減らせます。範囲外への辺は単項コストへ加え、範囲外が使っている需要量・人数を容量から差し引くことで、小さい部分問題として厳密に解けます。厳密に解いた部分問題の最適性は、その固定された範囲外状態に対するものです。
+変更してよい頂点集合を$S$とすると、単純全探索は最大$K^{\lvert S\rvert}$通りです。各頂点の許可ラベルだけに絞れば組合せ数を減らせます。範囲外への辺は単項コストへ加え、範囲外が使っている需要量・人数を容量から差し引くことで、小さい部分問題として厳密に解けます。厳密に解いた部分問題の最適性は、その固定された範囲外状態に対するものです。
 
 一般形でも、各頂点・ラベルの選択を0/1変数にし、辺ごとのラベル組合せを補助変数で表せば整数計画として定式化できます。CP-SATでは整数値として正確に表現できるモデルが前提です。有限の小数を整数化する場合は、丸めで別問題にならないことと桁あふれに注意します。最適性が必要なら、得られた解の有無に加えて、最適であることが証明された終了状態を確認します。[OR-Toolsの終了状態の説明](https://developers.google.com/optimization/cp/cp_solver)では、実行可能解の発見と最適解の証明が区別されています。
 
 以上の条件に当てはまらない、または厳密解法が時間・メモリ予算へ収まらない場合に、本ライブラリを候補にします。厳密解法で作った実行可能解を、本ライブラリの改善処理へ渡すこともできます。
+
+### 2.7 類似ソルバーとの使い分け
+
+| 候補 | 選ぶ観点 | 本ライブラリとの違い・確認点 |
+|---|---|---|
+| OR-Toolsの最小費用流・線形割当 | 単項費用と単位需要の割当へ帰着できる | その帰着が成り立つ範囲では厳密解を検討。異なる需要量の不可分割当や一般の二項費用を、そのまま流量にしない |
+| OR-Tools CP-SAT | 容量以外の論理条件もモデル化し、最適性・実行不可能性を証明したい | 整数モデルを組む必要があり、制限時間内の証明は保証されない。FEASIBLEとOPTIMALを区別する |
+| SCIPなどの数理最適化ソルバー | 整数計画として一般形を記述し、解・下界・最適性ギャップを調べたい | 本ヘッダの入力を直接渡す互換APIではない。変数・制約へのモデル化と数値精度の確認が必要 |
+| KaHIPのグラフ分割機能 | 大規模なグラフ分割を専用実装と比較したい | 任意の単項費用、非対称な二項表、許可先、需要量と件数の独立な上下限を同時に持つ本モデルと同一とは限らない |
+| 本ライブラリ | 上記の単項・二項・容量モデルをC++の単一ヘッダで扱い、完全解や指定範囲を繰り返し改善したい | 最適性証明・下界・不可能性証明を返さない。性能の優劣は実際の問題で測る |
+
+機能の確認先は[OR-Tools最小費用流](https://developers.google.com/optimization/flow/assignment_min_cost_flow)、[CP-SAT](https://developers.google.com/optimization/cp/cp_solver)、[SCIP公式](https://scipopt.org/)、[KaHIP公式リポジトリ](https://github.com/KaHIP/KaHIP)です（2026-10-12確認）。表の使い分けは、これらの公開機能と本ライブラリの入力契約を比較した判断です。ソルバー間の性能比較実験を示すものではありません。
 
 ## 3. 差分更新
 
@@ -169,13 +183,13 @@ $$P(0,0)+P(1,1)\leq P(0,1)+P(1,0)$$
 
 ### 3.4 subsetで省ける仕事と、省けない仕事
 
-変更可能頂点集合を$S$、少なくとも一端が$S$にある辺集合を$E_S$とします。subsetが比較する可変部分は、次です。
+変更可能頂点集合を$S$、少なくとも一端が$S$にある辺集合を$E_ {S}$とします。subsetが比較する可変部分は、次です。
 
-$$C_S(\ell)=\sum_{v\in S}U(v,\ell_v)+\sum_{e\in E_S}P_e(\ell_{u_e},\ell_{v_e})$$
+$$C_ {S}(\ell)=\sum_ {v\in S}U(v,\ell_ {v})+\sum_ {e\in E_ {S}}P_ {e}(\ell_ {u_ {e}},\ell_ {v_ {e}})$$
 
-範囲外だけの単項・辺コストは変化しないため、差分計算から除けます。境界辺は$E_S$に含まれ、外側のラベルとの関係を評価します。全体の需要量・人数も維持します。
+範囲外だけの単項・辺コストは変化しないため、差分計算から除けます。境界辺は$E_ {S}$に含まれ、外側のラベルとの関係を評価します。全体の需要量・人数も維持します。
 
-探索候補とPotts差分表は$S$に限定され、返却値は変更頂点と新ラベルだけです。ただし、CSR構築、全体の実行可能性確認、完全ラベル列の内部コピーは残ります。準備に少なくとも$O(N+M+K)$が必要で、Potts表を使う場合は$O(|S|K)$の確保・初期化も加わります。変更が1辺でも、1辺だけの更新時間で再開できるわけではありません。
+探索候補とPotts差分表は$S$に限定され、返却値は変更頂点と新ラベルだけです。ただし、CSR構築、全体の実行可能性確認、完全ラベル列の内部コピーは残ります。準備に少なくとも$O(N+M+K)$が必要で、Potts表を使う場合は$O(\lvert S\rvertK)$の確保・初期化も加わります。変更が1辺でも、1辺だけの更新時間で再開できるわけではありません。
 
 ### 3.5 目的値差分の基準を取り違えない
 
@@ -279,10 +293,10 @@ subsetの`objective_delta`は、**更新後の同じ問題における「新し�
 
 ### 5.1 ヘッダと公開API
 
-必要なのは`capacitated_graph_labeling_v22.hpp`です。ACLや追加のハッシュマップには依存しません。ヘッダは`<bits/stdc++.h>`、`__uint128_t`、`__INCLUDE_LEVEL__`を使うため、GNU拡張とlibstdc++が利用できるGCC系のC++20環境を前提にします。MSVCへの無修正の移植は前提にしていません。
+必要なのは`capacitated_graph_labeling_v25.hpp`です。ACLや追加のハッシュマップには依存しません。ヘッダは`<bits/stdc++.h>`、`__uint128_t`・`__int128_t`、`__INCLUDE_LEVEL__`を使うため、GNU拡張とlibstdc++が利用できるGCC系のC++20環境を前提にします。MSVCへの無修正の移植は前提にしていません。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 ```
 
 利用者が呼ぶsolverコンストラクタや`.solve()`メソッドはありません。次の3点を用意して、自由関数を呼びます。
@@ -426,9 +440,9 @@ capacitated_graph_labeling_options options;
 | メンバー | 型 | デフォルト | 動作と選び方 |
 |---|---|---|---|
 | `time_limit_ms` | `double` | `1000.0` | 0以上で呼出し開始からの相対時間を制限。負値は無効。外側の残り時間から出力・検証分を引く |
-| `iteration_limit` | `long long` | `-1` | 0以上で探索の提案反復数を制限。負値は無効。再現検証には固定値を使う |
+| `iteration_limit` | `long long` | `-1` | 0以上で目的値改善の提案反復数を制限。初期構築・制約修復は数えない。負値は無効 |
 | `seed` | `std::uint64_t` | `1` | 乱数の初期値。入力と設定の比較では固定し、複数試行では変える |
-| `initial_trials` | `int` | `8` | `solve`の初期構築試行数。0以下でも最低1回。`improve`とsubsetでは使わない |
+| `initial_trials` | `int` | `8` | `solve`の貪欲構築試行数。0以下でも最低1回。全失敗時の修復再開回数も最大`min(8,max(1,initial_trials))`回に制限。`improve`とsubsetでは使わない |
 | `initial_temperature` | `double` | `-1.0` | 負値なら自動設定、0以上なら開始温度を明示 |
 | `final_temperature` | `double` | `-1.0` | 負値なら自動設定、0以上なら終了温度を明示 |
 | `potts_cache_max_bytes` | `std::size_t` | `256ULL << 20` | 256 MiB。Potts差分表と隣接フィルタの合計上限。0なら両方を無効化 |
@@ -445,12 +459,12 @@ capacitated_graph_labeling_options options;
 | `time_limit_ms < 0`、`iteration_limit > 0`、deadlineは最大値 | 固定反復で実行 |
 | `time_limit_ms > 0`、`iteration_limit < 0` | 時間で停止 |
 | 時間と反復数の両方を設定 | 両方を監視。冷却の進捗には割合の大きい方を使用 |
-| `iteration_limit == 0` | 局所探索なし。`solve`は時間内で初期構築試行を行う |
-| `time_limit_ms == 0`、または開始時にdeadlineを超過 | `solve`は最初の構築を1回試す。`improve`とsubsetは入力確認後、変更せず終了 |
+| `iteration_limit == 0` | 目的値改善なし。`solve`は初期構築と、必要なら制約修復を行う |
+| `time_limit_ms == 0`、または開始時にdeadlineを超過 | `solve`は最初の貪欲構築を1回試す。期限切れなら制約修復は始めない。`improve`とsubsetは入力確認後、変更せず終了 |
 | 可変頂点なし、またはKが1 | 初期状態を用意し、局所探索せず終了 |
 | 時間・反復数とも負、deadlineも最大値 | 通常は止まらないため使用しない |
 
-最初の構築試行、CSR・キャッシュ構築、温度推定の途中では細かく期限を確認しません。探索中も最大1,024反復ごとの確認です。時間・deadlineは厳密な実時間上限ではなく、重い1回の準備や探索ブロックの分だけ超過し得ます。APIが返った後の出力にも時間を残します。
+最初の貪欲構築試行、CSR・キャッシュ構築、温度推定の途中では細かく期限を確認しません。目的値改善中も最大1,024反復ごとの確認です。v24の制約修復では候補表の準備中にも確認し、修復中は32手ごとに期限を確認します。時間・deadlineは厳密な実時間上限ではなく、重い1回の準備や探索ブロックの分だけ超過し得ます。APIが返った後の出力にも時間を残します。
 
 ```cpp
 capacitated_graph_labeling_options options;
@@ -472,7 +486,7 @@ options.deadline = outer_deadline; // 外側の処理全体と共有する期限
 
 まず既定値8を使い、初期構築時間と構築成功率を確認します。極端に短い呼出しでは1〜4へ減らす選択があります。厳しい重み付き容量・疎な許可先で構築失敗が多いなら、16〜32へ増やすことを試せます。これらの値は調整の出発点で、成功率・品質の保証ではありません。構築が難しいときは、回数だけを増やすより実行可能な外部初期解を使う方が適切な場合があります。
 
-指定回数の構築を必ず実施するわけではなく、2回目以降は期限を確認します。同じ総時間なら、構築を増やすほど改善処理へ使える時間は減ります。
+指定回数の貪欲構築を必ず実施するわけではなく、2回目以降は期限を確認します。すべて失敗すると、残り時間内で制約修復を試します。修復再開回数は最大8回なので、`initial_trials`を8より大きくしても修復の回数上限は増えません。同じ総時間なら、構築を増やすほど改善処理へ使える時間は減ります。
 
 #### 温度の選び方
 
@@ -540,7 +554,7 @@ auto proposal = improve_capacitated_graph_labeling_subset(
 | `count` | `std::vector<int>` | 件数上下限を一方でも指定した場合は長さKの件数。両方省略時は空 |
 | `objective` | `Cost` | 返した解のライブラリ目的値 |
 | `initial_objective` | `Cost` | `solve`では採用した構築解、`improve`では入力解の目的値 |
-| `iterations` | `long long` | 探索で行った提案反復数。無効提案・不受理も数える。初期構築・温度推定は数えない |
+| `iterations` | `long long` | 探索で行った提案反復数。無効提案・不受理も数える。初期構築・制約修復・温度推定は数えない |
 | `elapsed_ms` | `double` | 内部の準備から結果をまとめるまでの経過時間。入力作成や呼出し側の処理時間は含まない |
 | `feasible` | `bool` | 実行可能解を返せたか |
 | `used_potts_cache` | `bool` | Potts差分表を構築したか。フィルタだけの有無を示す値ではない |
@@ -594,6 +608,34 @@ if (proposal.status == capacitated_graph_labeling_status::success) {
 | `invalid_repair_scope` | subset | 範囲外・重複・固定頂点を含む変更範囲。集合を修正する |
 
 subsetで範囲と初期解の両方に不備があると、先に範囲の失敗を返します。問題データ自体の形・サイズの不備を全てstatusへ変換する仕組みではありません。
+
+#### 結果をそのままデバッグ出力する
+
+通常結果とsubset結果には、`std::ostream& operator<<(std::ostream&, const 結果型&)`があります。返り値は受け取ったストリーム自身なので、文字列や改行とつなげて出力できます。`status`単体も列挙値の名前で表示できます。
+
+```cpp
+std::cout << result << '\n';     // solveまたは全体improveの結果
+std::cerr << proposal << '\n';   // subsetの結果
+std::cerr << "status=" << result.status << '\n';
+```
+
+この断片は、上で受け取った`result`と`proposal`を表示する部分です。`main`からそのまま実行できるコードは、ステップバイステップガイドのステップ21にあります。
+
+各結果を1行で表示し、フィールド名は構造体と同じ名前を使います。通常結果の先頭は`result{status=success, feasible=true, ...}`、subsetは`repair_result{status=success, objective_delta=..., ...}`です。真偽値は常に`true`／`false`、statusは`success`などの名前になります。
+
+| 表示項目 | 仕様 |
+|---|---|
+| 通常結果の配列 | `label`、`load`、`count`をそれぞれ先頭20要素まで表示 |
+| subsetの配列 | `changed_vertices`、`new_labels`をそれぞれ先頭20要素まで表示。同じ添字が対応 |
+| 20要素を超える配列 | 末尾に`... (+省略個数 more)`。25要素なら`... (+5 more)` |
+| 空配列 | `[]`。件数制約を省略した通常結果の`count=[]`も正常 |
+| 数値 | 目的値・差分・初期値・反復数・経過msを、呼出し側の数値書式で表示 |
+| 改行・flush | 演算子自身は追加しない。改行が必要なら呼出し側で`'\n'`を続ける |
+| データと書式設定 | 結果はconst参照で読み、変更しない。ストリームのflags・precisionは変更しない |
+
+これは人が読むための表示です。省略は表示だけで、元の配列は全要素を保持します。失敗時にも全フィールドを表示しますが、目的値0などは初期値のことがあるため、`feasible`／`status`を先に確認します。完全な結果の保存・再読込みには各フィールドを使ってください。
+
+8章で作る`balanced_coloring_result`、`signed_clustering_result`、`capacitated_assignment_solution`、`turn_update_result<Cost>`、`multistart_labeling_result<Cost>`にも出力演算子を用意しています。追加の集計値と、その中の`raw`または`best`をまとめて表示し、内側の配列にも同じ上限が適用されます。
 
 #### 評価と実行可能性の確認
 
@@ -762,7 +804,9 @@ auto answer = solve_labeling_multistart(
 
 ### 7.3 動けなくなる組合せ
 
-各移動は常に実行可能性を守ります。厳密件数なら1頂点だけの移動ができず、交換が中心になります。厳密な重み付き容量で2頂点の需要量が違うと、その交換も不可能になり得ます。3頂点以上の循環交換や、一度制約を破ってから直す処理はありません。
+実行可能な初期解を得た後の目的値改善では、各移動が実行可能性を守ります。厳密件数なら1頂点だけの移動ができず、交換が中心になります。厳密な重み付き容量で2頂点の需要量が違うと、その交換も不可能になり得ます。目的値改善中に3頂点以上の循環交換や、一度制約を破ってから直す処理はありません。
+
+v24は、`solve`の貪欲構築が全失敗した場合に限り、容量・件数違反を一時的に許す初期解修復を行います。これは上の目的値改善とは別段階です。固定・許可条件は修復中も守り、全制約を満たした完全解だけを成功として返します。`improve`・subsetへ不正な初期解を渡して修復させることはできません。
 
 このため、初期解から実行可能な経路で到達できる範囲が狭い場合があります。subset範囲を広げると交換相手が増えますが、問題全体に必要な複合移動を必ず実現できるわけではありません。解が変わらない原因として、時間不足だけでなく実行可能な近傍があるかも確認します。
 
@@ -795,7 +839,7 @@ auto answer = solve_labeling_multistart(
 
 ### 8.0 コピー方法と共通の入力契約
 
-以下の各コードブロックは、そのブロック内の入力型・結果型・関数をまとめてコピーすれば使用できます。共通の補助関数を別の節から探す必要はありません。全例をまとめた`capacitated_graph_labeling_examples_v13.hpp`も付属します。ヘッダとして複数の翻訳単位から使う場合に備え、通常関数はinline、汎用関数はtemplateにしています。
+以下の各コードブロックは、そのブロック内の入力型・結果型・関数をまとめてコピーすれば使用できます。共通の補助関数を別の節から探す必要はありません。全例をまとめた`capacitated_graph_labeling_examples_v15.hpp`は、同時配布の`capacitated_graph_labeling_guides_v25.zip`に含めています。ヘッダとして複数の翻訳単位から使う場合に備え、通常関数はinline、汎用関数はtemplateにしています。
 
 - 各例は有効な問題入力を前提にします。配列長・番号などのassertは入力契約の確認であり、実行可能解が見つかったかの判定には使いません。
 - 8.1〜8.8は整数のlong longを使います。全費用の積・和・差分と需要量が型へ収まること、内部のint添字が収まる規模であることを前提とします。
@@ -808,7 +852,7 @@ auto answer = solve_labeling_multistart(
 全グループをfloor/ceilの人数にそろえます。seed_labelは省略可能です。seed付きでも人数制約は残るので、固定人数が上限を超えないようにします。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct partition_edge {
     int u; // 0..vertex_count-1
@@ -864,7 +908,7 @@ inline capacitated_graph_labeling_result<long long> solve_balanced_graph_partiti
 入力は同色時の罰金です。raw目的値、異色辺の重み、同色罰金を分けて返します。衝突ゼロを必要とする場合は、成功後にconflict_penaltyも確認します。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct conflict_edge {
     int u; // 0..N-1
@@ -876,6 +920,12 @@ struct balanced_coloring_result {
     capacitated_graph_labeling_result<long long> raw;
     long long separated_weight = 0;
     long long conflict_penalty = 0;
+
+    friend std::ostream& operator<<(std::ostream& out, const balanced_coloring_result& result) {
+        return out << "balanced_coloring_result{raw=" << result.raw
+                   << ", separated_weight=" << result.separated_weight
+                   << ", conflict_penalty=" << result.conflict_penalty << '}';
+    }
 };
 
 // 入力:
@@ -932,7 +982,7 @@ inline balanced_coloring_result solve_balanced_soft_coloring(
 同居希望と分離希望を一つの列へ入れます。元の希望違反の合計をoriginal_penaltyとして返すため、負のPotts重みの定数補正を呼出し側で繰り返す必要はありません。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct signed_cluster_relation {
     int u; // 0..N-1
@@ -944,6 +994,11 @@ struct signed_cluster_relation {
 struct signed_clustering_result {
     capacitated_graph_labeling_result<long long> raw;
     long long original_penalty = 0;
+
+    friend std::ostream& operator<<(std::ostream& out, const signed_clustering_result& result) {
+        return out << "signed_clustering_result{raw=" << result.raw
+                   << ", original_penalty=" << result.original_penalty << '}';
+    }
 };
 
 // 入力:
@@ -1014,7 +1069,7 @@ inline signed_clustering_result solve_signed_clustering(
 必須項目は担当先数と仕事負荷です。それ以外の配列はコメントの条件で省略できます。許可・固定・工数・件数を同時に指定できます。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct assignment_relation {
     int task_a; // 0..N-1
@@ -1039,6 +1094,11 @@ struct capacitated_assignment_input {
 struct capacitated_assignment_solution {
     capacitated_graph_labeling_result<long long> raw;
     long long total_penalty = 0;
+
+    friend std::ostream& operator<<(std::ostream& out, const capacitated_assignment_solution& result) {
+        return out << "capacitated_assignment_solution{raw=" << result.raw
+                   << ", total_penalty=" << result.total_penalty << '}';
+    }
 };
 
 // 入力:
@@ -1120,7 +1180,7 @@ inline capacitated_assignment_solution solve_capacitated_assignment(
 時間帯の番号は早い順に0から付けます。先行作業と後続作業を同じ帯に置くと1段階の違反になる例です。費用表は関数ローカルですが、solver呼出し完了まで生存します。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct precedence_relation {
     int before; // 先行作業番号。0..N-1
@@ -1192,7 +1252,7 @@ inline capacitated_graph_labeling_result<long long> solve_soft_precedence_slots(
 距離表は第1端点のラベルを行、第2端点のラベルを列にします。関係強度は非負を前提とする例です。数学的な距離の性質そのものは検査しません。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct metric_labeling_edge {
     int u; // 第1端点。0..N-1
@@ -1260,7 +1320,7 @@ inline capacitated_graph_labeling_result<long long> solve_capacitated_metric_lab
 表を種別ごとに並べ、各種別内は行優先にします。この関数専用のpolicyは関数内へ閉じ込めています。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct typed_relation_edge {
     int u; // 第1端点。0..N-1
@@ -1350,7 +1410,7 @@ inline capacitated_graph_labeling_result<long long> solve_typed_relation_labelin
 各位置を1回だけ使うことを件数上下限で表します。flowは非負を前提とする例です。各入力辺を1回だけ数えるので、元問題の定義に合わせて方向を決めます。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 struct sparse_qap_flow {
     int from_item; // 出発側要素。0..N-1
@@ -1407,12 +1467,17 @@ inline capacitated_graph_labeling_result<long long> solve_sparse_qap_as_labeling
 呼出し前にproblemの費用や辺を更新します。前のラベル列が新しい制約を満たすかで、全体改善と再構築を分けます。更新後も必ず実行可能と分かっている場合は、全体improveを直接呼ぶと事前検査の重複を省けます。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 template <class Cost>
 struct turn_update_result {
     capacitated_graph_labeling_result<Cost> raw;
     bool reused_previous = false; // trueなら前の解を起点に改善した
+
+    friend std::ostream& operator<<(std::ostream& out, const turn_update_result& result) {
+        return out << "turn_update_result{raw=" << result.raw
+                   << ", reused_previous=" << (result.reused_previous ? "true" : "false") << '}';
+    }
 };
 
 // 入力:
@@ -1449,7 +1514,7 @@ turn_update_result<Cost> resolve_after_update(
 成功差分を現在解へ適用する補助関数です。ライブラリ本体のsubset関数は入力ラベルを変更しません。この例の補助関数が適用を担当します。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 // 入力:
 //   problem: 今回の有効な問題。外側の固定部分も含む全グラフ
@@ -1485,7 +1550,7 @@ capacitated_graph_labeling_repair_result<Cost> repair_subset_in_place(
 時間分配を含む補助関数です。全体の試行回数・成功数・反復数・時間を、採用された1runの情報と分けて返します。
 
 ```cpp
-#include "capacitated_graph_labeling_v22.hpp"
+#include "capacitated_graph_labeling_v25.hpp"
 
 template <class Cost>
 struct multistart_labeling_result {
@@ -1494,6 +1559,14 @@ struct multistart_labeling_result {
     int runs_succeeded = 0;
     long long total_iterations = 0;
     double total_elapsed_ms = 0.0; // この補助関数全体の時間
+
+    friend std::ostream& operator<<(std::ostream& out, const multistart_labeling_result& result) {
+        return out << "multistart_labeling_result{best=" << result.best
+                   << ", runs_attempted=" << result.runs_attempted
+                   << ", runs_succeeded=" << result.runs_succeeded
+                   << ", total_iterations=" << result.total_iterations
+                   << ", total_elapsed_ms=" << result.total_elapsed_ms << '}';
+    }
 };
 
 // 入力:
@@ -1556,10 +1629,10 @@ multistart_labeling_result<Cost> solve_labeling_multistart(
 
 ### 9.1 アルゴリズムの概要と流れ
 
-本ライブラリは、容量を守る初期解構築と、recolor・swapを組み合わせた焼きなましで目的値を小さくします。常に実行可能な状態の中で移動し、探索中の最良解を別に保持します。
+本ライブラリは、実行可能初期解の構築と、recolor・swapを組み合わせた焼きなましで目的値を小さくします。目的値改善は常に実行可能な状態の中で移動し、最良解を別に保持します。v24では貪欲構築が全失敗した場合に限り、その前段で容量・件数違反を減らす修復を試します。
 
 1. 問題を検査し、全グラフのCSR隣接リストと変更可能範囲を構築する。
-2. `solve`なら複数の構築試行から実行可能な初期解を選ぶ。`improve`・subsetなら渡された完全解を検査して読み込む。
+2. `solve`なら複数の貪欲構築試行から初期解を選ぶ。全失敗時は制約修復を試す。それでも作れなければ`construction_failed`で終了する。`improve`・subsetなら渡された完全解を検査して読み込む。
 3. 既に停止条件を満たす、動かせる頂点がない、Kが1、のいずれかなら初期状態を返す。
 4. ラベル別の可変頂点リストを用意し、条件が合えばPotts差分表を構築する。
 5. 移動候補の差分から温度の尺度を推定する。
@@ -1595,9 +1668,25 @@ BFSは近い頂点を近い順序で扱うために使います。連結成分�
 
 通常の試行では、単項コストと既に割り当てた隣接頂点へのコストが小さい先を選びます。4回に1回のbest-fit試行では、配置後の残容量が小さい先を先に選び、その同順位を費用で比較します。同費用の候補は乱数で順位を付けます。
 
-許可表を与えた場合の許可先の個数は、試行の前に1回集計します。Potts型では、現在の頂点に接続する割当済み隣接辺をラベル別に1回集計します。ラベル$a$への重み和を$H_a$、全割当済み隣接辺の重み和を$H$とすると、その辺費用は$H-H_a$です。候補ごとに共通な$H$を省き、単項費用から$H_a$を引いた値で比較できます。
+許可表を与えた場合の許可先の個数は、試行の前に1回集計します。Potts型では、現在の頂点に接続する割当済み隣接辺をラベル別に1回集計します。ラベル$a$への重み和を$H_ {a}$、全割当済み隣接辺の重み和を$H$とすると、その辺費用は$H-H_ {a}$です。候補ごとに共通な$H$を省き、単項費用から$H_ {a}$を引いた値で比較できます。
 
 構築の最後に全制約と全目的値を確認し、成功した構築解のうち最小目的値を保持します。貪欲配置には後戻りがないため、実行可能解が存在しても構築に失敗する場合があります。期限の確認は2回目以降の試行開始時で、1回の構築の途中では打ち切りません。
+
+#### 9.3.1 v24の制約修復
+
+すべての貪欲試行が失敗し、期限が残っている場合だけ動きます。許可先候補を集め、固定や許可先が1つの頂点による最低負荷、各ラベルへ入り得る最大負荷などの必要条件を調べます。これらが成立しても、実行可能性を保証するわけではありません。
+
+需要量・件数の違反量を次のように評価します。
+
+$$V=\sum_ {a=0}^{K-1}\left( \max(0,L_ {a}-W_ {a})+\max(0,W_ {a}-R_ {a}) +\lambda\{\max(0,A_ {a}-n_ {a})+\max(0,n_ {a}-B_ {a})\} \right)$$
+
+$W_ {a},n_ {a},L_ {a},R_ {a},A_ {a},B_ {a}$は1.3の記号で、$\lambda=\max(1,\lfloor(\sum_ {v} d_ {v})/\max(1,N)\rfloor)$です。$\lfloor x\rfloor$は小数点以下を切り捨てる記号です。この$V$は目的関数$C$とは別で、全容量・件数制約を満たすとき0になります。違反量の集計と差分は128bit整数で計算します。元の需要量・容量の演算がlong longに収まる入力契約は変わりません。
+
+最初は最後の失敗した貪欲構築の部分解を使い、未割当を許可先へ補います。2回目以降は許可先から割当を選び直します。各手で最大64回の頂点標本について全許可先への移動を比べ、さらに最大256回の交換標本を比べます。標本は重複し得ます。違反量差分が最小の候補を選び、同点を乱数で解きます。一時的な悪化も許し、局所的な停滞からの脱出を試みます。目的費用はこの候補選択には使いません。
+
+実効的に2つ以上の許可先がある頂点数を$F$とすると、再開回数は最大$\max(1,\min(8,\texttt{initial_ {t}rials}))$、各回は最大$1024+32F$手です。最良違反量が更新されない期間が$4F+256$手を超えた場合も次の再開へ進みます。修復中は32手ごとに期限を確認し、準備の候補表集計でも64頂点ごとに確認します。
+
+$V=0$になったら全体の実行可能性を再検査し、元の目的値を計算して通常の改善へ進みます。これらの修復手数はiterationsに数えません。途中の違反解を利用者へ返すことはなく、失敗は不可能性の証明ではありません。任意policyに共通のprivate処理として置き、公開オプションは追加していません。
 
 ### 9.4 既存解とsubsetの初期化
 
@@ -1628,13 +1717,13 @@ Potts型の行先生成は、隣接辺があれば87.5%で隣接関係を使い�
 
 swapでは、移動元uを相手ラベルへ置く差分を一度求め、同じ提案内の複数の相手候補で共有します。相手vの差分を加えるときは、uが既に移動した状態としてu-v間の費用を扱います。これにより直接辺を重複して誤計算せず、自己辺・多重辺・辺ID依存コストも追跡します。
 
-差分評価では、ラベル列・CSR・辺列の連続配列をローカルのポインタから参照します。policyはテンプレート引数なので、仮想関数での動的な呼出しではありません。実際にインライン化されるかはコンパイラに依存します。
+差分評価では、ラベル列・CSR・辺列の連続配列をローカルのポインタから参照します。policyはテンプレート引数なので、仮想関数での動的な呼出しではありません。v24では一般差分の関数に`[[gnu::noinline]]`を付け、大きな隣接走査の過剰なインライン展開を抑えています。policy呼出しの最適化はコンパイラに依存します。
 
 ### 9.7 Potts差分表と隣接フィルタ
 
 可変頂点vごとに、ラベルaを持つ隣接頂点への辺重み和を保持します。自己辺は除き、多重辺は全て数えます。
 
-$$H(v,a)=\sum_{e\in I(v)}w_e[\ell_{o(e,v)}=a]$$
+$$H(v,a)=\sum_ {e\in I(v)}w_ {e}[\ell_ {o(e,v)}=a]$$
 
 ここで$H$は差分表、$v$は可変頂点、$I(v)$は自己辺を除く接続辺の集合、$o(e,v)$は辺$e$のもう一方の頂点、$a$は隣接側のラベルです。境界辺の外側頂点も和に含みます。ラベル$b$から$a$へrecolorする差分は次です。
 
@@ -1652,9 +1741,9 @@ swapは両頂点のrecolor差分を合成し、異なるラベルを交換した
 
 探索前に最大256提案を調べ、非ゼロの有効差分を最大128個集めます。実際の解にはまだ適用せず、絶対値の中央値を尺度にします。標本がなければ尺度1、標本があれば最低`1e-12`とします。自動の開始温度は尺度の0.5倍、終了温度は0.03倍です。両温度を明示しても、この標本採取は実施します。温度値自体は最低`1e-12`に補正します。
 
-進捗$p$は、指定された反復上限への割合と時間予算への割合の大きい方を0〜1へ丸めた値です。開始温度を$T_0$、終了温度を$T_1$とすると、次の指数的な変化を使います。
+進捗$p$は、指定された反復上限への割合と時間予算への割合の大きい方を0〜1へ丸めた値です。開始温度を$T_ {0}$、終了温度を$T_ {1}$とすると、次の指数的な変化を使います。
 
-$$T(p)=T_0\left(T_1/T_0\right)^p$$
+$$T(p)=T_ {0}\left(T_ {1}/T_ {0}\right)^p$$
 
 差分をΔとし、Δが0以下なら受理、正なら`std::exp(-Δ/T)`の確率で受理します。これは一時的な費用悪化を許す処理です。容量や許可などの制約違反は受理対象になりません。
 
@@ -1670,18 +1759,22 @@ $$T(p)=T_0\left(T_1/T_0\right)^p$$
 
 同じseedでも、時間による停止点、入力順、キャッシュ有無、浮動小数点の丸めが異なれば経路は変わります。seedは探索状態を呼出し間で継続するためのハンドルではありません。
 
+デバッグ用の`operator<<`は探索終了後、利用者が明示的に出力した時だけ働きます。各配列について最大20要素を直接読み、全配列のコピーや目的値の再計算は行いません。結果型内のfriend関数は暗黙にinlineとなり、ヘッダを複数の翻訳単位から利用できます。
+
 ### 9.10 計算量とメモリ量
 
-$N$は全頂点数、$K$はラベル数、$M$は全辺数、$Q$は実際に可変な頂点数、$M_S$は少なくとも一端が可変な辺数です。以下はpolicyを1回定数時間で評価できる場合の目安です。$\deg(v)$は頂点$v$の次数、$t$は実施した構築試行数を表します。
+$N$は全頂点数、$K$はラベル数、$M$は全辺数、$Q$は実際に可変な頂点数、$M_ {S}$は少なくとも一端が可変な辺数です。以下はpolicyを1回定数時間で評価できる場合の目安です。$\deg(v)$は頂点$v$の次数、$t$は実施した構築試行数を表します。
 
 | 処理 | 計算量の目安 |
 |---|---|
 | 全目的値評価 | $O(N+M)$ |
 | 実行可能性検査 | $O(N+K)$。assert有効時の問題検査では辺の走査も加わる |
 | CSR・変更範囲の構築、初期解の読込み | $O(N+M+K)$ |
-| Potts初期構築をt回 | $O(t(N\log N+NK+M))$。許可表があれば最初に$O(NK)$の集計 |
-| 一般policyの初期構築をt回 | $O(t(N\log N+NK+KM))$ |
-| Potts表の確保・構築 | $O(QK+M_S)$。全頂点可変なら$M_S=M$ |
+| Potts初期構築をt回 | $O(t(N\log N+NK+M+K))$。許可表があれば最初に$O(NK)$の集計 |
+| 一般policyの初期構築をt回 | $O(t(N\log N+NK+KM+K))$ |
+| v24制約修復の候補準備 | $O(NK+K)$、許可先表は最大$O(NK)$ |
+| v24制約修復の探索 | $O(R\{N+K+J\min(64,F)(K+1)\})$。$R\leq8$、$J\leq1024+32F$ |
+| Potts表の確保・構築 | $O(QK+M_ {S})$。全頂点可変なら$M_ {S}=M$ |
 | 一般recolor差分 | $O(\deg(v))$ |
 | 一般swap差分 | $O(\deg(u)+\deg(v))$。同じ提案内でu側を共有 |
 | Potts表によるrecolor差分 | $O(1)$ |
@@ -1690,6 +1783,9 @@ $N$は全頂点数、$K$はラベル数、$M$は全辺数、$Q$は実際に可�
 | 最良解の更新 | 変更頂点数＋Kに比例。ラベル列は変更点だけ、負荷・件数はラベル全体 |
 | subsetの変更点抽出 | $O(Q)$ |
 
+上の修復計算量の$F$は実効許可先が2つ以上ある頂点数、$R$は修復再開回数、$J$は1回あたりの修復手数です。成功時には実行可能性の確認と全目的値の再計算も行います。修復の候補表は初期構築時だけ必要で、その後の探索キャッシュとは別です。
+
 主な追加メモリは、CSRに$O(N+M)$、ラベル列・範囲索引・ラベル別リストなどに$O(N+K)$、Potts表に`sizeof(Cost)*Q*K`byte、隣接フィルタに最大`8*Q`byteです。許可表付きの初期構築では、許可先数に`sizeof(int)*N`byteを使います。入力の単項表と許可表は、それぞれN×K要素です。
 
 探索1反復では候補を複数比較しますが、recolorは最大4、swapは最大8という定数上限があります。高次数頂点、一般policyの重い計算、頻繁な最良解更新、準備時間の比率により実行時間は変わります。計算量だけから、特定サイズが特定のミリ秒以内に解けるとは判断できません。
+

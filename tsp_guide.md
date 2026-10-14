@@ -1,6 +1,6 @@
 # TSPライブラリ ユーザーガイド
 
-対象ソースは `tsp_solver_v07.hpp`。C++20の単一ヘッダで、名前空間は `tsp` です。本書は、このヘッダの公開仕様と実装を説明します。第4・6・8章のT01〜T12は同じユースケースを指します。
+対象ソースは `tsp_solver_v09.hpp`。C++20の単一ヘッダで、名前空間は `tsp` です。本書は、このヘッダの公開仕様と実装を説明します。第4・6・8章のT01〜T12は同じユースケースを指します。
 
 ## 1. 何を解くライブラリか？
 
@@ -12,27 +12,27 @@
 
 ### 1.2 目的関数
 
-入力の地点集合を $V$、その要素数を $n$ とし、全地点をちょうど1回ずつ並べた順序を $P=(v_0,\ldots,v_{n-1})$ とします。開路の目的は次の総コストを最小にすることです。
+入力の地点集合を $V$、その要素数を $n$ とし、全地点をちょうど1回ずつ並べた順序を $P=(v_ {0},\ldots,v_ {n-1})$ とします。開路の目的は次の総コストを最小にすることです。
 
-$$\min_P C_{\mathrm{path}}(P),\qquad C_{\mathrm{path}}(P)=\sum_{i=0}^{n-2}d(v_i,v_{i+1})$$
+$$\min_ {P} C_ {\mathrm{path}}(P),\qquad C_ {\mathrm{path}}(P)=\sum_ {i=0}^{n-2}d(v_ {i},v_ {i+1})$$
 
 閉路では最後から先頭への移動を加えます。
 
-$$\min_P C_{\mathrm{cycle}}(P),\qquad C_{\mathrm{cycle}}(P)=\sum_{i=0}^{n-2}d(v_i,v_{i+1})+d(v_{n-1},v_0)$$
+$$\min_ {P} C_ {\mathrm{cycle}}(P),\qquad C_ {\mathrm{cycle}}(P)=\sum_ {i=0}^{n-2}d(v_ {i},v_ {i+1})+d(v_ {n-1},v_ {0})$$
 
 | 記号 | 意味 |
 |---|---|
 | $V$、$n$ | 訪問対象の地点集合と、その数。すべて訪問する |
 | $P$ | $V$ の全要素を重複なく並べた順序。最適化の対象 |
-| $v_i$、$i$ | 順序の $i$ 番目の地点と、その位置。位置は0から数える |
+| $v_ {i}$、$i$ | 順序の $i$ 番目の地点と、その位置。位置は0から数える |
 | $d(u,v)$ | 地点 $u$ から地点 $v$ へ移るコスト。$u,v$ は地点ID |
-| $C_{\mathrm{path}}$ | 戻り辺を数えない開路の総コスト |
-| $C_{\mathrm{cycle}}$ | 最後から先頭へ戻る移動を含めた閉路の総コスト |
-| $\min_P$ | 許される全順序の中で総コストを最小化するという目的 |
+| $C_ {\mathrm{path}}$ | 戻り辺を数えない開路の総コスト |
+| $C_ {\mathrm{cycle}}$ | 最後から先頭へ戻る移動を含めた閉路の総コスト |
+| $\min_ {P}$ | 許される全順序の中で総コストを最小化するという目的 |
 
 上の閉路式は $n\ge2$ の場合です。空集合と1地点の場合は、対角コストによらず開路・閉路とも0とします。戻り先の地点を順序の末尾へ重ねて入れる必要はありません。
 
-始点を $s$ に固定するなら $v_0=s$、終点を $t$ に固定する開路なら $v_{n-1}=t$ の条件を加えます。$s,t$ は入力集合に含まれる指定地点です。2地点以上の開路で両端を固定するなら、異なる地点を指定します。閉路の始点固定は、同じ巡回路をどの地点から表記するかを固定する指定です。
+始点を $s$ に固定するなら $v_ {0}=s$、終点を $t$ に固定する開路なら $v_ {n-1}=t$ の条件を加えます。$s,t$ は入力集合に含まれる指定地点です。2地点以上の開路で両端を固定するなら、異なる地点を指定します。閉路の始点固定は、同じ巡回路をどの地点から表記するかを固定する指定です。
 
 ### 1.3 本ライブラリに任せる範囲
 
@@ -146,7 +146,7 @@ $$\min_P C_{\mathrm{cycle}}(P),\qquad C_{\mathrm{cycle}}(P)=\sum_{i=0}^{n-2}d(v_
 
 ### 5.1 環境と入力順序
 
-`#include "tsp_solver_v07.hpp"` として使います。追加リンクやACLは不要です。ソースと掲載例はGCCの `<bits/stdc++.h>` を使い、大整数例は `__int128_t` 拡張を使うため、GCC系のC++20環境を想定します。通常は利用側の `.cpp` からincludeします。ヘッダを主ファイルにすると埋め込みテスト用 `main` が有効になります。
+`#include "tsp_solver_v09.hpp"` として使います。追加リンクやACLは不要です。ソースと掲載例はGCCの `<bits/stdc++.h>` を使い、大整数例は `__int128_t` 拡張を使うため、GCC系のC++20環境を想定します。通常は利用側の `.cpp` からincludeします。ヘッダを主ファイルにすると埋め込みテスト用 `main` が有効になります。
 
 solverクラスのコンストラクタはありません。変更可能な `order`、距離関数、`TSPParam` を準備し、自由関数を呼びます。
 
@@ -208,6 +208,39 @@ solverクラスのコンストラクタはありません。変更可能な `ord
 
 `exact_repairs` は公開の `held_karp_tsp` を呼んだ回数ではありません。公開の厳密解入口にはstats引数がありません。厳密解の時間は呼び出し側で測ります。
 
+### 5.5 探索統計をそのままデバッグ出力する
+
+`TSPStats` は `std::ostream& operator<<(std::ostream&, const TSPStats&)` に対応しています。`std::cout`、`std::cerr`、`std::ostringstream` へ直接渡すと、全メンバーを `名前=値` で1行表示します。`_ms` はミリ秒です。
+
+```cpp
+#include "tsp_solver_v09.hpp"
+
+int main() {
+    // 入力: 頂点0・1・2をすべて訪問して戻る。距離はIDの差の絶対値。
+    std::vector<int> order = {0, 1, 2};
+    const auto dist = [](int a, int b) { return static_cast<long long>(std::abs(a - b)); };
+    tsp::TSPParam param;
+    param.time_limit_ms = 10;
+    tsp::TSPStats stats;
+    const auto cost = tsp::solve_tsp(order, dist, param, &stats);
+
+    // 出力: 総コストと全統計。訪問順は先頭20頂点だけ表示する。
+    std::cerr << "cost=" << cost << '\n' << stats << '\n';
+    std::cerr << "order=[";
+    const std::size_t shown = std::min<std::size_t>(order.size(), 20);
+    for (std::size_t i = 0; i < shown; ++i) {
+        if (i != 0) std::cerr << ", ";
+        std::cerr << order[i];
+    }
+    if (shown < order.size()) std::cerr << ", ... (+" << order.size() - shown << ')';
+    std::cerr << "]\n";
+}
+```
+
+TSPの各solve・improve・厳密解関数は、結果構造体ではなく総コストを返し、訪問順を引数の `order` に書き戻します。`TSPStats` は渡したときに記録される統計です。`std::vector` 全般への出力演算子は提供しないため、訪問順の表示は上のように必要な件数だけ走査します。
+
+統計の出力はオブジェクトを変更せず、末尾の改行・flushも行いません。必要なら `<< '\n'` を付けます。小数の桁数は `std::fixed << std::setprecision(3)` などで指定でき、演算子内では書式フラグ・精度を変更しません。
+
 ## 6. ユースケースごとの使い方
 
 ### 6.1 全公開関数
@@ -268,7 +301,6 @@ solverクラスのコンストラクタはありません。変更可能な `ord
 | 数値型の不足 | 辺だけでなく総和、DPの部分和、差分が収まる符号付き `Calc` を選ぶ。overflow検査はない |
 | `NaN`や無限大を距離に含める | 比較や減算を壊す。到達可能な頂点集合と有限費用を準備する |
 | 巨大な有限費用で禁止辺を表す | 高価でも選ばれることがある。禁止辺違反を表す戻り値はない。必要なら結果の辺を別途検査する |
-| 内部sentinelに近い整数 | 探索用の無限大値は `numeric_limits<Calc>::max()/4`。DP部分和や候補コストがこの値と衝突しない余裕を確保する |
 | 負の辺費用 | 静的な有限値なら和・差分として扱えるが、部分和・差分を含めて型の範囲内にする。通常の非負距離と同じ解品質を保証するものではない |
 | 浮動小数点の完全な一致を期待する | 加算順の違い・丸め誤差がある。費用再計算の確認には尺度に合う許容誤差を使う。厳密解も選んだ数値型上での比較 |
 | `solve_tsp`で入力解を改善したい | 初期構築で順序を作り直す。入力解の活用には `improve_tsp` |
@@ -288,7 +320,7 @@ solverクラスのコンストラクタはありません。変更可能な `ord
 ### T01 平面上の点をすべて回って戻る
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: point[v]={x,y}、IDは配列添字。座標は絶対値10^9以下の整数を想定。
@@ -322,7 +354,7 @@ std::pair<long long, std::vector<int>> solve_euclidean_tsp_cycle(
 ### T02 始点・終点を自由にした一筆の訪問順
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称な正方行列。verticesは訪問IDの一意な集合。
@@ -353,7 +385,7 @@ std::pair<long long, std::vector<int>> solve_free_end_hamilton_path(
 ### T03 片端または両端が決まった移動
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限正方行列、verticesは訪問IDの一意な集合。
@@ -397,7 +429,7 @@ std::pair<long long, std::vector<int>> solve_endpoint_hamilton_path(
 ### T04 指定拠点から表記する巡回路
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限正方行列、verticesは一意な訪問ID集合でdepotを1回含む。
@@ -428,7 +460,7 @@ std::pair<long long, std::vector<int>> solve_depot_tsp_cycle(
 ### T05 一方通行・方向依存の段取り順
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: directed_cost[u][v]はuからvへの有限な費用。逆向き費用は独立に設定する。
@@ -457,7 +489,7 @@ std::pair<long long, std::vector<int>> solve_asymmetric_tsp_cycle(
 ### T06 大きなグラフ上の重要地点巡回
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: graph[u]は{移動先ID,非負重み}の列。importantは一意で空でない重要地点ID集合。
@@ -524,7 +556,7 @@ std::pair<long long, std::vector<int>> solve_important_vertices_on_graph(
 ### T07 既存順序・次ターンの計画の改善
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは今回の有限距離行列。initial_orderは今回の未完了地点を1回ずつ含む順序。
@@ -558,7 +590,7 @@ std::pair<long long, std::vector<int>> improve_existing_tsp_order(
 ### T08 車両割当て・クラスタ分割後の経路改善
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限正方行列。start[r]/finish[r]は車両rの両拠点。
@@ -614,7 +646,7 @@ std::vector<std::vector<int>> improve_each_vehicle_route(
 ### T09 小規模の厳密解で品質を確かめる
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限・対称行列、verticesは一意な訪問集合で22頂点以下。
@@ -654,7 +686,7 @@ TspExactComparison compare_tsp_with_exact_solution(
 ### T10 部分問題の大きさに応じて厳密計算を使う
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限・対称行列、verticesは一意な訪問集合。
@@ -685,7 +717,7 @@ std::pair<long long, std::vector<int>> solve_tsp_exact_or_heuristic(
 ### T11 小数の距離・64bitを超える整数コスト
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 下の2関数は数値型の異なる独立した例。
@@ -733,7 +765,7 @@ std::pair<__int128_t, std::vector<int>> solve_large_cost_hamilton_path(
 ### T12 複数試行から良い順序を選ぶ
 
 ```cpp
-#include "tsp_solver_v07.hpp"
+#include "tsp_solver_v09.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは有限・対称行列、verticesは一意な訪問集合。
@@ -840,7 +872,7 @@ kick直後の費用を再計算して局所探索へ渡します。最良値を�
 
 自由な頂点集合の部分集合を $S$、その最後の頂点を $v$ とし、そこまでの最小コストを $D[S,v]$ とします。未訪問頂点 $w$ を加える遷移は次の形です。
 
-$$D[S\cup\{w\},w]=\min\left(D[S\cup\{w\},w],\ D[S,v]+d(v,w)\right)$$
+$$D[S\cup\lbrace w\rbrace ,w]=\min\left(D[S\cup\lbrace w\rbrace ,w],\ D[S,v]+d(v,w)\right)$$
 
 ここで $D$ はDP配列、$S$ は既に並べた自由頂点の集合、$v$ は集合内の最終頂点、$w$ は集合外の次の頂点です。$d$ は第1章と同じ移動費用です。始点固定ならその始点から各自由頂点への費用で初期化し、始点自由なら各頂点を費用0の始点候補にします。閉路は入力先頭を固定始点として扱います。
 

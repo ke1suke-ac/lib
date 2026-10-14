@@ -1,6 +1,6 @@
 # Routingライブラリ ユーザーガイド
 
-対象ソースは `routing_solver_v05.hpp`。C++20の単一ヘッダで、名前空間は `routing` です。本書は、このヘッダの公開仕様と実装を説明します。第4・6・8章のR01〜R13は同じユースケースを指します。
+対象ソースは `routing_solver_v07.hpp`。C++20の単一ヘッダで、名前空間は `routing` です。本書は、このヘッダの公開仕様と実装を説明します。第4・6・8章のR01〜R13は同じユースケースを指します。
 
 ## 1. 何を解くライブラリか？
 
@@ -12,62 +12,62 @@
 
 ### 1.2 経路コストの定義
 
-車両 $r$ の経路を、作業地点の列 $P_r=(v_{r,1},\ldots,v_{r,m_r})$ とします。空でない経路のコストは次の値です。
+車両 $r$ の経路を、作業地点の列 $P_ {r}=(v_ {r,1},\ldots,v_ {r,m_ {r}})$ とします。空でない経路のコストは次の値です。
 
-$$C_r=d(s_r,v_{r,1})+\sum_{j=1}^{m_r-1}d(v_{r,j},v_{r,j+1})+d(v_{r,m_r},t_r)+\sum_{j=1}^{m_r}h(v_{r,j})$$
+$$C_ {r}=d(s_ {r},v_ {r,1})+\sum_ {j=1}^{m_ {r}-1}d(v_ {r,j},v_ {r,j+1})+d(v_ {r,m_ {r}},t_ {r})+\sum_ {j=1}^{m_ {r}}h(v_ {r,j})$$
 
 全車両のコストと獲得報酬を次のように定義します。
 
-$$C=\sum_{r=1}^{M}C_r,\qquad R=\sum_{i\in I}p_i x_i$$
+$$C=\sum_ {r=1}^{M}C_ {r},\qquad R=\sum_ {i\in I}p_ {i} x_ {i}$$
 
 | 記号 | 意味 |
 |---|---|
 | $I$、$i$ | 入力された仕事の集合と、その1件。集荷・配達では2地点をまとめて1仕事と数える |
 | $M$、$r$ | 車両数と車両番号 |
-| $P_r$、$m_r$ | 車両 $r$ の作業地点列と、その長さ。車両の出発・終了地点はこの列に含めない |
-| $v_{r,j}$、$j$ | 車両 $r$ が $j$ 番目に作業する地点と、経路内の位置 |
-| $s_r$、$t_r$ | 車両 $r$ の出発地点と終了地点。同じ地点でもよい |
+| $P_ {r}$、$m_ {r}$ | 車両 $r$ の作業地点列と、その長さ。車両の出発・終了地点はこの列に含めない |
+| $v_ {r,j}$、$j$ | 車両 $r$ が $j$ 番目に作業する地点と、経路内の位置 |
+| $s_ {r}$、$t_ {r}$ | 車両 $r$ の出発地点と終了地点。同じ地点でもよい |
 | $d(u,v)$ | 地点 $u$ から地点 $v$ への移動コスト。距離、時間、燃料など同じ単位の数値 |
 | $h(v)$ | 地点 $v$ での作業コスト。集荷・配達ではそれぞれの地点に設定する |
-| $C_r$、$C$ | 車両ごとの移動・作業コストと、その合計 |
-| $x_i$ | 仕事 $i$ を完了すれば1、実施しなければ0。集荷・配達対は両地点を条件どおり訪ねて初めて1 |
-| $p_i$、$R$ | 仕事 $i$ の報酬と、完了した仕事の報酬合計 |
+| $C_ {r}$、$C$ | 車両ごとの移動・作業コストと、その合計 |
+| $x_ {i}$ | 仕事 $i$ を完了すれば1、実施しなければ0。集荷・配達対は両地点を条件どおり訪ねて初めて1 |
+| $p_ {i}$、$R$ | 仕事 $i$ の報酬と、完了した仕事の報酬合計 |
 
-$m_r=0$ の空経路は $C_r=0$ と定義します。出発・終了地点が異なっていても、仕事を割り当てなかった車両の移動は数えません。閉じた経路は $s_r=t_r$、指定した別の場所で終える経路は $s_r\ne t_r$ です。後者も終了地点までの移動を数えます。
+$m_ {r}=0$ の空経路は $C_ {r}=0$ と定義します。出発・終了地点が異なっていても、仕事を割り当てなかった車両の移動は数えません。閉じた経路は $s_ {r}=t_ {r}$、指定した別の場所で終える経路は $s_ {r}\ne t_ {r}$ です。後者も終了地点までの移動を数えます。
 
 ### 1.3 目的関数と実施条件
 
 **全件実施**では、すべての仕事を実施したうえで総コストを最小化します。
 
-$$\min C\quad\text{subject to }x_i=1\quad(i\in I)$$
+$$\min C\quad\text{subject to }x_ {i}=1\quad(i\in I)$$
 
 **報酬付き選択**では、必須の仕事を実施し、まず獲得報酬を最大化します。報酬が同じ解の間だけで総コストを比較します。
 
-$$\max_{\mathrm{lex}}(R,-C)\quad\text{subject to }x_i=1\quad(i\in I_{\mathrm{must}})$$
+$$\max_ {\mathrm{lex}}(R,-C)\quad\text{subject to }x_ {i}=1\quad(i\in I_ {\mathrm{must}})$$
 
-ここで $I_{\mathrm{must}}$ は必須仕事の集合、$\max_{\mathrm{lex}}$ は左の成分を優先する辞書式最大化です。報酬が1増える解は、コストが増えても、資源制約を守る限り目的関数上は優れます。報酬と移動コストの加重和を最大化する仕様ではありません。
+ここで $I_ {\mathrm{must}}$ は必須仕事の集合、$\max_ {\mathrm{lex}}$ は左の成分を優先する辞書式最大化です。報酬が1増える解は、コストが増えても、資源制約を守る限り目的関数上は優れます。報酬と移動コストの加重和を最大化する仕様ではありません。
 
 **件数固定選択**では、必須仕事を含めてちょうど $K$ 件を実施し、総コストを最小化します。
 
-$$\min C\quad\text{subject to }\sum_{i\in I}x_i=K,\quad x_i=1\quad(i\in I_{\mathrm{must}})$$
+$$\min C\quad\text{subject to }\sum_ {i\in I}x_ {i}=K,\quad x_ {i}=1\quad(i\in I_ {\mathrm{must}})$$
 
 $K$ は呼び出し側が指定する実施件数です。「最大 $K$ 件」や「少なくとも $K$ 件」ではありません。この問題の選択に報酬は使いません。
 
 ### 1.4 容量・経路上限・集荷配達の制約
 
-すべての問題で、車両ごとの経路上限 $B_r$ に対して $C_r\le B_r$ を守ります。
+すべての問題で、車両ごとの経路上限 $B_ {r}$ に対して $C_ {r}\le B_ {r}$ を守ります。
 
-単一訪問で容量制約を使う問題では、車両の担当仕事集合を $I_r$、仕事 $i$ の需要を $q_i$、車両容量を $Q_r$ として、次を守ります。
+単一訪問で容量制約を使う問題では、車両の担当仕事集合を $I_ {r}$、仕事 $i$ の需要を $q_ {i}$、車両容量を $Q_ {r}$ として、次を守ります。
 
-$$\sum_{i\in I_r}q_i\le Q_r$$
+$$\sum_ {i\in I_ {r}}q_ {i}\le Q_ {r}$$
 
 純配送なら出発時にこの需要合計を積み、配達に伴って荷物が減る状況を表せます。Orienteeringだけは積載量を制約に使いません。
 
-集荷・配達では、同じ車両が集荷を先に、配達を後に行います。仕事 $i$ の集荷地点を $a_i$、配達地点を $b_i$ とし、地点 $v$ を処理したときの荷物増減を $\Delta(v)$ とします。
+集荷・配達では、同じ車両が集荷を先に、配達を後に行います。仕事 $i$ の集荷地点を $a_ {i}$、配達地点を $b_ {i}$ とし、地点 $v$ を処理したときの荷物増減を $\Delta(v)$ とします。
 
-$$\Delta(a_i)=q_i,\qquad\Delta(b_i)=-q_i,\qquad L_{r,j}=\sum_{k=1}^{j}\Delta(v_{r,k}),\qquad 0\le L_{r,j}\le Q_r$$
+$$\Delta(a_ {i})=q_ {i},\qquad\Delta(b_ {i})=-q_ {i},\qquad L_ {r,j}=\sum_ {k=1}^{j}\Delta(v_ {r,k}),\qquad 0\le L_ {r,j}\le Q_ {r}$$
 
-$L_{r,j}$ は車両 $r$ が $j$ 番目の作業を終えた直後の積載量、$k$ は経路内の位置を足し合わせる添字です。出発時と全仕事完了時の積載量は0です。各仕事を複数車両で分担したり、同じ仕事から報酬を複数回得たりはしません。
+$L_ {r,j}$ は車両 $r$ が $j$ 番目の作業を終えた直後の積載量、$k$ は経路内の位置を足し合わせる添字です。出発時と全仕事完了時の積載量は0です。各仕事を複数車両で分担したり、同じ仕事から報酬を複数回得たりはしません。
 
 ## 2. 厳密解アルゴリズム
 
@@ -81,7 +81,7 @@ $L_{r,j}$ は車両 $r$ が $j$ 番目の作業を終えた直後の積載量、
 | 任意訪問だが、1台・仕事が少ない | 部分集合ごとの最短経路コストをDPで計算し、容量・予算を満たす集合を比較する | 報酬最大化と件数固定で集合の比較規則が異なる。必須仕事を落とさない |
 | 各車両が高々1仕事だけを担当できる設定 | 車両と仕事の実行可能な組合せを辺にした割当て問題を解く | 1仕事の単独経路の容量・上限を先に検査する。この条件を外すと一般のroutingになる |
 
-別ヘッダ `tsp_solver_v07.hpp` の `tsp::held_karp_tsp` は、閉路と端点指定可能な開路を、**入力頂点数22以下**で厳密に解きます。たとえば1台で顧客をすべて訪ねて倉庫へ戻るなら、顧客に倉庫1頂点を加えて渡します。別の終了地点が必要なら両端を含めます。22の上限は顧客数ではなく、この追加後の頂点数です。
+別ヘッダ `tsp_solver_v09.hpp` の `tsp::held_karp_tsp` は、閉路と端点指定可能な開路を、**入力頂点数22以下**で厳密に解きます。たとえば1台で顧客をすべて訪ねて倉庫へ戻るなら、顧客に倉庫1頂点を加えて渡します。別の終了地点が必要なら両端を含めます。22の上限は顧客数ではなく、この追加後の頂点数です。
 
 そのDPは時間・メモリを指数的に使い、時間制限による中断はありません。上限内でも実行予算に入るかを確かめて使います。集荷前に配達しないこと、途中積載量、複数車両への割当ては自動では検査しません。厳密な集荷配達を実装するなら、順序や積載量を満たす遷移に限定した列挙・DPが別途必要です。
 
@@ -178,7 +178,7 @@ Context再利用時も、頂点IDの二分探索による変換と状態配列�
 
 ### 5.1 ヘッダ・型・呼び出し形
 
-`#include "routing_solver_v05.hpp"` として利用します。別のライブラリのリンクは不要で、ACLや添付hash mapに依存しません。ソースと掲載例はGCCの `<bits/stdc++.h>` を使うため、GCC系のC++20環境を想定します。ヘッダ単体を主ファイルにすると埋め込みテスト用 `main` が有効になるので、通常は利用側の `.cpp` からincludeします。
+`#include "routing_solver_v07.hpp"` として利用します。別のライブラリのリンクは不要で、ACLや添付hash mapに依存しません。ソースと掲載例はGCCの `<bits/stdc++.h>` を使うため、GCC系のC++20環境を想定します。ヘッダ単体を主ファイルにすると埋め込みテスト用 `main` が有効になるので、通常は利用側の `.cpp` からincludeします。
 
 solverオブジェクトを生成するコンストラクタはありません。仕事・車両の配列と `RoutingParam` を作り、自由関数 `solve_*` または `improve_*` を呼びます。
 
@@ -305,6 +305,8 @@ improve_問題名(context, tasks_span, vehicles_span, initial_routes_span, [sele
 | `travel_cost` | `Calc`、既定0 | 名前にかかわらず、移動に作業コストを加えた総コスト |
 | `collected_reward` | `Reward`、既定0 | 完了仕事の報酬合計。全件・件数固定でも計算されるが、選択目的には使わない |
 
+有効な既存解を渡す `improve_...` は、入力解と探索後の解を同じ目的で比較して良い方を返します。報酬が同じまま費用だけ増えた解へ置き換えることはありません。浮動小数点では丸め誤差があるため、厳密な数値比較には整数単位を使います。
+
 報酬付きで複数解を選ぶなら、まず `feasible`、次に `collected_reward` の大きさ、同点なら `travel_cost` の小ささで比較します。その他の問題は実行可能解の中で `travel_cost` を比較します。
 
 ### 6.2 7種類の基本問題と全入口
@@ -341,6 +343,51 @@ Context版は、仕事・車両・初期経路を内部状態へ変換した**�
 
 時間確認は候補評価64回ごとの確認と段階の境界で行います。ソート、状態の再構築などを途中停止できないため、時間指定はsoft limitです。評価上限や時間上限が小さすぎると、実行可能解の構築前に終了することがあります。
 
+### 6.5 結果と統計をそのままデバッグ出力する
+
+`RoutingSolution<Vertex, Calc, Reward>` と `RoutingStats` は `std::ostream& operator<<(std::ostream&, const Xxx&)` に対応しています。追加の変換は不要で、`std::cout`、`std::cerr`、`std::ostringstream` へそのまま渡せます。
+
+```cpp
+#include "routing_solver_v07.hpp"
+
+int main() {
+    // 入力: 頂点1を1台で訪問する。拠点は0、需要1、報酬5、容量2。
+    const std::vector<routing::RouteTask<int>> tasks = {{1, 1, 5}};
+    const std::vector<routing::RouteVehicle<int>> vehicles = {{0, 0, 2, 100}};
+    const auto dist = [](int a, int b) { return static_cast<long long>(std::abs(a - b)); };
+    routing::RoutingParam param;
+    param.time_limit_ms = 10;
+    routing::RoutingStats stats;
+    const auto result = routing::solve_cvrp(std::span(tasks), std::span(vehicles), dist, param, &stats);
+
+    // 出力: 成否・目的値・車両ごとの作業地点列・未実施仕事と、探索統計。
+    std::cerr << result << '\n' << stats << '\n';
+    return result.feasible ? 0 : 1;
+}
+```
+
+結果部分は次のように表示されます。`routes(1)` の1は車両数、行頭の `0:` は車両配列の添字です。`unserved_items(0)` の0は未実施仕事数です。
+
+```text
+RoutingSolution{feasible=true, travel_cost=2, collected_reward=5,
+  routes(1)=[
+    0: [1]
+  ],
+  unserved_items(0)=[]}
+```
+
+| 表示対象 | 上限・意味 |
+|---|---|
+| `routes` | 先頭20車両まで。空の経路も `[]` と表示する |
+| 各車両の頂点列 | 先頭20頂点まで。経路の順序は保持する |
+| `unserved_items` | 先頭20件まで。値は入力仕事配列の添字 |
+| `... (+N)` | その配列でN要素を省略したことを表す。車両省略は `... (+N routes)` |
+| `RoutingStats` | 全メンバーを `名前=値` で1行表示する。`_ms` はミリ秒 |
+
+表示量は入力サイズによらず一定の上限があり、全経路を合計すると最大400頂点、未実施仕事は最大20件です。配列の全体サイズは括弧内に表示します。出力は結果を変更しません。末尾の改行・flushは行わないため、必要に応じて `<< '\n'` を付けます。これは確認用の表示なので、全要素が必要な提出出力では `routes` などを自分で走査してください。
+
+整数の頂点IDは8bit型でも文字ではなく数値で表示します。`Calc`・`Reward` が `__int128_t` / `__uint128_t` の場合も、十進数で全桁表示できます。通常の数値はストリームの書式指定に従い、小数の桁数は `std::fixed << std::setprecision(3)` などで呼び出し側から指定できます。演算子内では書式フラグ・精度を変更しません。
+
 ## 7. 制約・注意点
 
 | 条件・失敗例 | 意味と対処 |
@@ -353,8 +400,8 @@ Context版は、仕事・車両・初期経路を内部状態へ変換した**�
 | 出発・終了拠点を出力経路に重複して入れる | `routes`は作業列。拠点への出発・帰着は車両情報から自動的に費用へ入る。同じ物理場所で作業するなら役割を区別したIDにすると扱いやすい |
 | 非対称距離に `symmetric=true` | 正しい差分評価にならない。対称性は自動判定されない。逆に対称距離で `false` は利用可能だが候補・探索が変わる |
 | 非metric距離 | 三角不等式は必須ではない。ただし地点を消すと経路費用が増える場合があり、前の経路を編集した後は予算を再確認する |
+| 小数荷重の容量境界 | 空荷時の丸め残差は除くが、容量との比較は指定型で行う。厳密な判定には最小単位に換算した整数を使う |
 | 数値範囲不足 | 辺・経路和・積載量・報酬和・差分のすべてが対応型に収まる必要がある。加減算のoverflowは検査されない |
-| 内部の無限大sentinelと衝突 | 整数 `Calc` の探索用sentinelは `numeric_limits<Calc>::max()/4`。辺だけでなく有限の候補コストや部分和にも十分な余裕を設ける |
 | `NaN`、無限大、巨大値で禁止辺を表す | 比較・差分が不正になる、または巨大費用の辺を選ぶ可能性がある。到達可能な対象で有限コストを構成する。禁止辺の専用制約はない |
 | 負の需要・作業費・報酬に依存したモデル | 非負値を前提に入力する。負のコストで報酬最大化を代用しない |
 | 任意の0報酬仕事が実施される | 初期充填等で0報酬も入る場合がある。0報酬は「訪問禁止」ではなく、必須でなければ外すことも可能という意味 |
@@ -376,7 +423,7 @@ Context版は、仕事・車両・初期経路を内部状態へ変換した**�
 ### R01 全顧客への容量付き配送
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distance[u][v] は非負・有限・対称な移動費用。IDは0..n-1。
@@ -421,7 +468,7 @@ routing::RoutingSolution<int, long long, long long> solve_delivery_cvrp(
 ### R02 複数拠点・異なる終了地点・車両差
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceはID添字の非負・有限な正方行列。
@@ -469,7 +516,7 @@ solve_multi_depot_open_vrp(
 ### R03 時間内に巡回価値を最大化する
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称、ID0が全班共通の出発/帰着地点。
@@ -521,7 +568,7 @@ routing::RoutingSolution<int, long long, long long> solve_team_orienteering(
 ### R04 容量内で価値の高い配送を選ぶ
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称、ID0が共通倉庫。配列はすべて地点添字。
@@ -569,7 +616,7 @@ solve_rewarded_delivery(
 ### R05 ちょうど一定数の地点を選んで回る
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称、0が倉庫、1..n-1が候補顧客。
@@ -619,7 +666,7 @@ routing::RoutingSolution<int, long long, long long> solve_exact_k_customers(
 ### R06 すべての集荷・配達依頼を処理する
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称。request[i]={集荷ID,配達ID,非負荷物量}。
@@ -664,7 +711,7 @@ routing::RoutingSolution<int, long long, long long> solve_all_pd_requests(
 ### R07 報酬付きの集荷・配達依頼を選ぶ
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称。
@@ -710,7 +757,7 @@ routing::RoutingSolution<int, long long, long long> solve_prize_pd_requests(
 ### R08 ちょうど一定件数の集荷・配達を行う
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称。request[i]={集荷ID,配達ID,荷物量}。
@@ -765,7 +812,7 @@ routing::RoutingSolution<int, long long, long long> solve_exact_k_pd_requests(
 ### R09 方向によってコストが変わる配送
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: directed_cost[u][v]はuからvへの非負・有限費用。逆方向とは独立。
@@ -811,7 +858,7 @@ routing::RoutingSolution<int, long long, long long> solve_directed_cvrp(
 ### R10 道路・通路グラフ上の配送
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: graph[u]の各要素は{移動先ID,非負辺コスト}。IDは0..graph.size()-1。
@@ -893,7 +940,7 @@ routing::RoutingSolution<int, long long, long long> solve_graph_cvrp(
 ### R11 同じ距離を使う複数試行
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: distanceは非負・有限・対称な正方行列。tasks/vehicles内の全IDを有効添字にする。
@@ -948,7 +995,7 @@ solve_selective_vrp_with_multiple_seeds(
 ### R12 既存計画・次ターンの残り仕事を改善する
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: contextは今回の全仕事・車両両端を登録した、変更されていない距離スナップショット。
@@ -988,7 +1035,7 @@ routing::RoutingSolution<int, long long, long long> improve_existing_cvrp(
 ### R13 大きなソルバー全体の終了時刻を共有する
 
 ```cpp
-#include "routing_solver_v05.hpp"
+#include "routing_solver_v07.hpp"
 #include <bits/stdc++.h>
 
 // 入力: contextはtasks/vehiclesで使う全IDを登録した静的距離情報。

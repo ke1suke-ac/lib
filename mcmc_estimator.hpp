@@ -10,6 +10,31 @@
 struct McmcState {
     std::vector<double> real;
     std::vector<std::int64_t> discrete;
+    friend std::ostream& operator<<(std::ostream& out, const McmcState& s) {
+        out << "McmcState{real="; debug_value(out,s.real);
+        out << ", discrete="; debug_value(out,s.discrete);
+        return out << '}';
+    }
+private:
+    template<class> friend class McmcEstimator;
+    // 結果型でも共用する表示処理。配列は各々先頭20要素まで。改行・書式変更は行わない。
+    template<class At> static std::ostream& debug_array(std::ostream& out, std::size_t size, At at) {
+        out << '[';
+        const auto count = std::min<std::size_t>(size,20);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i) out << ", ";
+            debug_value(out,at(i));
+        }
+        if (size > count) out << ", ... (+" << size-count << " more)";
+        return out << ']';
+    }
+    template<class Value> static std::ostream& debug_value(std::ostream& out, const Value& value) {
+        if constexpr (requires { out << value; }) out << value;
+        else if constexpr (requires { value.size(); value[std::size_t{}]; })
+            debug_array(out,value.size(),[&](std::size_t i) -> decltype(auto) { return value[i]; });
+        else out << "<unprintable>"; // 独自Stateにoperator<<を要求しない。
+        return out;
+    }
 };
 
 template<class State = McmcState>
@@ -94,8 +119,23 @@ public:
         std::uint64_t steps = 0, accepted = 0, evaluations = 0, terms = 0, emitted = 0;
         std::int64_t elapsed_us = 0;
         bool synchronized = false, has_estimate = false;
+        friend std::ostream& operator<<(std::ostream& out, const Report& r) {
+            return out << "Report{stop=" << (r.stop == Stop::Budget ? "Budget" : "NoFiniteState")
+                << ", steps=" << r.steps << ", accepted=" << r.accepted
+                << ", evaluations=" << r.evaluations << ", terms=" << r.terms << ", emitted=" << r.emitted
+                << ", elapsed_us=" << r.elapsed_us << ", synchronized=" << (r.synchronized ? "true" : "false")
+                << ", has_estimate=" << (r.has_estimate ? "true" : "false") << '}';
+        }
     };
-    struct Best { const State* state; double energy; };
+    struct Best {
+        const State* state;
+        double energy;
+        friend std::ostream& operator<<(std::ostream& out, const Best& b) {
+            out << "Best{state=";
+            if (b.state) McmcState::debug_value(out,*b.state); else out << "none";
+            return out << ", energy=" << b.energy << '}';
+        }
+    };
     struct MoveContext {
         Phase phase;
         double temperature;
@@ -718,6 +758,11 @@ public:
         double energy = INFINITY;
         Report report;
         std::uint64_t revision = 0;
+        friend std::ostream& operator<<(std::ostream& out, const Result& r) {
+            out << "Result{state=";
+            if (r.state) McmcState::debug_value(out,*r.state); else out << "none";
+            return out << ", energy=" << r.energy << ", report=" << r.report << ", revision=" << r.revision << '}';
+        }
     };
     // double / array<double,N> / vector<double>の逐次集計。標本自体は保存しない。
     // varianceはn-1で割った標本分散。平均の推定誤差や独立標本数ではない。
@@ -756,11 +801,27 @@ public:
             for (std::size_t i = 0; i < size(v); ++i) at(v,i) /= static_cast<double>(count_-1);
             return v;
         }
+        friend std::ostream& operator<<(std::ostream& out, const Moments& m) {
+            out << "Moments{count=" << m.count_ << ", mean=";
+            if (m.mean_) McmcState::debug_value(out,*m.mean_); else out << "none";
+            out << ", variance=";
+            if (m.count_ < 2) out << "none";
+            else {
+                const double divisor = static_cast<double>(m.count_-1);
+                if constexpr (std::is_same_v<Value,double>) out << *m.m2_/divisor;
+                else McmcState::debug_array(out,size(*m.m2_),[&](std::size_t i) { return at(*m.m2_,i)/divisor; });
+            }
+            return out << '}';
+        }
     };
     template<class Value> struct SampleResult {
         Moments<Value> summary;
         Report report;
         std::uint64_t revision, warmup_remaining;
+        friend std::ostream& operator<<(std::ostream& out, const SampleResult& r) {
+            return out << "SampleResult{summary=" << r.summary << ", report=" << r.report
+                << ", revision=" << r.revision << ", warmup_remaining=" << r.warmup_remaining << '}';
+        }
     };
 
     // 初期状態を所有する。目的関数の初回評価はsolve/sampleまで実行しない。
@@ -857,6 +918,106 @@ struct McmcEstimatorTests {
         if (!ok) { std::cerr << "FAILED: " << message << '\n'; std::abort(); }
     }
     static bool same(const McmcState& a, const McmcState& b) { return a.real == b.real && a.discrete == b.discrete; }
+    struct DebugState {
+        int value;
+        friend std::ostream& operator<<(std::ostream& out, const DebugState& s) { return out << "Custom(" << s.value << ')'; }
+    };
+    struct DebugHidden { int value; };
+    struct DebugValues {
+        using value_type = double;
+        std::vector<double> values;
+        static inline int copies = 0, reads = 0;
+        explicit DebugValues(std::size_t size, double value) : values(size,value) {}
+        DebugValues(const DebugValues& x) : values(x.values) { ++copies; }
+        DebugValues& operator=(const DebugValues& x) { values=x.values; ++copies; return *this; }
+        std::size_t size() const { return values.size(); }
+        double& operator[](std::size_t i) { ++reads; return values[i]; }
+        const double& operator[](std::size_t i) const { ++reads; return values[i]; }
+    };
+    void debug_output() {
+        auto text = [](const auto& value) { std::ostringstream out; out << value; return out.str(); };
+        auto has = [&](const auto& value, const char* part) { return text(value).find(part) != std::string::npos; };
+        check(text(McmcState{}) == "McmcState{real=[], discrete=[]}","print empty state");
+        McmcState state{{1.5,-2},{3,4}};
+        check(text(state) == "McmcState{real=[1.5, -2], discrete=[3, 4]}","print state fields");
+        for (int size : {0,1,19,20,21,1000}) {
+            McmcState large; large.real.resize(size); large.discrete.resize(size);
+            std::iota(large.real.begin(),large.real.end(),100.0);
+            std::iota(large.discrete.begin(),large.discrete.end(),200);
+            auto output=text(large);
+            check((output.find("more") != std::string::npos) == (size>20),"array truncation boundary");
+            check(output.find("120") == std::string::npos && output.find("220") == std::string::npos,"array hides later values");
+            check(output.size()<400,"array output bounded");
+            if (size>20) {
+                auto suffix="... (+"+std::to_string(size-20)+" more)";
+                check(output.find(suffix) != std::string::npos && output.find(suffix,output.find(suffix)+1) != std::string::npos,"each array has omitted count");
+            }
+        }
+        S::Report report{S::Stop::NoFiniteState,11,7,13,17,5,23,true,false};
+        check(text(report)=="Report{stop=NoFiniteState, steps=11, accepted=7, evaluations=13, terms=17, emitted=5, elapsed_us=23, synchronized=true, has_estimate=false}","print all report fields");
+        check(has(S::Report{},"stop=Budget"),"print budget stop");
+        check(text(S::Best{&state,-2.5})=="Best{state=McmcState{real=[1.5, -2], discrete=[3, 4]}, energy=-2.5}","best prints pointee");
+        check(has(S{}.best(),"state=none"),"null best state");
+        S::Parameters parameters; parameters.real(2,2,2);
+        auto model=[](const McmcState& s){return s.real[0]*s.real[0];};
+        auto session=S::make_numeric_session(parameters,model);
+        using Session=decltype(session);
+        check(has(session.solve(S::Budget::for_steps(0)),"state=none"),"unsolved result prints none");
+        auto result=session.solve(S::Budget::for_steps(3));
+        auto saved=result.state; const auto revision=session.revision();
+        check(has(result,"Result{state=McmcState{real=[2], discrete=[]}, energy=4"),"solve result prints candidate");
+        check(has(result,"report=Report{") && has(result,(", revision="+std::to_string(revision)+"}").c_str()),"result metadata");
+        check(same(*saved,*result.state) && session.revision()==revision,"printing does not change result or session");
+        check(has(session.solve_view(S::Budget::for_steps(1)),"steps=1"),"solve_view report stream");
+        auto sampled=session.sample(S::Budget::for_steps(3),[](const McmcState& s){return s.real[0];});
+        check(has(sampled,"SampleResult{summary=Moments{count=3, mean=2, variance=0}"),"sample result summary");
+        check(has(sampled,"report=Report{") && has(sampled,"warmup_remaining=0}"),"sample result metadata");
+        check(has(sampled.summary,"count=3"),"summary stream directly");
+        check(has(session.sample_each(S::Budget::for_steps(2),[](const McmcState&,double,int){}),"emitted=2"),"sample_each report stream");
+        Session::Moments<double> scalar;
+        check(text(scalar)=="Moments{count=0, mean=none, variance=none}","empty moments");
+        scalar.add(1); check(text(scalar)=="Moments{count=1, mean=1, variance=none}","one sample variance absent");
+        scalar.add(3); check(text(scalar)=="Moments{count=2, mean=2, variance=2}","sample variance uses n minus one");
+        Session::Moments<std::array<double,2>> pair;
+        pair.add({1,4}); pair.add({3,8});
+        check(text(pair)=="Moments{count=2, mean=[2, 6], variance=[2, 8]}","array moments");
+        Session::Moments<std::array<double,0>> empty;
+        empty.add({}); empty.add({});
+        check(text(empty)=="Moments{count=2, mean=[], variance=[]}","zero dimensional moments");
+        Session::Moments<std::vector<double>> many;
+        many.add(std::vector<double>(21,1)); many.add(std::vector<double>(21,3));
+        auto output=text(many); auto pos=output.find("... (+1 more)");
+        check(pos!=std::string::npos && output.find("... (+1 more)",pos+1)!=std::string::npos,"mean and variance truncated independently");
+        Session::Moments<DebugValues> counted;
+        counted.add(DebugValues(1000,1)); counted.add(DebugValues(1000,3));
+        DebugValues::copies=DebugValues::reads=0; (void)text(counted);
+        check(DebugValues::copies==0 && DebugValues::reads==40,"debug summary visits only shown values without copying arrays");
+        DebugState custom{7}; DebugHidden hidden{9};
+        check(text(McmcEstimator<DebugState>::Best{&custom,3})=="Best{state=Custom(7), energy=3}","custom state stream");
+        check(text(McmcEstimator<DebugHidden>::Best{&hidden,4})=="Best{state=<unprintable>, energy=4}","unprintable state fallback");
+        auto verify_custom=[&]<class T>(T initial) {
+            using E=McmcEstimator<T>;
+            auto eval=[](const T& s){return static_cast<double>(s.value);};
+            auto move=E::symmetric_move([](const T&,T&,typename E::Rng&,const typename E::MoveContext&){return false;});
+            auto custom_session=E::make_session(std::vector<T>{initial},eval,move,{.warmup_steps=0});
+            auto r=custom_session.solve(E::Budget::for_steps(1));
+            check(has(r,std::is_same_v<T,DebugState> ? "state=Custom(7)" : "state=<unprintable>"),"custom solve result stream");
+            auto samples=custom_session.sample(E::Budget::for_steps(2),[](const T& s){return static_cast<double>(s.value);});
+            check(has(samples,"count=2"),"custom sample result stream");
+        };
+        verify_custom(custom); verify_custom(hidden);
+        std::array<int,21> array{}; std::iota(array.begin(),array.end(),0);
+        check(has(McmcEstimator<decltype(array)>::Best{&array,0},"19, ... (+1 more)]"),"container state fallback uses bounded output");
+        std::ostringstream out; out << std::fixed << std::setprecision(2) << std::boolalpha;
+        auto flags=out.flags(); auto precision=out.precision(); const auto locale=out.getloc();
+        check(&(out << result << '\n' << sampled << '\n' << report << '\n' << session.best())==&out,"ostream reference and chaining");
+        check(out.flags()==flags && out.precision()==precision && out.getloc()==locale,"preserve numeric formatting and locale");
+        check(out.str().find("energy=4.00")!=std::string::npos,"respect caller precision");
+        check(text(result).find('\n')==std::string::npos,"no implicit newline");
+        auto invalid=S::make_numeric_session(parameters,[](const McmcState&){return INFINITY;});
+        check(has(invalid.solve(S::Budget::for_steps(1)),"stop=NoFiniteState"),"no finite candidate result");
+        static_assert(std::is_aggregate_v<McmcState> && std::is_aggregate_v<Session::Result>);
+    }
     void rng() {
         S::Rng a(0), b(0);
         for (int i = 0; i < 100; ++i) check(a.next() == b.next(),"rng seed");
@@ -1444,6 +1605,7 @@ struct McmcEstimatorTests {
         check(std::abs(square/400000-3.0/28)<0.006,"Beta second moment under reflection");
     }
     void run() {
+        debug_output();
         discrete_kernel();self_evaluation_elision();reflected_real_kernel();
         rng();generic_and_asymmetric();gaussian_and_numeric();continuation();
         observations_and_sync();interrupted_evaluation();deferred_output_and_constraints();candidate_difference();boundaries_and_random_updates();
@@ -1455,6 +1617,7 @@ struct McmcEstimatorTests {
 int main(int argc,char**argv) {
     if(argc>1) {
         const std::string name=argv[1];
+        if(name=="debug_output"){McmcEstimatorTests tests;tests.debug_output();std::cout<<"PASS "<<tests.checks<<" debug output checks\n";}
         if(name=="review_noop")McmcEstimatorTests{}.noop_updates_and_cooling();
         if(name=="review_empty")McmcEstimatorTests{}.noop_updates_and_cooling(true);
         if(name=="review_delta")McmcEstimatorTests{}.delta_model_timeout();

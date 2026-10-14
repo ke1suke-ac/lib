@@ -12,6 +12,7 @@
  *
  * 公開 API は用途別に分け、内部の探索構成はベンチマークで選定した一種類に固定する。
  * 距離・作業費・需要・報酬は非負の有限値とし、和・差分の中間値まで各数値型に収める。
+ * RoutingSolutionとRoutingStatsはostreamへ直接出力でき、配列の表示は各20件に制限する。
  * PDPのLoadと費用計算のCalcには符号付き型を使う。
  * 浮動小数点の容量・費用境界は丸め誤差の影響を受けるため、厳密判定には整数単位を使う。
  */
@@ -44,6 +45,25 @@ struct RoutingStats {
     double local_search_ms = 0.0;
     double lns_ms = 0.0;
     double total_ms = 0.0;
+
+    // 探索回数と計測時間を名前付きで出力する。O(1)
+    friend std::ostream& operator<<(std::ostream& os, const RoutingStats& stats) {
+        // 探索の進み具合を出力する
+        os << "RoutingStats{move_evaluations=" << stats.move_evaluations
+           << ", accepted_moves=" << stats.accepted_moves
+           << ", local_search_runs=" << stats.local_search_runs
+           << ", lns_rounds=" << stats.lns_rounds
+           << ", best_updates=" << stats.best_updates
+           << ", destroyed_items=" << stats.destroyed_items
+           << ", repaired_items=" << stats.repaired_items;
+        // 時間はミリ秒単位で出力し、末尾の改行は呼び出し側に任せる
+        return os << ", distance_build_ms=" << stats.distance_build_ms
+                  << ", candidate_build_ms=" << stats.candidate_build_ms
+                  << ", construction_ms=" << stats.construction_ms
+                  << ", local_search_ms=" << stats.local_search_ms
+                  << ", lns_ms=" << stats.lns_ms
+                  << ", total_ms=" << stats.total_ms << '}';
+    }
 };
 
 template <class Vertex, class Load = long long, class Reward = long long,
@@ -83,6 +103,62 @@ struct RoutingSolution {
     Calc travel_cost{};
     Reward collected_reward{};
     bool feasible = false;
+
+    // 結果を出力し、経路数・各経路の頂点数・未実施件数を各20件まで表示する。O(1)
+    friend std::ostream& operator<<(std::ostream& os, const RoutingSolution& solution) {
+        // 128bit整数は符号付き最小値も十進数で扱い、小さい整数型も文字にしない
+        const auto write_value = [&]<class T>(const T& value) {
+            if constexpr (std::is_same_v<T, __int128_t> || std::is_same_v<T, __uint128_t>) {
+                bool negative = false;
+                if constexpr (std::is_same_v<T, __int128_t>) negative = value < 0;
+                __uint128_t magnitude = static_cast<__uint128_t>(value);
+                if (negative) magnitude = __uint128_t{0} - magnitude;
+                char buffer[40];
+                char* cursor = buffer + sizeof(buffer);
+                do {
+                    *--cursor = static_cast<char>('0' + magnitude % 10);
+                    magnitude /= 10;
+                } while (magnitude != 0);
+                if (negative) *--cursor = '-';
+                os << std::string_view(cursor, static_cast<std::size_t>(buffer + sizeof(buffer) - cursor));
+            } else if constexpr (std::is_integral_v<T>) {
+                os << +value;
+            } else {
+                os << value;
+            }
+        };
+
+        // 配列は先頭20要素だけ表示し、省略した要素数も示す
+        const auto write_list = [&](const auto& values) {
+            os << '[';
+            const std::size_t count = std::min<std::size_t>(values.size(), 20);
+            for (std::size_t i = 0; i < count; ++i) {
+                if (i != 0) os << ", ";
+                write_value(values[i]);
+            }
+            if (count < values.size()) os << ", ... (+" << values.size() - count << ')';
+            os << ']';
+        };
+
+        // 成否と目的値を先に示し、車両の添字を付けて経路を改行表示する
+        os << "RoutingSolution{feasible=" << (solution.feasible ? "true" : "false")
+           << ", travel_cost=";
+        write_value(solution.travel_cost);
+        os << ", collected_reward=";
+        write_value(solution.collected_reward);
+        os << ",\n  routes(" << solution.routes.size() << ")=[";
+        const std::size_t count = std::min<std::size_t>(solution.routes.size(), 20);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) os << ',';
+            os << "\n    " << i << ": ";
+            write_list(solution.routes[i]);
+        }
+        if (count < solution.routes.size()) os << ",\n    ... (+" << solution.routes.size() - count << " routes)";
+        if (count != 0) os << "\n  ";
+        os << "],\n  unserved_items(" << solution.unserved_items.size() << ")=";
+        write_list(solution.unserved_items);
+        return os << '}';
+    }
 };
 
 template <class Vertex, class Calc> class RoutingContext;
@@ -2659,6 +2735,88 @@ auto solve_selective_pdvrp(
 
 #if __INCLUDE_LEVEL__ == 0
 
+// 出力の上限、型の境界、ストリーム状態、連結出力を検証する
+void test_routing_debug_output() {
+    const auto text = [](const auto& value) {
+        std::ostringstream stream;
+        stream << value;
+        return stream.str();
+    };
+    using Solution = routing::RoutingSolution<int, long long>;
+    static_assert(std::is_aggregate_v<Solution> && std::is_aggregate_v<routing::RoutingStats>);
+
+    // 空解と通常解はフィールド名、空配列、車両番号を明示する
+    assert(text(Solution{}) == "RoutingSolution{feasible=false, travel_cost=0, collected_reward=0,\n"
+                              "  routes(0)=[],\n  unserved_items(0)=[]}");
+    const Solution sample{{{1, 3}, {}}, {2}, 12, 9, true};
+    const std::string sample_text = "RoutingSolution{feasible=true, travel_cost=12, collected_reward=9,\n"
+                                    "  routes(2)=[\n    0: [1, 3],\n    1: []\n  ],\n  unserved_items(1)=[2]}";
+    assert(text(sample) == sample_text);
+    std::ostringstream chained;
+    assert(&(chained << sample) == &chained);
+    chained << '\n' << sample;
+    assert(chained.str() == sample_text + '\n' + sample_text);
+
+    // 20件の前後を各配列で調べ、大きい配列でも表示量が増え続けない
+    for (int size : {0, 1, 19, 20, 21, 1000}) {
+        Solution value;
+        value.routes.resize(static_cast<std::size_t>(size));
+        value.unserved_items.resize(static_cast<std::size_t>(size));
+        std::iota(value.unserved_items.begin(), value.unserved_items.end(), 2000);
+        if (size > 0) {
+            value.routes[0].resize(static_cast<std::size_t>(size));
+            std::iota(value.routes[0].begin(), value.routes[0].end(), 1000);
+        }
+        if (size > 20) value.routes[20] = {999999};
+        const auto output = text(value);
+        assert((output.find("...") != std::string::npos) == (size > 20));
+        assert(output.find("1020") == std::string::npos);
+        assert(output.find("2020") == std::string::npos);
+        assert(output.find("999999") == std::string::npos);
+        assert(output.find("\n    20:") == std::string::npos);
+        if (size >= 20) assert(output.find("1019") != std::string::npos && output.find("2019") != std::string::npos);
+        if (size > 20) {
+            const auto omitted = std::to_string(size - 20);
+            assert(output.find("... (+" + omitted + ")") != std::string::npos);
+            assert(output.find("... (+" + omitted + " routes)") != std::string::npos);
+        }
+        assert(output.size() < 1500);
+    }
+
+    // 128bitの最小・最大値、0、小数、8bit IDを桁落ちや文字化なしで出力する
+    routing::RoutingSolution<int, __int128_t, __uint128_t> wide;
+    wide.travel_cost = std::numeric_limits<__int128_t>::min();
+    wide.collected_reward = std::numeric_limits<__uint128_t>::max();
+    auto output = text(wide);
+    assert(output.find("travel_cost=-170141183460469231731687303715884105728") != std::string::npos);
+    assert(output.find("collected_reward=340282366920938463463374607431768211455") != std::string::npos);
+    wide.travel_cost = std::numeric_limits<__int128_t>::max();
+    assert(text(wide).find("travel_cost=170141183460469231731687303715884105727") != std::string::npos);
+    wide.travel_cost = 0;
+    wide.collected_reward = 0;
+    assert(text(wide).find("travel_cost=0, collected_reward=0") != std::string::npos);
+    const routing::RoutingSolution<unsigned char, double, double> small{{{65, 255}}, {}, 1.25, 2.5, true};
+    assert(text(small).find("0: [65, 255]") != std::string::npos);
+    assert(text(small).find("travel_cost=1.25, collected_reward=2.5") != std::string::npos);
+    const routing::RoutingSolution<signed char, long double> negative{{{-128, 127}}, {}, 0.5L, 0, false};
+    assert(text(negative).find("0: [-128, 127]") != std::string::npos);
+
+    // 統計はすべてのメンバーを出力し、呼び出し元の書式指定を変更しない
+    const routing::RoutingStats stats{1, 2, 3, 4, 5, 6, 7, 1.25, 2.25, 3.25, 4.25, 5.25, 6.25};
+    assert(text(stats) == "RoutingStats{move_evaluations=1, accepted_moves=2, local_search_runs=3, lns_rounds=4, "
+                          "best_updates=5, destroyed_items=6, repaired_items=7, distance_build_ms=1.25, "
+                          "candidate_build_ms=2.25, construction_ms=3.25, local_search_ms=4.25, lns_ms=5.25, total_ms=6.25}");
+    std::ostringstream formatted;
+    formatted << std::hex << std::showbase << std::fixed << std::setprecision(2) << std::setfill('_');
+    const auto flags = formatted.flags();
+    const auto precision = formatted.precision();
+    const auto fill = formatted.fill();
+    assert(&(formatted << small << stats) == &formatted);
+    assert(formatted.flags() == flags && formatted.precision() == precision && formatted.fill() == fill);
+    assert(formatted.str().find("collected_reward=2.50") != std::string::npos);
+}
+
+
 // 費用の数値境界、小数荷重、既存解の保持、評価回数上限を検証する
 void test_routing_review_regressions() {
     auto check = [](bool ok) { if (!ok) std::abort(); };
@@ -2739,6 +2897,7 @@ void test_routing_review_regressions() {
 }
 
 int main() {
+    test_routing_debug_output();
     test_routing_review_regressions();
     enum class SelectionKind : unsigned char {
         AllMandatory,

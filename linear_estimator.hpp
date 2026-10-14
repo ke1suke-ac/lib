@@ -266,6 +266,36 @@ public:
         double mean = 0, variance = 0;
     };
 
+    // デバッグ表示。改行せず、数値の書式は呼出し元のストリーム設定を使う。
+    friend std::ostream& operator<<(std::ostream& out, const Runtime& value) {
+        static constexpr const char* reasons[] = {
+            "TimeLimit", "StepLimit", "NoMovableVariable", "NoFeasibleState", "Solved"};
+        const auto reason = static_cast<size_t>(value.stop_reason);
+        assert(reason < std::size(reasons));
+        return out << "Runtime{stop_reason=" << reasons[reason] << ", elapsed_us=" << value.elapsed_us
+                   << ", steps=" << value.steps << ", accepted=" << value.accepted
+                   << ", samples=" << value.samples << ", repair_steps=" << value.repair_steps
+                   << ", warming_up=" << (value.warming_up ? "true" : "false") << '}';
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const SampleView& value) {
+        out << "SampleView{values=";
+        return print_values(out, value.values) << ", energy=" << value.energy << '}';
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const Moments& value) {
+        out << "Moments{count=" << value.count;
+        if (value.count == 0) return out << ", mean=n/a, variance=n/a}";
+        print_values(out << ", mean=", value.mean);
+        return print_values(out << ", variance=", value.variance) << '}';
+    }
+
+    friend std::ostream& operator<<(std::ostream& out, const Prediction& value) {
+        out << "Prediction{count=" << value.count;
+        if (value.count == 0) return out << ", mean=n/a, variance=n/a}";
+        return out << ", mean=" << value.mean << ", variance=" << value.variance << '}';
+    }
+
     // 値域・乱数 seed・任意の評価器を所有する O(n)
     explicit LinearEstimator(std::vector<Domain> domains, uint64_t seed = 0, CustomLoss custom = {})
         : domains_(std::move(domains)), custom_(std::move(custom)), rng_(seed), incidence_(domains_.size()),
@@ -472,6 +502,18 @@ public:
     }
 
 private:
+    // 結果型で共用する表示だけの処理。配列は先頭20要素まで出力する。
+    static std::ostream& print_values(std::ostream& out, std::span<const double> values) {
+        out << '[';
+        const size_t count = std::min(values.size(), size_t(20));
+        for (size_t i = 0; i < count; ++i) {
+            if (i != 0) out << ", ";
+            out << values[i];
+        }
+        if (values.size() > count) out << ", ... (" << values.size() << " total)";
+        return out << ']';
+    }
+
     struct Factor {
         LinearForm form;
         Loss loss;

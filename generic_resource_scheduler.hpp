@@ -1,5 +1,5 @@
 /*
- * generic_resource_scheduler v08:
+ * generic_resource_scheduler v09:
  *   先行制約DAGと再生可能資源容量を持つ非プリエンプティブなタスクを
  *   priority list + Serial Schedule Generation Schemeでスケジュールする
  *   AHC向けヒューリスティックsolver。
@@ -63,6 +63,29 @@ struct resource_schedule {
     std::vector<long long> start_time;
 };
 
+// 解の各配列を先頭20要素と省略数で表示する / O(1)（表示要素数に固定上限）
+inline std::ostream& operator<<(std::ostream& out, const resource_schedule& schedule) {
+    // 配列を個別に扱うため、長さが不一致の作成途中の解も表示できる
+    const auto print_array = [&out](const auto& values) {
+        out << '[';
+        const std::size_t count = std::min<std::size_t>(values.size(), 20);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) out << ", ";
+            out << values[i];
+        }
+        if (values.size() > count) out << ", ... (" << values.size() - count << " more)";
+        out << ']';
+    };
+    // フィールド名を添え、改行・flushは呼出し側に任せる
+    out << "resource_schedule{task_order=";
+    print_array(schedule.task_order);
+    out << ", mode_of_task=";
+    print_array(schedule.mode_of_task);
+    out << ", start_time=";
+    print_array(schedule.start_time);
+    return out << '}';
+}
+
 struct resource_scheduling_options {
     double time_limit_ms = 1950.0;
     std::optional<std::chrono::steady_clock::time_point> deadline;
@@ -77,6 +100,15 @@ struct resource_scheduling_result {
     long long decoded_schedules = 0;
     long long accepted_moves = 0;
 };
+
+// 目的値・探索カウンタ・解を表示する / O(1)（各配列は先頭20要素まで）
+inline std::ostream& operator<<(std::ostream& out, const resource_scheduling_result& result) {
+    return out << "resource_scheduling_result{objective=" << result.objective
+               << ", iterations=" << result.iterations
+               << ", decoded_schedules=" << result.decoded_schedules
+               << ", accepted_moves=" << result.accepted_moves
+               << ", schedule=" << result.schedule << '}';
+}
 
 struct resource_scheduling_problem;
 template<class Evaluator>
@@ -1241,6 +1273,92 @@ struct resource_scheduling_test_access {
 namespace {
 long long actual_search_checks = 0;
 
+void test_debug_output() {
+    // aggregate初期化、const参照、空配列、連結出力を確認する
+    static_assert(std::is_aggregate_v<resource_schedule>);
+    static_assert(std::is_aggregate_v<resource_scheduling_result>);
+    std::ostringstream empty;
+    assert(&(empty << resource_scheduling_result{}) == &empty);
+    assert(empty.str() == "resource_scheduling_result{objective=0, iterations=0, "
+        "decoded_schedules=0, accepted_moves=0, schedule=resource_schedule{"
+        "task_order=[], mode_of_task=[], start_time=[]}}");
+    const resource_scheduling_result sample{{{2, 0, 1}, {1, 0, 2}, {12, 0, 5}},
+        12.5L, 7, 6, 3};
+    std::ostringstream small;
+    small << sample << " done";
+    assert(small.str() == "resource_scheduling_result{objective=12.5, iterations=7, "
+        "decoded_schedules=6, accepted_moves=3, schedule=resource_schedule{"
+        "task_order=[2, 0, 1], mode_of_task=[1, 0, 2], start_time=[12, 0, 5]}} done");
+
+    // 20要素の境界と大配列で、21番目以降の値が混入しないことを調べる
+    for (std::size_t size : {0U, 1U, 19U, 20U, 21U, 100000U}) {
+        resource_schedule schedule;
+        schedule.task_order.assign(size, 4);
+        schedule.mode_of_task.assign(size, 5);
+        schedule.start_time.assign(size, 6);
+        if (size > 20) {
+            schedule.task_order[20] = 123456789;
+            schedule.mode_of_task[20] = 234567891;
+            schedule.start_time[20] = 345678912345LL;
+        }
+        std::ostringstream out;
+        out << schedule;
+        const std::string text = out.str();
+        assert(text.size() < 350);
+        assert(text.find('\n') == std::string::npos);
+        assert(text.find("123456789") == std::string::npos);
+        assert(text.find("234567891") == std::string::npos);
+        assert(text.find("345678912345") == std::string::npos);
+        for (const std::string field : {"task_order", "mode_of_task", "start_time"}) {
+            const auto begin = text.find(field + "=[");
+            assert(begin != std::string::npos);
+            const auto end = text.find(']', begin);
+            const auto values = text.substr(begin, end - begin);
+            const auto commas = std::count(values.begin(), values.end(), ',');
+            assert(commas == static_cast<std::ptrdiff_t>(size == 0 ? 0 : std::min(size - 1, std::size_t{20})));
+            if (size <= 20) assert(values.find("...") == std::string::npos);
+            else assert(values.ends_with(", ... (" + std::to_string(size - 20) + " more)"));
+        }
+    }
+
+    // 作成途中の不揃いな配列や大きい開始時刻も、そのまま独立に表示する
+    const resource_schedule partial{{}, {7}, {-1, 4000000000LL}};
+    std::ostringstream uneven;
+    assert(&(uneven << partial) == &uneven);
+    assert(uneven.str() == "resource_schedule{task_order=[], mode_of_task=[7], "
+        "start_time=[-1, 4000000000]}");
+
+    // 呼出し側の数値書式を使い、書式フラグ・精度・fillを変更しない
+    std::ostringstream formatted;
+    formatted << std::fixed << std::setprecision(2) << std::setfill('*');
+    const auto flags = formatted.flags();
+    formatted << sample;
+    assert(formatted.str().starts_with("resource_scheduling_result{objective=12.50,"));
+    assert(formatted.flags() == flags && formatted.precision() == 2 && formatted.fill() == '*');
+    assert(sample.schedule.task_order == std::vector<int>({2, 0, 1}));
+    assert(sample.schedule.mode_of_task == std::vector<int>({1, 0, 2}));
+    assert(sample.schedule.start_time == std::vector<long long>({12, 0, 5}));
+
+    // solve/improveの組み込み評価版と独自評価版で返る結果を直接表示する
+    resource_scheduling_problem problem;
+    problem.tasks.resize(1);
+    problem.tasks[0].modes = {{3, {}, 0}};
+    resource_scheduling_options options;
+    options.max_iterations = 0;
+    const auto evaluator = [](const auto&, const auto&) { return 9.25L; };
+    const auto solved = resource_scheduling_solve(problem, options);
+    for (const auto& result : {solved,
+            resource_scheduling_solve(problem, evaluator, options),
+            resource_scheduling_improve(problem, solved.schedule, options),
+            resource_scheduling_improve(problem, solved.schedule, evaluator, options)}) {
+        std::ostringstream out;
+        out << result;
+        assert(out.str().find("start_time=[0]") != std::string::npos);
+        assert(out.str().find("decoded_schedules=1") != std::string::npos);
+        assert(resource_scheduling_is_feasible(problem, result.schedule));
+    }
+}
+
 resource_scheduling_problem make_small_problem() {
     resource_scheduling_problem problem;
     problem.resources = {{2}, {1}};
@@ -2119,6 +2237,7 @@ void test_invalid_input_matrix() {
 } // namespace
 
 int main() {
+    test_debug_output();
     test_time_limit_boundaries();
     test_builtin_objective_overflow();
     test_invalid_input_matrix();
@@ -2143,7 +2262,7 @@ int main() {
     test_calendar_memory_boundary_and_zero_objective();
     assert(actual_search_checks > 24000);
     std::cout << "actual search callbacks checked: " << actual_search_checks << "\n";
-    std::cout << "all tests passed: legacy + overflow + actual-search SSGS checks + 30 exact oracles + prefix/boundary tests + 1099 exhaustive uniqueness cases + time/objective/input boundaries\n";
+    std::cout << "all tests passed: legacy + overflow + actual-search SSGS checks + 30 exact oracles + prefix/boundary tests + 1099 exhaustive uniqueness cases + time/objective/input boundaries + debug output\n";
 }
 
 #endif

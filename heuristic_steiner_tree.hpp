@@ -18,6 +18,7 @@ key-path 交換、elite 解合成を組み合わせる。同じグラフで繰�
     }
 
     auto res = st.solve(terminals);
+    cerr << res << '\n'; // 辺IDは先頭20件まで、探索統計もまとめて表示する
     if (!res.ok) {
         cout << -1 << '\n';
     } else {
@@ -121,6 +122,26 @@ struct heuristic_steiner_tree_statistics {
     int improvement_count = 0;
     long long dijkstra_count = 0;
     long long edge_relaxation_count = 0;
+
+    // 探索統計を1行で出力する O(1)
+    friend std::ostream &operator<<(std::ostream &out, const heuristic_steiner_tree_statistics &value) {
+        // 最短路モードは列挙値の名前で表示する
+        const char *mode = "unknown";
+        switch (value.path_mode_used) {
+            case heuristic_steiner_tree_path_mode::auto_select: mode = "auto_select"; break;
+            case heuristic_steiner_tree_path_mode::terminal_cache: mode = "terminal_cache"; break;
+            case heuristic_steiner_tree_path_mode::on_demand: mode = "on_demand"; break;
+        }
+        // フィールド名を添え、出力先の書式設定は変更しない
+        return out << "{path_mode_used=" << mode
+                   << ", path_memory_bytes=" << value.path_memory_bytes
+                   << ", initial_solution_count=" << value.initial_solution_count
+                   << ", restart_count=" << value.restart_count
+                   << ", local_move_count=" << value.local_move_count
+                   << ", improvement_count=" << value.improvement_count
+                   << ", dijkstra_count=" << value.dijkstra_count
+                   << ", edge_relaxation_count=" << value.edge_relaxation_count << '}';
+    }
 };
 
 struct heuristic_steiner_tree_result {
@@ -128,6 +149,21 @@ struct heuristic_steiner_tree_result {
     long long cost = 0;
     std::vector<int> edges;
     heuristic_steiner_tree_statistics statistics;
+
+    // 結果を1行で出力し、辺IDは先頭20件まで示す O(min(edges.size(), 20))
+    friend std::ostream &operator<<(std::ostream &out, const heuristic_steiner_tree_result &value) {
+        // 成否、費用、辺の総数を表示する
+        out << "result{ok=" << (value.ok ? "true" : "false")
+            << ", cost=" << value.cost << ", edges(" << value.edges.size() << ")=[";
+        // 長い辺列は省略し、末尾に探索統計を添える
+        const size_t count = std::min<size_t>(value.edges.size(), 20);
+        for (size_t i = 0; i < count; ++i) {
+            if (i != 0) out << ", ";
+            out << value.edges[i];
+        }
+        if (count < value.edges.size()) out << ", ...";
+        return out << "], statistics=" << value.statistics << '}';
+    }
 };
 
 struct heuristic_steiner_tree_augmentation_result {
@@ -135,6 +171,21 @@ struct heuristic_steiner_tree_augmentation_result {
     long long added_cost = 0;
     std::vector<int> added_edges;
     heuristic_steiner_tree_statistics statistics;
+
+    // 増設結果を1行で出力し、追加辺IDは先頭20件まで示す O(min(added_edges.size(), 20))
+    friend std::ostream &operator<<(std::ostream &out, const heuristic_steiner_tree_augmentation_result &value) {
+        // 成否、追加費用、追加辺の総数を表示する
+        out << "augmentation_result{ok=" << (value.ok ? "true" : "false")
+            << ", added_cost=" << value.added_cost << ", added_edges(" << value.added_edges.size() << ")=[";
+        // 長い辺列は省略し、末尾に探索統計を添える
+        const size_t count = std::min<size_t>(value.added_edges.size(), 20);
+        for (size_t i = 0; i < count; ++i) {
+            if (i != 0) out << ", ";
+            out << value.added_edges[i];
+        }
+        if (count < value.added_edges.size()) out << ", ...";
+        return out << "], statistics=" << value.statistics << '}';
+    }
 };
 
 class heuristic_steiner_tree {
@@ -2954,6 +3005,63 @@ int main() {
     const auto check = [](bool condition) {
         if (!condition) throw std::runtime_error("self-test failed");
     };
+
+    // デバッグ出力の全フィールド、空配列、20件境界、大配列、連結出力を検証する
+    {
+        static_assert(std::is_aggregate_v<heuristic_steiner_tree_result>);
+        static_assert(std::is_aggregate_v<heuristic_steiner_tree_augmentation_result>);
+        const heuristic_steiner_tree_statistics statistics{
+            heuristic_steiner_tree_path_mode::terminal_cache, 240, 1, 2, 3, 4, 5,
+            std::numeric_limits<long long>::max()};
+        const std::string stats_text =
+            "{path_mode_used=terminal_cache, path_memory_bytes=240, initial_solution_count=1, "
+            "restart_count=2, local_move_count=3, improvement_count=4, dijkstra_count=5, "
+            "edge_relaxation_count=9223372036854775807}";
+        const std::string first_twenty =
+            "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19";
+        for (int count : {0, 1, 20, 21, 100000}) {
+            std::vector<int> ids(count);
+            std::iota(ids.begin(), ids.end(), 0);
+            std::string shown = count == 0 ? "" : count == 1 ? "0" : first_twenty;
+            if (count > 20) shown += ", ...";
+            for (bool ok : {false, true}) {
+                const long long cost = ok ? 7 : heuristic_steiner_tree::inf();
+                const std::string fields = std::string("ok=") + (ok ? "true" : "false");
+                const heuristic_steiner_tree_result result{ok, cost, ids, statistics};
+                const heuristic_steiner_tree_augmentation_result augmented{ok, cost, ids, statistics};
+                std::ostringstream out;
+                check(&(out << result) == &out);
+                out << '\n' << augmented << '\n' << statistics;
+                check(out.str() ==
+                    "result{" + fields + ", cost=" + std::to_string(cost) +
+                    ", edges(" + std::to_string(count) + ")=[" + shown + "], statistics=" + stats_text + "}\n" +
+                    "augmentation_result{" + fields + ", added_cost=" + std::to_string(cost) +
+                    ", added_edges(" + std::to_string(count) + ")=[" + shown + "], statistics=" + stats_text + "}\n" +
+                    stats_text);
+                check(result.edges == ids && augmented.added_edges == ids);
+            }
+        }
+
+        // 全モードの名前を確認し、呼び出し元が設定した数値書式を保つ
+        const std::array<const char *, 3> names{"auto_select", "terminal_cache", "on_demand"};
+        for (int mode = 0; mode < 3; ++mode) {
+            auto value = statistics;
+            value.path_mode_used = static_cast<heuristic_steiner_tree_path_mode>(mode);
+            std::ostringstream out;
+            out << value;
+            check(out.str().starts_with(std::string("{path_mode_used=") + names[mode] + ","));
+        }
+        std::ostringstream formatted;
+        formatted << std::hex << std::showbase << std::boolalpha << std::setprecision(3) << std::setfill('*');
+        const auto flags = formatted.flags();
+        const heuristic_steiner_tree_result result{true, 26, {31}, {}};
+        formatted << result << heuristic_steiner_tree_augmentation_result{} << statistics;
+        check(formatted.flags() == flags && formatted.precision() == 3 && formatted.fill() == '*');
+        check(formatted.str().starts_with("result{ok=true, cost=0x1a, edges(0x1)=[0x1f],"));
+        formatted << ' ' << true << ' ' << 42;
+        check(formatted.str().ends_with(" true 0x2a"));
+    }
+
     struct brute_dsu {
         std::vector<int> parent;
         explicit brute_dsu(int n) : parent(n, -1) {}

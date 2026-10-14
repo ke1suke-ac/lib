@@ -1,10 +1,10 @@
 # PboSolver ステップバイステップガイド
 
-対象ヘッダ：`pbo_solver_v06.hpp`。C++20、GCC、標準ライブラリだけで使うライブラリです。
+対象ヘッダ：`pbo_solver_v08.hpp`。C++20、GCC、標準ライブラリだけで使うライブラリです。
 
 「どの候補を選ぶか」を、0と1の変数、条件、点数で表すところから始めます。高校数学の範囲で読み進められるように、数式の記号を先に説明し、コードでは毎回少しずつ機能を増やします。C++の変数、配列、ループ、関数呼出しを知っていることを前提にします。
 
-本文は**最小コード1本と発展コード24本**で構成します。すべて独立した`main`を持ち、標準入力は不要です。前の節のコードを継ぎ足す必要はありません。新しい内容は「モデル化 → 評価 → 初期解と再探索 → モデル更新 → 実行管理」の順に登場します。内部アルゴリズムは末尾の付録にまとめます。
+本文は**最小コード1本と発展コード24本、デバッグ出力の補足例1本**で構成します。すべて独立した`main`を持ち、標準入力は不要です。前の節のコードを継ぎ足す必要はありません。新しい内容は「モデル化 → 評価 → 初期解と再探索 → モデル更新 → 実行管理」の順に登場します。内部アルゴリズムは末尾の付録にまとめます。
 
 ## 1. 何を解くライブラリか
 
@@ -137,7 +137,7 @@ CP-SATは整数の変数・制約を扱い、実行可能な解を得た状態�
 
 ## 3. コードを動かす準備
 
-`pbo_solver_v06.hpp`と、試したい節の`.cpp`を同じフォルダに置きます。各コードは1本ずつコンパイルしてください。ヘッダをincludeしたとき、ヘッダ内部の単体テスト用`main`は無効になります。
+`pbo_solver_v08.hpp`と、試したい節の`.cpp`を同じフォルダに置きます。各コードは1本ずつコンパイルしてください。ヘッダをincludeしたとき、ヘッダ内部の単体テスト用`main`は無効になります。
 
 たとえば最小コードを`01_minimal.cpp`として保存した場合は、次で実行できます。
 
@@ -157,7 +157,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Wno-expansion-to-defined
 保存名：`01_minimal.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -219,7 +219,7 @@ int main() {
 保存名：`02_evaluate.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -257,6 +257,59 @@ int main() {
 
 違反行数は「何本破ったか」です。超過量が1でも100でも、その行は1本と数えます。`PboEvaluation`が公開するのは上の3個の数値と`feasible()`です。ソフト行の違反本数や違反量の配列を返すAPIはありません。
 
+### 補足：結果をそのままデバッグ出力する
+
+これまでは目的値や違反数を1個ずつ表示しました。探索結果をまとめて確認したいときは、構造体全体を`cout`や`cerr`へ渡せます。`solve()`の戻り値は`PboResult`、`evaluate()`の戻り値は`PboEvaluation`で、どちらも出力に対応しています。
+
+保存名：`02b_debug_output.cpp`
+
+```cpp
+#include "pbo_solver_v08.hpp"
+using namespace std;
+
+int main() {
+    PboProblem problem;
+    problem.profit = {10, 7, 6};
+    problem.add_le({{0, 3}, {1, 2}, {2, 2}}, 4);
+    PboSolver solver(problem);
+
+    const auto& result = solver.solve();
+    cout << result << '\n';
+
+    vector<uint8_t> candidate = {1, 1, 0};
+    cerr << solver.evaluate(candidate) << '\n';
+}
+```
+
+`cout`への出力例です。`iterations`と`elapsed_us`は実行条件によって変わります。
+
+```text
+PboResult{evaluation=PboEvaluation{feasible=true, objective=13, violated_hard_rows=0, violated_fixed_variables=0}, x=[0, 1, 1] (size=3), iterations=13, elapsed_us=2.283}
+```
+
+`cerr`への出力は次です。
+
+```text
+PboEvaluation{feasible=false, objective=17, violated_hard_rows=1, violated_fixed_variables=0}
+```
+
+問題と候補は直前の例と同じです。変更したのは出力の書き方です。`cout << result`では、結果全体を項目名付きで表示します。`cerr << solver.evaluate(candidate)`では、評価の戻り値を変数へ保存せず、そのまま表示します。`cerr`は標準エラー出力なので、コンテストの解答を標準出力へ書きながら、調査用の情報を分けて出す用途にも使えます。
+
+| 表示項目 | 意味 |
+|---|---|
+| `evaluation` | 候補の評価。直前の例で説明した目的値と違反数 |
+| `feasible` | 両方の違反数が0なら`true`、それ以外なら`false` |
+| `x` | 変数ID順の選択値。文字ではなく数値の0/1で表示 |
+| `size` | `x`の総要素数 |
+| `iterations` | 今回の探索量。局所探索の外側の試行または厳密探索の訪問ノードを数え、反転回数とは限らない |
+| `elapsed_us` | 今回の探索呼出しの経過時間。マイクロ秒単位で、1,000なら1ミリ秒 |
+
+`x`は先頭20要素まで表示します。たとえば25要素なら、最初の20個の後に`...`を付け、`(size=25)`と表示します。20要素ちょうどなら省略せず、空配列なら`x=[] (size=0)`です。**これは表示だけの制限で、返却された配列には全要素が残っています。**
+
+仕組みは、それぞれの型に用意された`ostream& operator<<(ostream&, const 型&)`です。第1引数は出力先、第2引数は読み取る結果で、戻り値は同じ出力先です。そのため、`<< '\n'`などを続けて書けます。結果を変更することも、再び探索・評価することもありません。後で扱う`improve()`も`PboResult`を返すため、同じように表示できます。
+
+改行は自動で追加されません。上の例では最後の`'\n'`が改行です。`feasible`は常に`true`または`false`で表示し、`boolalpha`などの出力先の書式設定は変更しません。小数の表示桁数などは呼出し側の設定に従います。結果は`ostringstream`にも渡せるので、必要なら文字列として保存できます。
+
 ## 発展コード02：最低限必要なものを指定する
 
 最小コードに「AかBを少なくとも1件は選ぶ」という条件を1行追加します。
@@ -264,7 +317,7 @@ int main() {
 保存名：`03_lower.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -303,7 +356,7 @@ AとBを両方選ぶことまでは禁止しません。「少なくとも1つ�
 保存名：`04_equality.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -340,7 +393,7 @@ int main() {
 保存名：`05_range.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -376,7 +429,7 @@ int main() {
 保存名：`06_logic.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -424,7 +477,7 @@ int main() {
 保存名：`07_minimum_cost.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -466,7 +519,7 @@ int main() {
 保存名：`08_fixed.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -506,7 +559,7 @@ Bを選んだ状態でAも選ぶと資源5となるため、Aは0です。最後
 保存名：`09_linear_penalty.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -548,7 +601,7 @@ int main() {
 保存名：`10_fixed_penalty.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -590,7 +643,7 @@ int main() {
 保存名：`11_all_profit.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -636,7 +689,7 @@ BとCは通常利益13に5点を加えた18です。AとBは17、AとCは16か�
 保存名：`12_row.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -680,7 +733,7 @@ int main() {
 保存名：`13_assignment.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -732,7 +785,7 @@ int main() {
 保存名：`14_initial.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -772,7 +825,7 @@ int main() {
 保存名：`15_continue.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -818,7 +871,7 @@ int main() {
 保存名：`16_improve.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -862,7 +915,7 @@ IDの重複は許され、空配列なら何も変更せず初期候補を評価
 保存名：`17_update_profit.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -903,7 +956,7 @@ setterは主に値と「変更された」という印を更新します。次�
 保存名：`18_update_row.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -946,7 +999,7 @@ int main() {
 保存名：`19_update_coefficient.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -994,7 +1047,7 @@ int main() {
 保存名：`20_update_fixed.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1036,7 +1089,7 @@ setter直後の保存済み結果を新しい解として使うのではなく�
 保存名：`21_rebuild.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1085,7 +1138,7 @@ int main() {
 保存名：`22_no_search.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1129,7 +1182,7 @@ no feasible solution found
 保存名：`23_deadline.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1193,7 +1246,7 @@ int main() {
 保存名：`24_reproducible.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1245,7 +1298,7 @@ same=1
 保存名：`25_combined.cpp`
 
 ```cpp
-#include "pbo_solver_v06.hpp"
+#include "pbo_solver_v08.hpp"
 using namespace std;
 
 int main() {
@@ -1363,6 +1416,8 @@ valid=1
 | `PboEvaluation.violated_hard_rows` | `int`。Hard違反行数 |
 | `PboEvaluation.violated_fixed_variables` | `int`。恒久固定への違反変数数 |
 | `PboEvaluation.feasible()` | 両違反数が0かを返す |
+| `operator<<(ostream&, const PboResult&)` | 結果全体を出力。`x`は先頭20要素と総要素数 |
+| `operator<<(ostream&, const PboEvaluation&)` | 可否・目的値・2種類の違反数を出力 |
 
 `solve`と`improve`が返す候補は恒久固定を満たすため、通常その`violated_fixed_variables`は0です。任意の外部候補をそのまま調べる`evaluate`では、0でない値も出ます。
 
@@ -1391,13 +1446,13 @@ valid=1
 
 ### 4.5 コード例とMarkdownの検証
 
-このガイドから抽出した25本のC++コードを、それぞれ独立にコンパイル・実行しました。24本の固定出力は記載どおりに一致し、実時間例も実行可能性と目的値の範囲を確認しました。指定の警告オプションで警告はありませんでした。結果は同梱の`validation.txt`に記録しています。
+このガイドから抽出した26本のC++コードを、それぞれ独立にコンパイル・実行しました。24本の固定出力は記載どおりに一致し、実時間例は実行可能性と目的値の範囲、デバッグ出力例は表示内容と時間値の形式を確認しました。指定の警告オプションで警告はありませんでした。結果は同梱の`results/guide/results.json`に記録しています。
 
-使用した環境はGCC 13.3.0、C++20、`-O2`です。対象のGCC 12.2はこの検証環境にないため、12.2での実行確認はしていません。例はC++20の機能の範囲で記述しています。
+使用した環境はGCC 13.3.0、C++20、`-O2`です。例はC++20の機能の範囲で記述しています。
 
 163個の数式について、通常のMarkdown処理後にも式の文字列が保持されることを確認しました。表示式15個はすべて1行です。HTMLタグや独自アンカーは使っていません。すべての外部リーダーにおける表示を保証するものではないので、利用するリーダーの数式機能を有効にしてください。
 
-同梱のヘッダは対象のv06をそのまま収録し、ガイド作成のための本体変更は行っていません。
+本ガイドはヘッダv08に対応します。結果のデバッグ出力は発展コード01の補足例、内部修復は付録D・Fで説明しています。
 
 ## 付録A. 実装アルゴリズムの概要と流れ
 
@@ -1561,6 +1616,10 @@ doubleの微小な誤差を考慮し、違反量には現在の保存値に対�
 
 同じ関数は、後述する最大16変数の修復にも使います。その場合、外側の変数は現在の値で固定し、内部の変数だけを調べます。上界と行和の到達区間も、その固定値を考慮します。
 
+強化した内部修復は、初期候補・探索履歴がない新規の `solve` で使います（F.2参照）。関係するHard行数が対象変数数の2倍以内なら、全部の違反を一度に消せない枝でも、部分的な改善を探します。各行の到達区間から「どう選んでも残る違反行数」と「少なくとも残る正規化違反量」を見積もり、保存候補より良くならない枝を切ります。たとえば3本の違反のうち1本だけ直せても、その候補を次の修復の出発点にできます。
+
+関係するHard行がそれより多い場合は、従来どおり、対象行を満たせない枝を切ります。これは多くの条件が絡む部分で探索時間を使いすぎないための経験的な切替です。自由変数18以下の全体厳密探索にも部分修復用の緩和は適用せず、D.2の枝刈りを保ちます。
+
 分枝を戻るときは反転と区間更新を巻き戻し、途中で時間切れになっても、再帰を抜けるために必要な復元を行います。よい候補は別に保存しているので、作業中の候補を復元しても発見した解は失いません。
 
 ## 付録E. 候補選択、修復連鎖、焼きなまし
@@ -1629,7 +1688,13 @@ $$h_ {j}\leftarrow1+(h_ {j}-1)/2$$
 
 保存候補へ戻り、違反行を1本選びます。その行の変更可能変数と、周囲の関係行にある変数を最大16個集めます。重複や固定変数は除きます。
 
-その変数集合だけを対象に分枝限定を呼びます。ただし内部ノード上限は256なので、16変数の全組合せを必ず調べるわけではありません。修復後は、その時点での保存候補を読み込み直します。
+その変数集合だけを対象に分枝限定を呼びます。関係するHard行数が変数数の2倍以内なら、それぞれの変数について「Hard係数の絶対値×その行の尺度」を合計し、合計が大きい変数から分岐します。同点なら変数IDが小さい方を先にします。行への影響が大きい値を先に決めると、残りの範囲を早めに絞れることを狙っています。
+
+この場合の内部ノード上限は1024です。関係するHard行がもっと多い場合は、従来の変数順と256ノードを使います。いずれも16変数の全組合せを必ず調べるわけではありません。疎な場合の部分改善の保存はD.3のとおりです。修復後は、その時点での保存候補を読み込み直します。
+
+通常の厳密探索とこの修復は、テンプレートの引数でコンパイル時に区別しています。これは「実行中に毎回切り替える」のではなく、用途の違う処理をあらかじめ別々に用意する仕組みです。通常の厳密探索には、修復専用のコピー・並べ替え・違反下界の判定を入れません。
+
+また、この強化を使うのは、初期解を渡さず、探索履歴もない新規の `solve` だけです。初期解を渡す場合、継続探索、モデル更新後の探索、`improve` では従来の修復を使います。すでにある候補の近くを直す場合まで手順を変えると、目的値を落とす例があったためです。`reset_search()` 後に初期解なしで `solve` すれば、新規探索として強化が有効になります。公開APIに新しいスイッチを追加する必要はありません。
 
 この部分修復は、**実行可能解がすでにある状態で目的値を磨くためには呼ばれません**。また、利用者が呼ぶ`improve`とは異なり、内部が違反行の周辺を選ぶ処理です。
 
@@ -1712,4 +1777,3 @@ $n$を変数数、$m$を行数、$K$を正規化後に残った項数、$k_ {j}$
 多値変数も、たとえば「値0を選ぶ」「値1を選ぶ」「値2を選ぶ」という3個の0–1変数と、ちょうど1個選ぶ等式で表せます。そのとき元の値は$0x_ {0}+1x_ {1}+2x_ {2}$です。ただし変数数と条件が増えます。表現できるからといって、専用の整数・連続最適化より有利とは限りません。
 
 本ガイドの小さな例は、式を手で追ってAPIの意味を学ぶためのものです。多くは小規模な厳密探索で解けます。大規模なAHCにおける解品質や実行時間を示すベンチマークではありません。最後の3例では、18変数を超えるモデル、継続、再現性、部分探索も実際に通るようにしています。
-

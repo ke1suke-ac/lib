@@ -1,6 +1,6 @@
 # heuristic_steiner_tree — 利用ガイド
 
-対象ソース：[heuristic_steiner_tree_v17.hpp](heuristic_steiner_tree_v17.hpp)。単一ヘッダで使う、非負整数費用の無向グラフ向け接続ライブラリである。本書は、このヘッダの公開APIと実際の動作を説明する。
+対象ソース：[heuristic_steiner_tree_v19.hpp](heuristic_steiner_tree_v19.hpp)。単一ヘッダで使う、非負整数費用の無向グラフ向け接続ライブラリである。本書は、このヘッダの公開APIと実際の動作を説明する。
 
 初めて使う場合は1・2章で問題との適合性を確認し、4章から目的に合うユースケースを選ぶ。4・6・8章の **U01〜U18** は対応している。5章は設定一覧、7章は制約、9章は実装の説明である。
 
@@ -16,7 +16,7 @@
 
 入力は無向グラフ、各辺の非負費用、terminal集合である。
 
-$$\min_{F\subseteq E}\ C(F)=\sum_{e\in F}c_e\quad\text{subject to all vertices in }T\text{ being connected in }(V,F)$$
+$$\min_ {F\subseteq E}\ C(F)=\sum_ {e\in F}c_ {e}\quad\text{subject to all vertices in }T\text{ being connected in }(V,F)$$
 
 | 記号 | 意味 |
 |---|---|
@@ -26,7 +26,7 @@ $$\min_{F\subseteq E}\ C(F)=\sum_{e\in F}c_e\quad\text{subject to all vertices i
 | $T\subseteq V$ | 接続が必須のterminal集合 |
 | $F\subseteq E$ | 選ぶ辺集合。これが求める解 |
 | $e$ | 辺1本を表す添字 |
-| $c_e\geq0$ | 辺 $e$ を選んだときの費用 |
+| $c_ {e}\geq0$ | 辺 $e$ を選んだときの費用 |
 | $C(F)$ | 選択した全辺の費用合計 |
 
 制約は「全terminalが相互に行き来できること」を意味する。terminal以外の頂点の使用は任意である。目的は総費用の最小化なので、コストは小さいほどよい。各terminalまでの距離を足す目的関数ではなく、使う辺に一度ずつ課金する目的関数である。
@@ -37,13 +37,13 @@ $$\min_{F\subseteq E}\ C(F)=\sum_{e\in F}c_e\quad\text{subject to all vertices i
 
 既設辺を残し、その建設費を支払い済みとして扱う問題も解ける。この場合の目的は追加費用の最小化になる。
 
-$$\min_{A\subseteq E\setminus B}\ C_{\mathrm{add}}(A)=\sum_{e\in A}c_e\quad\text{subject to all vertices in }T\text{ being connected in }(V,B\cup A)$$
+$$\min_ {A\subseteq E\setminus B}\ C_ {\mathrm{add}}(A)=\sum_ {e\in A}c_ {e}\quad\text{subject to all vertices in }T\text{ being connected in }(V,B\cup A)$$
 
 | 追加の記号 | 意味 |
 |---|---|
 | $B\subseteq E$ | 撤去不能な既設辺集合。辺の入力費用にかかわらず今回の課金は0 |
 | $A\subseteq E\setminus B$ | 新たに追加する辺集合 |
-| $C_{\mathrm{add}}(A)$ | 今回追加する辺だけの費用合計 |
+| $C_ {\mathrm{add}}(A)$ | 今回追加する辺だけの費用合計 |
 | $B\cup A$ | 利用者が保持する実際のネットワーク |
 
 全ての既設辺を残すため、実際のネットワークには閉路や、今回のterminalとは無関係な成分が残ることもある。既設成分同士まで必ずつなぎたい場合は、それぞれの代表頂点をterminalへ追加する。
@@ -52,7 +52,7 @@ $$\min_{A\subseteq E\setminus B}\ C_{\mathrm{add}}(A)=\sum_{e\in A}c_e\quad\text
 
 最適性が必要な場合や問題が小さい場合は、以下を先に検討する。ここで挙げる厳密解法は、このヘッダの公開solverに切り替えモードとして実装されているものではない。**厳密解法を完走できれば、その最適費用は本ライブラリの実行可能解の費用以下になる。常に差が出るわけではない。**
 
-以下では $N=|V|$、$M=|E|$、$K=|T|$ とする。
+以下では $N=\lvert V\rvert$、$M=\lvert E\rvert$、$K=\lvert T\rvert$ とする。
 
 | 条件 | 厳密解法と利用判断 |
 |---|---|
@@ -190,7 +190,7 @@ LNS（大きな近傍を調べる探索）などで、現在解の高価な部�
 
 ### 5.1 ヘッダと環境
 
-`heuristic_steiner_tree_v17.hpp` をソースと同じディレクトリへ置き、`#include "heuristic_steiner_tree_v17.hpp"` とする。外部ライブラリへのリンクは不要で、AC Libraryやhash mapヘッダも必要ない。`bits/stdc++.h`、`__builtin_clzll`、`__INCLUDE_LEVEL__` を使うためGNU系環境を前提にする。本書のコード例はC++20で記述し、GCC 13.3.0で検証している。GCC 12.2での実機検証は行っていない。
+`heuristic_steiner_tree_v19.hpp` をソースと同じディレクトリへ置き、`#include "heuristic_steiner_tree_v19.hpp"` とする。外部ライブラリへのリンクは不要で、AC Libraryやhash mapヘッダも必要ない。`bits/stdc++.h`、`__builtin_clzll`、`__INCLUDE_LEVEL__` を使うためGNU系環境を前提にする。本書のコード例はC++20で記述し、GCC 13.3.0で検証している。GCC 12.2での実機検証は行っていない。
 
 8章の共通定義に続いて必要な例と呼び出し用 `main()` を `example.cpp` に置いた場合、例えば次でビルドする。
 
@@ -243,9 +243,9 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror example.cpp -o ex
 
 $N$ を頂点数、$K$ を重複除去後のterminal数とすると、表の論理サイズは次のとおり。
 
-$$B_{\mathrm{cache}}=KN\bigl(\operatorname{sizeof}(\texttt{long long})+\operatorname{sizeof}(\texttt{int})\bigr)$$
+$$B_ {\mathrm{cache}}=KN\bigl(\operatorname{sizeof}(\texttt{long long})+\operatorname{sizeof}(\texttt{int})\bigr)$$
 
-$B_{\mathrm{cache}}$ は距離と親辺表の合計byte数で、通常は $12KN$ byte。例えば $N=10000$、$K=20$ なら約2.29 MiBである。CSRや作業配列などのメモリは別途必要になる。
+$B_ {\mathrm{cache}}$ は距離と親辺表の合計byte数で、通常は $12KN$ byte。例えば $N=10000$、$K=20$ なら約2.29 MiBである。CSRや作業配列などのメモリは別途必要になる。
 
 `auto_select` は、`fast` 以外・$K\leq32$・表が `memory_limit_bytes/2` 以下・時間見積りに収まる、という条件でcacheを選ぶ。`terminal_cache_auto_max_k()` はこの32を返す。明示 `terminal_cache` なら $K>32$ も指定可能だが、表が `memory_limit_bytes` を超える場合や処理前に時間切れの場合は `on_demand` に切り替わる。保存済み表があることだけで、自動選択がcacheに変わるわけではない。
 
@@ -289,6 +289,45 @@ U02〜U08・U13・U14・U16は、同じsolverを複数回使いやすい。U09�
 | `improvement_count` | `int`、0 | 局所改善を採用した回数。全ての最良候補更新を数える値ではない |
 | `dijkstra_count` | `long long`、0 | 今回実行した全域・増分・打切りDijkstraの回数。再利用した表の行は数えない |
 | `edge_relaxation_count` | `long long`、0 | Dijkstraで調べた有向arc数。無向辺の両方向や、改善しなかった走査も含む |
+
+### 6.2 結果をそのままデバッグ出力する
+
+`heuristic_steiner_tree_result`、`heuristic_steiner_tree_augmentation_result`、`heuristic_steiner_tree_statistics` は `std::ostream& operator<<(std::ostream&, const 型&)` に対応する。`std::cout`、`std::cerr`、`std::ostringstream` へ直接渡せる。
+
+```cpp
+#include "heuristic_steiner_tree_v19.hpp"
+
+// 小さなグラフで通常結果・増設結果・探索統計を確認する。
+void debug_steiner_tree_results() {
+    heuristic_steiner_tree solver(3);
+    solver.add_edge(0, 1, 2); // 辺ID 0
+    solver.add_edge(1, 2, 5); // 辺ID 1
+    const std::vector<int> terminals{0, 2};
+
+    const auto result = solver.solve(terminals);
+    std::cerr << result << '\n';
+    std::cerr << result.statistics << '\n'; // 統計だけでも出力できる
+
+    const auto added = solver.augment(terminals, {0});
+    std::cerr << added << '\n'; // 既設の辺ID 0を除く追加辺・追加費用を表示
+
+    // normalize / improve / repair の戻り値も同じように出力できる。
+    std::cerr << solver.normalize(terminals, {0, 1}) << '\n';
+}
+```
+
+たとえば、上の `normalize` の結果は次の1行になる。
+
+```text
+result{ok=true, cost=7, edges(2)=[0, 1], statistics={path_mode_used=on_demand, path_memory_bytes=0, initial_solution_count=0, restart_count=0, local_move_count=0, improvement_count=0, dijkstra_count=0, edge_relaxation_count=0}}
+```
+
+- 通常結果は `result{ok=..., cost=..., edges(総数)=[...], statistics={...}}`、増設結果は `augmentation_result{ok=..., added_cost=..., added_edges(総数)=[...], statistics={...}}` の形式。
+- `edges` と `added_edges` は保存順で先頭20要素まで表示する。21要素以上なら `...` を添える。たとえば25辺なら `edges(25)=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ...]` と表示する。空配列は `edges(0)=[]`。
+- 統計は全8フィールドを表示し、`path_mode_used` は `auto_select`・`terminal_cache`・`on_demand` の名前で表示する。早期returnでは統計の既定値が表示される。
+- `ok` は常に `true` / `false`。失敗時も各フィールドを表示するが、費用や辺が有効かどうかは必ず `ok` で判定する。
+- 改行は自動で付かないので、必要な箇所に `'\n'` を付ける。数値は出力先の書式に従い、`boolalpha` などの書式設定を変更しない。
+- 出力は結果を変更せず、solverを再実行しない。通常結果・増設結果の出力処理は配列長によらず先頭20要素まで、統計だけの出力は定数時間で行う。競技の提出出力と分けたいときは `std::cerr` を使う。
 
 ### U01 `solve` で新規構築する
 
@@ -399,7 +438,7 @@ U02〜U08・U13・U14・U16は、同じsolverを複数回使いやすい。U09�
 | 注意点 | 扱い |
 |---|---|
 | `inf()` | `std::numeric_limits<long long>::max()/4`。64bit環境で2305843009213693951。到達可能な距離はこれ未満に収める |
-| 費用和 | 入力辺1本が `long long` に入るだけでは不十分。経路・候補・固定費・ペナルティの加算も範囲内にする。全入力辺の非負費用和を `inf()` 未満にするのは安全側の十分条件。追加の評価項は別途検査する |
+| 費用和 | 入力辺1本が `long long` に入るだけでは不十分。経路・候補・固定費・ペナルティの加算も範囲内にする。全入力辺の非負費用和を `inf()` 未満にするのは安全側の十分条件。`augment` のbase辺の元費用は追加費用に加算しない。追加の評価項は別途検査する |
 | 頂点・辺・arcの数 | IDと内部の個数には `int` を使う。無向辺を2arcに展開し、木の隣接配列も2倍の添字を使う。`2M`・`2(N-1)` なども `int` 範囲内にする。巨大な配列積が `size_t` を超える入力も扱えない |
 | terminal番号 | 全て `0..n-1`。重複と並びは内部で正規化する。0〜1個の早期returnでも不正番号を許してよいわけではない |
 | 辺ID | このsolverが返したIDだけを使う。別グラフのIDは同じ整数でも別の辺。U15では外部IDで対応付ける |
@@ -429,7 +468,7 @@ U02〜U08・U13・U14・U16は、同じsolverを複数回使いやすい。U09�
 solverを受け取る例は、呼び出し元で `auto solver = make_solver(graph);` と作って保持する。頂点・辺IDはそのsolverに対して有効なものを渡す。`options` は省略可能で、5章の全既定値を使う。成功時にのみ費用・辺を使う。候補列や段階列を処理する例の `time_limit_ms` は1回ごとの目標であり、列全体の上限ではない。
 
 ```cpp
-#include "heuristic_steiner_tree_v17.hpp"
+#include "heuristic_steiner_tree_v19.hpp"
 
 using Solver = heuristic_steiner_tree;
 using Options = heuristic_steiner_tree_options;
@@ -997,7 +1036,9 @@ GeometricAnswer connect_geometric_candidates(
 
 ### 8.19 コードの検証範囲
 
-本章のコードブロックをMarkdownから直接抽出し、共通定義と各例の組合せを独立した翻訳単位としてstrict C++20でコンパイルした。全例を同時に含む実行テストでは、全18関数を呼び、返却辺の連結性・費用・ID変換・固定辺保持を検査した。空集合、接続不能、0費用、多重辺、terminal変更、既設成分のanchor、cache切替、グラフ再構築、1行・1列格子なども対象にした。ASan／UBSanでも実行した。詳しい再現方法と検査結果は配布物の `guide_validation/` に含む。
+本章の18例と共通定義をMarkdownから直接抽出し、全例を同じ翻訳単位へまとめてC++20で警告付きコンパイルを確認した。6.2節のデバッグ出力例は実行し、表示結果を掲載例と照合した。
+
+ヘッダの自己テストには、結果出力の全フィールド、空配列、20件・21件の境界、大量の辺ID、成功・失敗、全最短路モード、出力先の書式設定を確認する検査を含む。自己テストは通常ビルド、`NDEBUG`、ASan／UBSanで実行した。公開APIの機能回帰と、複数の翻訳単位からの利用も検査した。
 
 この検証はサンプルの動作確認であり、任意入力の最適性証明ではない。
 

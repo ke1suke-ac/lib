@@ -24,6 +24,7 @@
  *   options.seed = 123456789;
  *   options.algorithm = generalized_assignment_solver::profile::alns;
  *   auto result = solver.solve(options);
+ *   std::cerr << result << '\n';
  *
  * result.option_ids[i] は add_option の戻り値、result.agent_of_job[i] は割当先を表す。
  * 実行可能解を発見できなかった場合も、未割当仕事数が最も少ない解を返す。
@@ -113,6 +114,42 @@ struct generalized_assignment_solver {
 
         // 全仕事が割当済みで容量超過もなければ true を返す / O(1)
         bool feasible() const { return unassigned_count == 0 && total_overflow == 0; }
+
+        // 結果を名前付きで出力し、各配列は先頭20要素まで表示する / O(min(N, 20) + min(A, 20))
+        friend std::ostream& operator<<(std::ostream& os, const result& value) {
+            // 修復状態は列挙値の名前、真偽値はストリームの設定によらず文字列で表示する
+            const char* status = "unknown";
+            switch (value.repair_state) {
+                case repair_status::not_requested: status = "not_requested"; break;
+                case repair_status::completed: status = "completed"; break;
+                case repair_status::invalid_input: status = "invalid_input"; break;
+                case repair_status::fixed_part_infeasible: status = "fixed_part_infeasible"; break;
+            }
+            os << "result{feasible=" << (value.feasible() ? "true" : "false")
+               << ", objective=" << value.objective
+               << ", unassigned_count=" << value.unassigned_count
+               << ", total_overflow=" << value.total_overflow
+               << ", iterations=" << value.iterations
+               << ", lower_bound=" << value.lower_bound
+               << ", initial_solution_used=" << (value.initial_solution_used ? "true" : "false")
+               << ", repair_state=" << status;
+
+            // 配列ごとの要素数を併記し、上限を超える要素は走査せず省略する
+            auto print_array = [&](const char* name, const auto& values) {
+                os << ", " << name << '[' << values.size() << "]=[";
+                std::size_t count = std::min<std::size_t>(values.size(), 20);
+                for (std::size_t i = 0; i < count; ++i) {
+                    if (i != 0) os << ", ";
+                    os << values[i];
+                }
+                if (values.size() > count) os << ", ...";
+                os << ']';
+            };
+            print_array("option_ids", value.option_ids);
+            print_array("agent_of_job", value.agent_of_job);
+            print_array("load_of_agent", value.load_of_agent);
+            return os << '}';
+        }
     };
 
     struct assignment_option {
@@ -1568,6 +1605,70 @@ inline generalized_assignment_solver::result generalized_assignment_solver::eval
 
 #if __INCLUDE_LEVEL__ == 0
 int main() {
+    // デバッグ出力の空配列・境界・状態名・連結出力を確認する
+    {
+        using S = generalized_assignment_solver;
+        auto require = [](bool ok) {
+            if (!ok) { std::cerr << "debug output test failed\n"; std::abort(); }
+        };
+        auto dump = [](const S::result& value) {
+            std::ostringstream os;
+            os << value;
+            return os.str();
+        };
+        require(dump({}) == "result{feasible=true, objective=0, unassigned_count=0, "
+            "total_overflow=0, iterations=0, lower_bound=-inf, initial_solution_used=false, "
+            "repair_state=not_requested, option_ids[0]=[], agent_of_job[0]=[], load_of_agent[0]=[]}");
+        S::result value{.option_ids = {2, -1}, .agent_of_job = {0, -1},
+                        .load_of_agent = {3}, .objective = -7, .total_overflow = 2,
+                        .unassigned_count = 1, .iterations = 42, .lower_bound = -8.5,
+                        .initial_solution_used = true, .repair_state = S::repair_status::completed};
+        require(dump(value) == "result{feasible=false, objective=-7, unassigned_count=1, "
+            "total_overflow=2, iterations=42, lower_bound=-8.5, initial_solution_used=true, "
+            "repair_state=completed, option_ids[2]=[2, -1], agent_of_job[2]=[0, -1], load_of_agent[1]=[3]}");
+        for (auto [status, name] : {std::pair{S::repair_status::not_requested, "not_requested"},
+                {S::repair_status::completed, "completed"},
+                {S::repair_status::invalid_input, "invalid_input"},
+                {S::repair_status::fixed_part_infeasible, "fixed_part_infeasible"}}) {
+            value.repair_state = status;
+            require(dump(value).find(std::string("repair_state=") + name + ',') != std::string::npos);
+        }
+        for (int size : {0, 1, 19, 20, 21, 100000}) {
+            value.option_ids.resize(size);
+            value.agent_of_job.resize(size);
+            value.load_of_agent.resize(size);
+            std::iota(value.option_ids.begin(), value.option_ids.end(), 0);
+            std::iota(value.agent_of_job.begin(), value.agent_of_job.end(), 0);
+            std::iota(value.load_of_agent.begin(), value.load_of_agent.end(), 0LL);
+            const std::string output = dump(value);
+            for (const char* name : {"option_ids", "agent_of_job", "load_of_agent"}) {
+                const std::string prefix = std::string(name) + '[' + std::to_string(size) + "]=[";
+                std::size_t begin = output.find(prefix);
+                require(begin != std::string::npos);
+                begin += prefix.size();
+                std::string body = output.substr(begin, output.find(']', begin) - begin);
+                require((body.find("...") != std::string::npos) == (size > 20));
+                std::replace(body.begin(), body.end(), ',', ' ');
+                std::istringstream input(body);
+                long long number = -1;
+                int count = 0;
+                while (input >> number) require(number == count++);
+                require(count == std::min(size, 20));
+            }
+        }
+        value = {};
+        value.total_overflow = 1;
+        require(dump(value).find("feasible=false") != std::string::npos);
+        value.total_overflow = 0;
+        value.unassigned_count = 1;
+        require(dump(value).find("feasible=false") != std::string::npos);
+        std::ostringstream os;
+        os << std::boolalpha << std::hex << std::fixed << std::setprecision(3) << std::setfill('_');
+        const auto flags = os.flags();
+        require(&(os << std::as_const(value) << '\n') == &os);
+        require(os.flags() == flags && os.precision() == 3 && os.fill() == '_');
+    }
+
     auto exact_cost = [&](const generalized_assignment_solver& solver) {
         const auto& options = solver.options();
         int jobs = solver.job_count();

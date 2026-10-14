@@ -4,7 +4,7 @@
 
 対象は `capacitated_router_v05.hpp` です。数学は高校までの知識を前提とします。C++の変数、配列、関数、`for` 文を知っていれば読み進められます。ライブラリ固有の用語や、`std::optional` などの使い方は登場時に説明します。
 
-このガイドの27本のC++例は、それぞれ独立したプログラムです。前の例からコードを補う必要はありません。例題一式には同じヘッダ、全例の `.cpp`、実行結果、検証スクリプトを含めています。本文の数式は `$...$` と `$$...$$` に対応するMarkdownリーダーを想定します。
+このガイドの28本のC++例は、それぞれ独立したプログラムです。前の例からコードを補う必要はありません。例題一式には同じヘッダ、全例の `.cpp`、実行結果、検証スクリプトを含めています。本文の数式は `$...$` と `$$...$$` に対応するMarkdownリーダーを想定します。
 
 | 章 | 学ぶこと | コード例 |
 |---|---|---|
@@ -14,7 +14,7 @@
 | 16〜23 | 初期解、追加計算、時間、固定、ターン更新 | 13〜20 |
 | 24〜28 | 独自の費用・通行条件、小数 | 21〜25 |
 | 29〜30 | 状態展開と複数試行 | 26〜27 |
-| 31〜33 | API索引、実装付録、検証方法 | 参照用 |
+| 31〜33 | API索引、デバッグ出力、実装付録、検証方法 | 28と参照用 |
 
 ## 1. 何を解くライブラリか
 
@@ -903,7 +903,7 @@ int main() {
 
 ```text
 time_limit total=1
-iterations=4014 paths=4013 labels=0 accepted=4013 elapsed_us=2000
+iterations=3818 paths=3818 labels=0 accepted=3817 elapsed_us=6060
 ```
 
 `Clock` は `std::chrono::steady_clock` です。時刻合わせで時計が飛ばない、経過時間の測定用時計を使います。20,000マイクロ秒は20ミリ秒、2,000マイクロ秒は2ミリ秒です。桁区切りの `'` は値を変えません。
@@ -1653,6 +1653,8 @@ ProblemとModelの参照先はSolver使用中に有効である必要があり�
 
 `Route`、`Solution`、`Value` は `==` で比較できます。経路の同じ費用を調べる比較ではなく、保存されたフィールドが等しいかを比較します。`double` の `Value` の等値比較も、自動的に誤差を許すものではありません。
 
+これらを含む結果の各型は `std::ostream` へ直接出力できます。31.5節に、そのまま実行できる例を示します。
+
 ### 31.4 AHCへ導入する順番
 
 1. 公式の条件が、単純路、加算する消費、共有容量、要求別上限、Modelの費用に合うかを確認します。
@@ -1662,6 +1664,76 @@ ProblemとModelの参照先はSolver使用中に有効である必要があり�
 5. ターン制なら、入力不変は `resume`、属性更新は `refresh`、接続構造更新は `reset` を使い分けます。
 
 単一ファイル提出が必要なら、ヘッダのライブラリ本体部分と利用コードを1つにまとめます。配布ヘッダの末尾には自己テストがあり、`#if __INCLUDE_LEVEL__ == 0` 以降はヘッダを直接コンパイルしたとき用です。単に全内容を貼り付けるとテストの `main` が有効になるため、提出時はその自己テスト部分を除き、利用例のヘッダへの `#include` も除きます。通常のヘッダ利用では自己テストは含まれません。
+
+### 31.5 結果をそのままデバッグ出力する
+
+**例28 — `examples/28_debug_output.cpp`**
+
+`solve`、`improve`、`resume` の戻り値 `Result` と、`evaluate` の戻り値 `Evaluation` は、`std::cout << result` や `std::cerr << result` の形で出力できます。`operator<<` が実装されているため、項目を1個ずつ取り出す必要はありません。
+
+この例は頂点0から21までを順につなぎます。頂点は22個、辺は21本です。`add_arc(v, v + 1, 1, 1)` は頂点 `v` から次の頂点への費用1・容量1の辺です。要求は1件で経路も一意なので、初期構築1反復で費用21になります。
+
+```cpp
+#include "capacitated_router_v05.hpp"
+#include <iostream>
+
+int main() {
+    using R = CapacitatedRouter<>;
+    R::Problem p(22);
+    for (int v = 0; v < 21; ++v) p.add_arc(v, v + 1, 1, 1);
+    p.add_request(0, 21);
+    auto solver = R::make_solver(p);
+    R::Limits limits;
+    limits.time_limit_us = -1;
+    limits.max_iterations = 1;
+    const auto& result = solver.solve(limits);
+    assert(result.feasible());
+    assert(result.solution.routes[0].arcs.size() == 21);
+    assert(result.summary.value->total() == 21);
+    std::cout << result << '\n';
+    std::cout << solver.evaluate(result.solution) << '\n';
+    // std::cerr << result << '\n'; also works.
+}
+```
+
+出力例（`elapsed_us` は実行ごとに変わります）：
+
+```text
+Result{stop_reason=IterationLimit,
+  summary=Summary{feasible=true, value=Value{reject_cost=0, route_cost=21, resource_cost=0, total=21}, missing_required=0, overloaded_resources=0, locally_invalid_requests=0, forbidden_requests=0, fixed_mismatches=0},
+  statistics=Statistics{iterations=1, path_searches=1, label_searches=0, accepted=1, elapsed_us=13},
+  solution=Solution{routes=[0: Route{connected=true, arcs=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ... (+1 more)]}]}}
+Evaluation{summary=Summary{feasible=true, value=Value{reject_cost=0, route_cost=21, resource_cost=0, total=21}, missing_required=0, overloaded_resources=0, locally_invalid_requests=0, forbidden_requests=0, fixed_mismatches=0},
+  resource_load=[0: 1, 1: 1, 2: 1, 3: 1, 4: 1, 5: 1, 6: 1, 7: 1, 8: 1, 9: 1, 10: 1, 11: 1, 12: 1, 13: 1, 14: 1, 15: 1, 16: 1, 17: 1, 18: 1, 19: 1, ... (+1 more)],
+  missing_required=[],
+  overloaded_resources=[],
+  forbidden_requests=[],
+  fixed_mismatches=[],
+  local_violations=[]}
+```
+
+`Result` には停止理由、制約充足と費用の概要、探索統計、経路が表示されます。`Evaluation` には概要に加え、資源使用量と違反した要求・資源の詳細が表示されます。停止理由は `IterationLimit` などの名前です。
+
+配列は**それぞれ先頭20要素まで**を表示します。`... (+1 more)` は残り1要素の省略です。今回の辺ID列は0〜19を表示し、辺20を省略します。経路の費用と実際の辺数は21のままで、データを切り詰めるわけではありません。
+
+`routes` の `0:` は要求ID、`resource_load` の `0:` は資源IDです。経路が20件を超える場合は経路配列も省略し、表示する各経路の辺列も独立に20本までに制限します。`missing_required` などの違反配列は、要素自体が要求ID・資源IDです。
+
+| 出力したい内容 | そのまま渡せる値 |
+|---|---|
+| 探索結果全体 | `result` |
+| 経路全体・1要求だけ | `result.solution`、`result.solution.routes[k]` |
+| 制約充足と費用の概要 | `result.summary` |
+| 費用内訳だけ | 値の存在を確認したうえで `*result.summary.value` |
+| 探索回数・時間だけ | `result.statistics` |
+| 停止理由だけ | `result.stop_reason` |
+| 評価と違反の詳細 | `solver.evaluate(result.solution)` |
+| 要求別上限違反1件 | `evaluation.local_violations[i]` |
+
+`value=none` は目的値を返せない状態です。`value=Value{...}` と表示されても、必須未接続などがあれば `feasible=false` になります。成功判定の意味は例12と同じです。`total` は和なので、辞書式目的の比較値そのものではありません。
+
+出力演算子は渡された値を表示するだけで、探索や全評価を自動では実行しません。この例の2行目の出力では、利用側が明示的に `evaluate` を呼んでいます。出力によって探索状態や結果の参照の有効期間は変わりません。
+
+`std::cout` を `std::cerr` に置き換えれば標準エラー出力に出せます。AHCの解を標準出力へ書く場合、デバッグ情報は `std::cerr` に出すと混ざりません。末尾の改行は自動で付けないので `<< '\n'` を加えます。小数の桁数などは出力先のストリーム設定に従い、演算子は設定を変更しません。デバッグ出力自体には時間が掛かるため、探索の各反復で大量に出力する使い方は避けます。
 
 ## 32. 付録：実装アルゴリズムの概要
 
@@ -1818,7 +1890,7 @@ IDは `int`、容量・消費・要求量は `int64_t` を前提とします。�
 
 ## 33. このガイドの検証
 
-本文の各C++ブロックは、同梱の `.cpp` と同じ内容です。27本を独立に `-std=c++20 -O2 -Wall -Wextra` でコンパイルし、実行時の確認と標準出力を照合しました。数学的な最適性の一般的保証をテストしたという意味ではなく、各教材が説明どおり動くことの確認です。
+本文の各C++ブロックは、同梱の `.cpp` と同じ内容です。28本を独立に `-std=c++20 -O2 -Wall -Wextra` でコンパイルし、実行時の確認と標準出力を照合しました。数学的な最適性の一般的保証をテストしたという意味ではなく、各教材が説明どおり動くことの確認です。
 
 同梱ディレクトリでPython 3とGCCを使い、次のコマンドで再実行できます。
 
@@ -1826,6 +1898,6 @@ IDは `int`、容量・消費・要求量は `int64_t` を前提とします。�
 python3 check_examples.py
 ```
 
-`verification/examples.json` にコンパイラ、ヘッダのSHA-256、各例の出力と結果があります。時間制限例の統計値は固定値として照合せず、費用・成功・停止理由と出力形式を確認します。例02は同費用の要求割当てが入れ替わっても許容します。
+`verification/examples.json` にコンパイラ、ヘッダのSHA-256、各例の出力と結果があります。時間制限例の統計値と例28の `elapsed_us` は固定値として照合せず、費用・成功・停止理由と出力形式を確認します。例02は同費用の要求割当てが入れ替わっても許容します。
 
 外部Markdownリーダー向けに、見出し・表・コードブロック・数式の前処理を確認し、本文で使った数式をLaTeXでも検証しています。数式の表示には、利用するリーダー側の数式拡張を有効にしてください。

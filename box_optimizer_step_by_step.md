@@ -1,6 +1,6 @@
 # BoxOptimizer ステップバイステップガイド
 
-対象：`box_optimizer_v06.hpp`。C++20 / GCC 12.2で動作確認した、外部Markdownリーダー向けの学習用ガイドです。
+対象：`box_optimizer_v06.hpp`。C++20 / GCC 13.3で動作確認した、外部Markdownリーダー向けの学習用ガイドです。
 
 必要な数学は、高校で扱う関数・二次関数・微分・確率を出発点にします。複数変数の微分や行列が必要になった箇所では、その意味から説明します。前半は使い方に集中し、内部アルゴリズムは最後の付録で扱います。
 
@@ -338,17 +338,6 @@ int main() {
 #include "box_optimizer_v06.hpp"
 using namespace std;
 
-const char* stop_name(BoxResult::Stop stop) {
-    switch (stop) {
-        case BoxResult::Stop::TargetReached: return "TargetReached";
-        case BoxResult::Stop::TimeLimit: return "TimeLimit";
-        case BoxResult::Stop::EvaluationLimit: return "EvaluationLimit";
-        case BoxResult::Stop::LocalStop: return "LocalStop";
-        case BoxResult::Stop::AllFixed: return "AllFixed";
-    }
-    return "Unknown";
-}
-
 int main() {
     BoxProblem problem;
     problem.bounds = {{0.0, 10.0}};
@@ -362,25 +351,17 @@ int main() {
     budget.max_evaluations = 0;
 
     auto empty_result = solver.solve(objective, budget);
-    cout << "first_has_value = " << empty_result.has_value() << '\n';
-    cout << "first_stop = " << stop_name(empty_result.stop) << '\n';
+    cout << "first = " << empty_result << '\n';
 
     budget.max_evaluations = 200;
     auto result = solver.solve(objective, budget);
-    if (!result.has_value()) return 0;
-    cout << "x = " << result.x[0] << '\n';
-    cout << "cost = " << result.cost << '\n';
-    cout << "evaluations = " << result.evaluations << '\n';
-    cout << "gradient_evaluations = " << result.gradient_evaluations << '\n';
-    cout << "total_evaluations = " << result.total_evaluations << '\n';
-    cout << "elapsed_us = " << result.elapsed_us << '\n';
-    cout << "stop = " << stop_name(result.stop) << '\n';
+    cout << "result = " << result << '\n';
 }
 ```
 
 ### 8.1 解が入っていない結果も正常な結果
 
-最初の`max_evaluations = 0`では目的関数を呼べません。したがって`first_has_value`は0、終了理由は`EvaluationLimit`です。
+最初の`max_evaluations = 0`では目的関数を呼べません。したがって`has_value()`はfalse、終了理由は`EvaluationLimit`です。表示では`cost=none`、`x=[]`になります。
 
 この場合の`x`は空、`cost`は正の無限大です。無限大を目的関数が返したのではなく、「まだ評価済みの解がない」という結果の表現です。
 
@@ -411,11 +392,27 @@ int main() {
 | `LocalStop` | その探索が局所的な終了条件に到達した |
 | `AllFixed` | 動かせる変数がなく、初回評価が終わった |
 
-`stop_name`は、この列挙値を表示用の文字列へ置き換えるだけの自作関数です。ライブラリを使うための必須部品ではありません。
+結果を`cout`や`cerr`へ渡すと、`stop`はこの名前で表示されます。利用者側で表示用の変換関数を用意する必要はありません。
 
 `LocalStop`は「もう少し近くを調べても変化しにくい、と実装の条件が判断した」という意味で、全体最適解の証明ではありません。
 
 同じ判定時点で複数の条件が成立すると、目標到達、全固定、局所停止、評価回数、時間の順に優先されます。例えば最後の1回で目標に達した場合は、`EvaluationLimit`より`TargetReached`が優先されます。
+
+### 8.4 結果をまとめてデバッグ出力する
+
+`cout << result`は、ライブラリにある`operator<<(ostream&, const BoxResult&)`を呼び出します。これは、`BoxResult`をどの順番・形式で表示するかを決める関数です。`solve`・`resume`・`box_optimize`の戻り値に共通して使えます。
+
+次のような1行になります。ここでは形が分かりやすい数値を例示しています。実際の経過時間などは実行ごとに変わります。
+
+```text
+BoxResult{cost=0.25, stop=EvaluationLimit, evaluations=200, gradient_evaluations=0, total_evaluations=200, elapsed_us=120.5, x=[2.5]}
+```
+
+`x`は最初の20要素までです。例えば25要素なら、20要素を表示した後に`... (25 total)`と付け、全体で25要素あると知らせます。結果の配列自体を切り詰めるわけではありません。空の配列は`[]`、未評価の目的値は`none`です。有効な0変数の結果なら、`x=[]`でも`cost`は数値になります。
+
+出力処理は結果や探索状態を書き換えず、未評価の結果にも使えます。改行は自動で付かないので、コードでは`'\n'`を続けています。数値は出力先の精度設定に従います。
+
+教材では画面で確認するため`cout`を使っています。AHC提出時のデバッグでは、`cout`を`cerr`へ置き換えると、解を出す標準出力へログを混ぜずに済みます。
 
 ## 9. Step 06：同じ問題へ追加予算を与える
 
@@ -1623,6 +1620,7 @@ Explore自体にも停滞後の探索継続があるため、外側の複数実�
 | `solve(objective, budget, initial)` | `budget`は既定予算、`initial`は空で箱の中央 | 新しい探索を開始する |
 | `resume(objective, budget)` | `budget`は既定予算 | 直前の探索へ追加予算を与える |
 | `box_optimize(problem, objective, budget, initial, param)` | 後ろの3引数は順に既定予算・空初期解・既定設定 | 構築から1回の探索までまとめる |
+| `out << result` | `out`は`cout`・`cerr`など | `BoxResult`の概要を1行で表示。配列は先頭20要素まで |
 
 `solve`と`box_optimize`の初期解は`span<const double>`で受け取ります。要素型が`double`の`vector`や`array`を渡せます。未指定を表す空の初期解は、非空の問題でも「箱の中央」を意味します。
 
@@ -2173,7 +2171,7 @@ g++ -std=c++20 -O2 submission.cpp -o submission
 
 ### J.3 このガイドの確認範囲
 
-GCC 12.2.0、C++20、O2、`-Wall -Wextra -Wshadow -Wconversion -Wno-expansion-to-defined`で全25例をコンパイルし、警告なしで実行しました。既知の最適点、再開時の回数、固定成分、勾配検算、変換後の制約、元の目的値との整合などを確認しています。
+GCC 13.3.0、C++20、O2、`-Wall -Wextra -Wshadow -Wconversion -Wno-expansion-to-defined`で全25例をコンパイルし、警告なしで実行しました。既知の最適点、再開時の回数、固定成分、勾配検算、変換後の制約、元の目的値との整合などを確認しています。Step 05では、未評価と評価済みの結果を`operator<<`で直接表示しています。
 
 時間制限を使う例の評価回数や、小数点以下の末尾は環境で変わるため、固定の出力文字列を正解とはしていません。時間内に必ず目標へ届く、という品質保証を行うテストでもありません。
 

@@ -1,6 +1,6 @@
-# facility_location_v11.hpp ユーザーガイド
+# facility_location_v13.hpp ユーザーガイド
 
-離散候補から施設・代表点・集合を選ぶC++20ライブラリのガイドです。ソースは`facility_location_v11.hpp`、掲載例をまとめた実行用ファイルは`facility_location_guide_examples_v11.cpp`です。
+離散候補から施設・代表点・集合を選ぶC++20ライブラリのガイドです。ソースは`facility_location_v13.hpp`、掲載例をまとめた実行用ファイルは`facility_location_guide_examples_v13.cpp`です。
 
 問題への当てはめ方は1〜4章、入力の準備と呼出し方は5〜8章、探索内部の仕組みは9章で説明します。4章・6章・8章の番号U01〜U17は対応しています。
 
@@ -20,15 +20,15 @@
 
 選択施設集合を$S$としたときの総費用を、次で定義します。
 
-$$J(S)=\sum_{i=0}^{Q-1}w_i\min\left(b_i,\min_{f\in S}c_{f,i}\right)+\sum_{f\in S}a_f$$
+$$J(S)=\sum_ {i=0}^{Q-1}w_ {i}\min\left(b_ {i},\min_ {f\in S}c_ {f,i}\right)+\sum_ {f\in S}a_ {f}$$
 
 この値を小さくする集合を求めます。
 
-$$\min_{S}J(S)$$
+$$\min_ {S}J(S)$$
 
 ただし、選択集合は次を満たします。
 
-$$|S|=K,\ F\subseteq S,\ S\subseteq F\cup A$$
+$$\lvert S\rvert=K,\ F\subseteq S,\ S\subseteq F\cup A$$
 
 |記号|意味|設定する内容|
 |---|---|---|
@@ -38,10 +38,10 @@ $$|S|=K,\ F\subseteq S,\ S\subseteq F\cup A$$
 |$f$|候補施設の番号|0から$M-1$|
 |$S$|実際に選ぶ施設IDの集合|solverが決める。重複はない|
 |$K$|選択する施設の総数|1以上$M$以下。必須施設もこの個数に含む|
-|$c_{f,i}$|施設$f$から需要点$i$をサービスする費用|有限・非負。距離、所要時間、損失など|
-|$w_i$|需要点$i$の重み|有限・非負。省略時は1|
-|$b_i$|需要点$i$のfallback費用|有限・非負。fallbackを省略したモデルでは$+\infty$とみなす|
-|$a_f$|施設$f$を選ぶこと自体の単項費用|有限。正なら負担、負なら選択報酬。省略時は0|
+|$c_ {f,i}$|施設$f$から需要点$i$をサービスする費用|有限・非負。距離、所要時間、損失など|
+|$w_ {i}$|需要点$i$の重み|有限・非負。省略時は1|
+|$b_ {i}$|需要点$i$のfallback費用|有限・非負。fallbackを省略したモデルでは$+\infty$とみなす|
+|$a_ {f}$|施設$f$を選ぶこと自体の単項費用|有限。正なら負担、負なら選択報酬。省略時は0|
 |$F$|必ず選択する施設集合|省略時は空集合|
 |$A$|追加選択を許す施設集合|省略時は全候補。必須施設は$A$の外にあっても選択できる|
 |$J(S)$|重み付きサービス費用と施設単項費用の合計|小さいほど良い。負になる場合もある|
@@ -62,9 +62,9 @@ $$|S|=K,\ F\subseteq S,\ S\subseteq F\cup A$$
 
 ### 2.1 少数の候補、または残り1施設なら全列挙を考える
 
-必須施設数を$F_c=|F|$、必須施設を除く許可候補数を$P_c=|A\setminus F|$、追加選択数を$R=K-F_c$とします。調べる施設集合は$\binom{P_c}{R}$通りです。これが十分小さければ、全組合せを評価する方が確実です。単純な評価なら1集合あたり$O(QK+K)$、合計で$O(\binom{P_c}{R}(QK+K))$です。何通りまで間に合うかは$Q$と実行環境を含めて測ります。
+必須施設数を$F_ {c}=\lvert F\rvert$、必須施設を除く許可候補数を$P_ {c}=\lvert A\setminus F\rvert$、追加選択数を$R=K-F_ {c}$とします。調べる施設集合は$\binom{P_ {c}}{R}$通りです。これが十分小さければ、全組合せを評価する方が確実です。単純な評価なら1集合あたり$O(QK+K)$、合計で$O(\binom{P_ {c}}{R}(QK+K))$です。何通りまで間に合うかは$Q$と実行環境を含めて測ります。
 
-$R=0$なら選ぶ集合は必須施設だけです。$R=1$なら、必須施設・fallbackによる現在のサービス費用を先に求め、残りの1施設を全候補で比較できます。固定基線の計算を含め$O(Q(F_c+P_c)+K)$程度です。必須施設のない$K=1$もこれに含まれます。施設単項費用や非対称費用があっても全候補を正しく評価すれば厳密です。
+$R=0$なら選ぶ集合は必須施設だけです。$R=1$なら、必須施設・fallbackによる現在のサービス費用を先に求め、残りの1施設を全候補で比較できます。固定基線の計算を含め$O(Q(F_ {c}+P_ {c})+K)$程度です。必須施設のない$K=1$もこれに含まれます。施設単項費用や非対称費用があっても全候補を正しく評価すれば厳密です。
 
 本ライブラリの`evaluate_k_median`は1つの非空集合の費用評価に使えます。全組合せの列挙機能はありません。一方、`solve_k_median`の最初の試行は最初の可動施設を全候補で比較するため、可動施設が1個だけの問題は、この処理だけで最適な選択が決まります。数値演算が正しく行えることが前提です。
 
@@ -80,7 +80,7 @@ $R=0$なら選ぶ集合は必須施設だけです。$R=1$なら、必須施設�
 
 先頭$j$点を$k$区間に分ける最小費用を$D[k,j]$、点$l$から$r$までを中央値1点で担当する費用を$C(l,r)$とすると、区切り位置$t$を全て調べるDPになります。
 
-$$D[k,j]=\min_{k-1\le t<j}\left(D[k-1,t]+C(t+1,j)\right)$$
+$$D[k,j]=\min_ {k-1\le t<j}\left(D[k-1,t]+C(t+1,j)\right)$$
 
 初期値は$D[0,0]=0$、それ以外の実行不能状態は無限大です。座標をソートし累積和で区間費用を求めれば、素朴なDPでも$O(KQ^2)$です。これはライブラリの汎用探索とは別に実装する厳密解法です。一次元絶対距離の区間費用とDPについては、[Grønlundほかの論文・4.2節](https://arxiv.org/html/1701.07204v4)を参照できます。
 
@@ -271,10 +271,10 @@ workspaceは`problem`を参照し続けます。workspaceが存在する間は�
 
 ### 5.1 コンパイル環境と入力型
 
-`facility_location_v11.hpp`をincludeできる場所に置きます。C++20、GCC、libstdc++を想定し、ヘッダは`<bits/stdc++.h>`を使います。ACLや`hash_map.hpp`は不要です。手元での例のビルドは次の形です。
+`facility_location_v13.hpp`をincludeできる場所に置きます。C++20、GCC、libstdc++を想定し、ヘッダは`<bits/stdc++.h>`を使います。ACLや`hash_map.hpp`は不要です。手元での例のビルドは次の形です。
 
 ```bash
-g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror facility_location_guide_examples_v11.cpp -o guide_examples
+g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror facility_location_guide_examples_v13.cpp -o guide_examples
 ./guide_examples
 ```
 
@@ -285,7 +285,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror facility_location
 |`Cost`|なし。明示する|普通の整数距離は`int`、大きな距離は`long long`、小数は`double`など|
 |`Calc`|`long long`|重み付きの積・和・差分を保持できる符号付き型。小数費用なら`double`または`long double`を明示|
 
-`Cost=double`で`Calc`を省略すると、計算時に整数へ変換されます。小数費用は`facility_location_problem<double, double>`などとします。`Calc`には改善差分を負に表せることが必要なので、符号なし整数は使いません。大きい整数合計にはGCCの`__int128_t`も使えますが、入出力は利用側で用意します。
+`Cost=double`で`Calc`を省略すると、計算時に整数へ変換されます。小数費用は`facility_location_problem<double, double>`などとします。`Calc`には改善差分を負に表せることが必要なので、符号なし整数は使いません。大きい整数合計にはGCCの`__int128_t`も使えます。結果構造体のデバッグ出力はこの型にも対応しますが、入力や`result.cost`単体の出力は利用側で用意します。
 
 ### 5.2 problemの全フィールド
 
@@ -303,7 +303,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror facility_location
 次はproblemを準備する完結した関数です。実際の入力では同じ順序で配列を埋めます。
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // 3候補・2需要点の例。戻り値をsolveやworkspaceの入力に使う。
 facility_location_problem<int, long long> make_preparation_example() {
@@ -429,6 +429,49 @@ one-shotの`improve`は初期vectorを値で受け取ります。lvalueを渡す
 |`evaluation_limit_reached`|`bool`、false|有限の評価上限にカウントが到達したか。上限0では評価0でもtrue|
 
 統計は探索全体の値で、最終的に返る最良解を作った1試行だけの値ではありません。`cost`は選択施設集合から再計算して返すので、同じ集合を`evaluate_k_median`で再評価できます。小数値の比較は、利用する費用尺度に応じた許容誤差で行います。
+
+#### 6.2.1 結果をそのままデバッグ出力する
+
+`facility_location_result<Calc>`と`facility_location_statistics`は、`std::ostream& operator<<(std::ostream&, const Xxx&)`に対応しています。`solve_k_median`、`improve_k_median`、`workspace.solve`、`workspace.improve`の結果に対して、`std::cerr << result << '\n';`と書けます。統計だけなら`std::cerr << result.statistics << '\n';`です。`std::cout`や`std::ostringstream`にも同じように渡せます。
+
+次は、入力を関数内で用意した実行例です。初期構築だけで求まる1施設の問題を使い、出力を再現しやすいよう候補評価上限を0にしています。通常の問題では、この設定をデバッグ出力のために変更する必要はありません。
+
+```cpp
+#include "facility_location_v13.hpp"
+
+// 小さな問題の結果と統計を出力する。出力先の省略時はcerr。問題サイズ固定でO(1)
+void print_facility_location_debug_example(std::ostream& os = std::cerr) {
+    facility_location_problem<int, long long> problem;
+    problem.demand_count = 3;
+    problem.candidate_count = 3;
+    // 施設0、施設1、施設2の順に、各需要点への費用を並べる
+    problem.cost = {0, 3, 6, 3, 0, 3, 6, 3, 0};
+    facility_location_options options;
+    options.initial_trials = 1;
+    options.max_perturbations = 0;
+    options.max_candidate_evaluations = 0;
+    const auto result = solve_k_median(problem, 1, options);
+    os << result << '\n';
+    os << result.statistics << '\n';
+}
+```
+
+`print_facility_location_debug_example();`を呼ぶと、次の2行を出力します。`print_facility_location_debug_example(std::cout);`なら標準出力へ書きます。
+
+```text
+facility_location_result{cost=6, facilities(size=1)=[1], assignment(size=3)=[1, 1, 1], statistics={candidate_evaluations=0, accepted_swaps=0, completed_initial_trials=1, completed_perturbations=0, deadline_reached=false, evaluation_limit_reached=true}}
+{candidate_evaluations=0, accepted_swaps=0, completed_initial_trials=1, completed_perturbations=0, deadline_reached=false, evaluation_limit_reached=true}
+```
+
+配列は**それぞれ先頭20要素まで**表示し、`size`は省略前の総要素数です。例えば施設IDが0から24までなら、施設集合の表示部分は次のようになります。
+
+```text
+facilities(size=25)=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ... (+5)]
+```
+
+`(+5)`は5要素を省略した意味です。空配列は`[]`、fallbackの割当ては`-1`と表示します。出力は結果を変更せず、末尾の改行も自動では付けません。配列長にかかわらず表示の仕事量を制限しており、出力演算子を呼ばない探索には追加処理はありません。
+
+真偽値は常に`true`／`false`です。通常の数値は出力先の書式に従い、必要なら`std::setprecision`などで小数の表示精度を設定します。出力演算子は書式フラグ・精度・埋め文字を変更しません。`Calc=__int128_t`の費用は、出力先の基数設定によらず十進数で表示します。
 
 ### 6.3 U01：費用表から解く
 
@@ -569,7 +612,7 @@ problem・初期集合・restrictionsを準備し、`repair_with_multiple_seeds(
 
 ライブラリはoverflowを検査しません。単に`LLONG_MAX`などを「到達不能」として格納すると、重み付き演算で壊れます。意味と値域の両方を確認した罰則費用を選びます。`numeric_limits<Cost>::max()`は内部の未設定距離にも使われるので、通常の費用は十分余裕を持った値域にします。
 
-小数の改善受理は厳密な`delta < 0`で、epsilonの設定項目はありません。加算誤差による微小差、厳密な同費用判定、丸めの違いに注意します。整数で表せる費用なら整数を使う方が検証しやすくなります。小数を定数倍して整数へ丸める方法は目的関数そのものを変えうるので、精度を決めずに行いません。
+小数の改善受理では、差分が`delta < 0`であることに加え、交換後に再計算した目的値が交換前より厳密に小さいことも確認します。改善していなければ交換を取り消し、内部状態を再構築します。施設単項費用は施設IDの昇順で加算し、同じ施設集合の加算順が探索中の並び方で変わらないようにします。epsilonの設定項目はありません。微小な改善を丸め誤差で見逃す可能性や、厳密な同費用判定には注意します。整数で表せる費用なら整数を使う方が検証しやすくなります。小数を定数倍して整数へ丸める方法は目的関数そのものを変えうるので、精度を決めずに行いません。
 
 ### 7.3 時間と探索量
 
@@ -616,12 +659,12 @@ fallbackが選ばれた需要点の割当ては-1、実施設と同額なら実�
 
 problemを引数で受ける例は、5章の通りに費用表・重みなどを準備して渡します。表や座標を受ける例は、関数内でproblemを構築します。どちらも入力値の有効性と数値演算の値域は利用側の前提です。各関数の直前に、配列の軸、個数、IDの意味、既定値、返却値をコメントしています。
 
-同梱の`facility_location_guide_examples_v11.cpp`には、本章の全17ブロックと実行確認用mainを収録しています。提出へ取り込むときは、必要な関数・結果型だけを使ってください。
+同梱の`facility_location_guide_examples_v13.cpp`には、本章の全17ブロック、6.2.1節のデバッグ出力例、実行確認用mainを収録しています。提出へ取り込むときは、必要な関数・結果型だけを使ってください。
 
 ### 8.1 U01：重み付き費用表
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U01: 候補×需要の費用表からK施設を選ぶ。
 // 入力 service_cost[f][i]: M行Q列、M,Q>0、有限・非負の整数費用。
@@ -666,7 +709,7 @@ facility_location_result<long long> solve_weighted_discrete_k_median(
 ### 8.2 U02：k-medoids
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U02: 入力データそのものからK代表を選ぶk-medoids。
 // 入力 dissimilarity[r][i]: 代表rから点iへの非負非類似度、N行N列。
@@ -721,7 +764,7 @@ k_medoids_answer solve_k_medoids(
 ### 8.3 U03：重み付きmaximum coverage
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U03: K集合による被覆重みを最大化する。
 // 入力 covers[s][i]: 集合sが要素iを覆うなら非0、覆わないなら0。
@@ -776,7 +819,7 @@ weighted_coverage_answer solve_weighted_maximum_coverage(
 ### 8.4 U04：マンハッタン距離
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U04: 離散座標候補からマンハッタン距離の小さいK拠点を選ぶ。
 // 入力 candidate_points: M>0個の候補座標、demand_points: Q>0個の需要座標。
@@ -827,7 +870,7 @@ facility_location_result<long long> solve_weighted_manhattan_k_median(
 ### 8.5 U05：グラフ最短路
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U05: 非負辺の有向グラフ上でK拠点を選ぶ。
 // 入力 graph[v]: (行先頂点, 非負int辺費用)の列。無向辺は両方向を登録。
@@ -935,7 +978,7 @@ graph_k_median_answer solve_graph_k_median(
 ### 8.6 U06：必須施設・候補制限
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U06: 必須施設と許可候補を守ってK施設を新規構築する。
 // 入力 problem: M×Q費用表などを5章の契約に従って準備済み。
@@ -960,7 +1003,7 @@ facility_location_result<long long> solve_constrained_k_median(
 ### 8.7 U07：既存解改善
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U07: 準備済みの施設集合から改善する。初期vectorは変更しない。
 // 入力 problem: 準備済み。initial_facilities: 重複なしの有効IDを1..M個。
@@ -985,7 +1028,7 @@ facility_location_result<long long> improve_existing_k_median_solution(
 ### 8.8 U08：LNS repair
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U08: 現在解の一部だけを動かすLNS repair。
 // 入力 problem: 準備済み。current_facilities: 重複なしの非空な現在集合。
@@ -1048,7 +1091,7 @@ facility_location_result<long long> repair_k_median_neighborhood(
 ### 8.9 U09：fallback
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U09: 外部サービスと新設K施設を需要点ごとに使い分ける。
 // 入力 problem: 準備済み。値渡しなのでlvalue入力はコピーされる。
@@ -1071,7 +1114,7 @@ facility_location_result<long long> solve_with_existing_service(
 ### 8.10 U10：施設単項費用
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U10: 地点別の単項費用・報酬を含めてK施設を選ぶ。
 // 入力 problem: 準備済み、lvalueならコピー。
@@ -1094,7 +1137,7 @@ facility_location_result<long long> solve_with_facility_selection_cost(
 ### 8.11 U11：追加の純改善量
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U11: 新設施設の費用も引いた、現状からの純改善量を求める。
 // 入力 problem: 新設候補だけをM行で用意。lvalueならコピー。
@@ -1146,7 +1189,7 @@ facility_augmentation_answer solve_facility_augmentation(
 ### 8.12 U12：Kの外側列挙
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U12: 複数のKを解き、総費用が最小の結果を選ぶ。
 // 入力 problem: 各Kを同じ尺度で比較できる費用表・設置費などを準備。
@@ -1194,7 +1237,7 @@ variable_k_median_answer solve_best_facility_count(
 ### 8.13 U13：workspaceと複数seed
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U13: 不変の問題を同じ初期集合から複数seedで改善し、最良を返す。
 // 入力 problem: 関数実行中に変更しない準備済み問題。
@@ -1235,7 +1278,7 @@ facility_location_result<long long> repair_with_multiple_seeds(
 ### 8.14 U14：絶対deadline
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U14: 外側で定めた絶対時刻を目標に、初期施設集合を改善する。
 // 入力 problemとinitial_facilities、restrictions: 準備済み・実行可能。
@@ -1262,7 +1305,7 @@ facility_location_result<long long> repair_until_deadline(
 ### 8.15 U15：候補評価上限
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U15: 時刻制限を使わず、初期試行・摂動・評価回数で探索量を制御する。
 // 入力 problem、K、restrictions: 準備済み・実行可能。
@@ -1289,7 +1332,7 @@ facility_location_result<long long> solve_with_evaluation_budget(
 ### 8.16 U16：小数・非対称費用
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U16: 小数の非対称サービス損失を、小数のまま最小化する。
 // 入力 directed_service_cost[f][i]: M行Q列、M,Q>0、有限・非負double。
@@ -1327,7 +1370,7 @@ facility_location_result<double> solve_asymmetric_service_loss(
 ### 8.17 U17：次ターンの条件変更
 
 ```cpp
-#include "facility_location_v11.hpp"
+#include "facility_location_v13.hpp"
 
 // U17: 新しい条件で前ターンの施設集合を改善する。
 // 入力 new_problem: 更新済みの全費用表・重みなど。関数中は不変。
@@ -1405,11 +1448,11 @@ one-shot関数は、fallback、施設単項費用、fixed、candidateが全て�
 
 2回目以降の初期試行では、最初の可動施設を乱数により変えます。実装は候補領域内の開始位置を乱数で選び、そこから最初の未選択施設を探します。未選択施設の集合から厳密に一様抽選する処理とは異なります。
 
-施設が1つ以上使える状態になった後は、現在サービス費用を$d_i$として、次の重みで需要点を抽選します。
+施設が1つ以上使える状態になった後は、現在サービス費用を$d_ {i}$として、次の重みで需要点を抽選します。
 
-$$p_i=\frac{w_i d_i^2}{\sum_{j=0}^{Q-1}w_j d_j^2}$$
+$$p_ {i}=\frac{w_ {i} d_ {i}^2}{\sum_ {j=0}^{Q-1}w_ {j} d_ {j}^2}$$
 
-ここで$p_i$は需要点$i$を選ぶ確率です。分母は全需要点の抽選重みの合計です。遠い、またはサービス費用が高く、かつ重要な需要を起点にするため、費用を二乗しています。合計が正でない場合は需要点を乱数で選びます。合計と抽選には`long double`を使います。
+ここで$p_ {i}$は需要点$i$を選ぶ確率です。分母は全需要点の抽選重みの合計です。遠い、またはサービス費用が高く、かつ重要な需要を起点にするため、費用を二乗しています。合計が正でない場合は需要点を乱数で選びます。合計と抽選には`long double`を使います。
 
 抽選した需要点に最も近い未選択施設を許可候補から探し、それを追加して全需要点の現在サービス費用を更新します。この段階では、その1需要点への近さで施設を選び、各追加施設の単項費用を改めて全体最適化するわけではありません。単項費用を含む本来の目的値は、後続の局所探索で評価します。
 
@@ -1427,19 +1470,19 @@ $$p_i=\frac{w_i d_i^2}{\sum_{j=0}^{Q-1}w_j d_j^2}$$
 
 現在の選択集合から施設$g$を削除し、未選択施設$h$を入れる操作を1-swapと呼びます。1組ずつ全需要を再評価すると、追加候補数×削除候補数×需要数の仕事が必要です。実装では追加候補$h$を固定し、全削除位置の差分をまとめて計算します。
 
-需要点$i$について、現在の最近費用を$d_{1,i}$、第2近傍費用を$d_{2,i}$、追加候補からの費用を$c_{h,i}$とします。まず$h$を追加するだけの差分は次です。
+需要点$i$について、現在の最近費用を$d_ {1,i}$、第2近傍費用を$d_ {2,i}$、追加候補からの費用を$c_ {h,i}$とします。まず$h$を追加するだけの差分は次です。
 
-$$\Delta_{add}(h)=a_h+\sum_{i=0}^{Q-1}w_i\left(\min(c_{h,i},d_{1,i})-d_{1,i}\right)$$
+$$\Delta_ {add}(h)=a_ {h}+\sum_ {i=0}^{Q-1}w_ {i}\left(\min(c_ {h,i},d_ {1,i})-d_ {1,i}\right)$$
 
-次に、現在実施設$g$が担当する需要点の集合を$I_g$とします。施設$g$を削除すると、その需要点は最近施設を失うため、第2近傍または追加施設へ切り替わります。削除する施設の単項費用も支払わなくなります。
+次に、現在実施設$g$が担当する需要点の集合を$I_ {g}$とします。施設$g$を削除すると、その需要点は最近施設を失うため、第2近傍または追加施設へ切り替わります。削除する施設の単項費用も支払わなくなります。
 
-$$R_g(h)=-a_g+\sum_{i\in I_g}w_i\left(\min(c_{h,i},d_{2,i})-\min(c_{h,i},d_{1,i})\right)$$
+$$R_ {g}(h)=-a_ {g}+\sum_ {i\in I_ {g}}w_ {i}\left(\min(c_ {h,i},d_ {2,i})-\min(c_ {h,i},d_ {1,i})\right)$$
 
 従って、交換全体の差分は次の和です。
 
-$$\Delta(g,h)=\Delta_{add}(h)+R_g(h)$$
+$$\Delta(g,h)=\Delta_ {add}(h)+R_ {g}(h)$$
 
-$I_g$に含まれない需要点は、施設$g$を削除しても現在の担当先を失いません。そのため需要点を1回ずつ走査し、現在の担当施設の補正欄だけに加算すれば、全削除位置の補正を同時に作れます。fallbackを使う需要点は実施設の削除で担当先を失わないので、削除補正を加える実施設がありません。
+$I_ {g}$に含まれない需要点は、施設$g$を削除しても現在の担当先を失いません。そのため需要点を1回ずつ走査し、現在の担当施設の補正欄だけに加算すれば、全削除位置の補正を同時に作れます。fallbackを使う需要点は実施設の削除で担当先を失わないので、削除補正を加える実施設がありません。
 
 最後に削除可能な位置だけを比較します。必須施設は削除候補になりません。追加候補1個の評価は、需要走査と削除位置走査を合わせて$O(Q+K)$です。需要点ループにはGCCのunroll指示がありますが、これはループ展開に関するコンパイラへの指定で、評価式を変えるものではありません。
 
@@ -1453,7 +1496,9 @@ $I_g$に含まれない需要点は、施設$g$を削除しても現在の担当
 
 交換を適用するときは開閉表を差分更新します。需要点ごとに、退出施設の費用が第2近傍費用以下なら、残る全施設から最近2個を調べ直します。同額の代替候補を失う場合もあるため、等号も含めます。それ以外は最近2個のどちらも退出施設ではないので、追加施設だけを挿入します。
 
-この更新後、重み付き費用・担当位置・総費用を整え、改善swap数と最良解を更新します。更新の最悪計算量は$O(QK+K)$です。全需要点で最近2施設を調べ直す必要がなければ、実際の仕事量はそれより小さくなります。
+この更新後、重み付き費用・担当位置・総費用を整えます。`Calc`が浮動小数点型なら、再計算した総費用でも交換前より改善しているか確認します。改善していなければ退出施設を戻し、最近傍などを再構築して交換を取り消します。受理した交換だけを改善swap数に数え、最良解を更新します。
+
+整数型の交換適用は最悪$O(QK+K)$です。全需要点で最近2施設を調べ直す必要がなければ、実際の仕事量はそれより小さくなります。小数型で施設単項費用がある場合は、加算順をそろえるソートに$O(K\log(K+1))$が追加で掛かります。交換の取消時には再構築の処理量も掛かります。
 
 ### 9.7 ILS：最良解から最大2施設を交換する
 
@@ -1469,27 +1514,29 @@ $I_g$に含まれない需要点は、施設$g$を削除しても現在の担当
 
 workspaceの次の呼出しでは、options、乱数seed、候補順、最良解、統計などを初期化します。主要な作業配列と固定基線は保持しますが、初期構築に使う一時配列まで全ての確保がなくなるわけではありません。
 
-最終結果は保存した最良施設集合を昇順にして、需要点ごとの最安実施設とfallbackを改めて比較して作ります。実施設の同額候補は最小ID、fallbackが実施設より厳密に安い場合だけ-1を返します。施設単項費用を足し、探索統計を添えます。
+最終結果は保存した最良施設集合を昇順にして、需要点ごとの最安実施設とfallbackを改めて比較して作ります。実施設の同額候補は最小ID、fallbackが実施設より厳密に安い場合だけ-1を返します。施設単項費用も施設IDの昇順に足し、探索統計を添えます。
 
 `evaluate_k_median`はこの目的値評価を任意の非空施設集合に対して行う関数です。探索もソートも制約確認も行わず、施設費用の加算順は渡した施設順です。小数では加算順による丸め差にも注意します。
 
 ### 9.9 計算量を読む
 
-Qを需要数、Mを候補数、Kを選択数、$F_c$を必須施設数とします。以下は入力のグラフ最短路計算などを含まない、solver内部の目安です。
+Qを需要数、Mを候補数、Kを選択数、$F_ {c}$を必須施設数とします。以下は入力のグラフ最短路計算などを含まない、solver内部の目安です。
 
 |処理|計算量の目安|
 |---|---|
 |費用表の保持|$O(MQ)$メモリ|
 |探索状態の追加メモリ|$O(M+Q+K)$|
-|汎用状態の構築|$O(M\log(M+1)+Q(F_c+1)+K)$の上界|
+|汎用状態の構築|$O(M\log(M+1)+Q(F_ {c}+1)+K)$の上界|
 |初期解1試行|$O(MQ+K(M+Q))$の上界。初回の最初の追加が全候補・全需要を比較|
-|最近傍の再構築|$O(M+Q(K-F_c+1)+K)$。固定基線を利用する場合|
+|最近傍の再構築|$O(M+Q(K-F_ {c}+1)+K)$。固定基線を利用する場合。小数型で施設単項費用があればソートも必要|
 |追加候補1個の評価|$O(Q+K)$|
-|改善swap1回の適用|最悪$O(QK+K)$|
-|摂動後の再構築|$O(M+Q(K-F_c+1)+K)$の上界|
+|交換1回の適用|最悪$O(QK+K)$。小数型で施設単項費用があればソートも必要。取消時の再構築は別途|
+|摂動後の再構築|$O(M+Q(K-F_ {c}+1)+K)$の上界|
 |結果の作成|$O(K\log K+QK)$|
 |任意集合の費用評価|施設数Lとして$O(QL+L)$|
 
-全体では、評価した追加候補数Eの項$O(E(Q+K))$と、受理swapの再計算、初期構築などを合わせた仕事量になります。探索回数そのものが入力と終了条件で変わるため、Q・M・Kだけから短い一定の実行時間を保証するものではありません。
+小数型かつ施設単項費用がある場合、総費用の再計算に施設ID順のソート$O(K\log(K+1))$を加えます。これは最近傍再構築、交換適用、摂動後の再構築にも関係します。結果・統計のデバッグ出力は、各配列20要素までのため$O(1)$です。
+
+全体では、評価した追加候補数Eの項$O(E(Q+K))$と、受理・取消swapの再計算、初期構築などを合わせた仕事量になります。探索回数そのものが入力と終了条件で変わるため、Q・M・Kだけから短い一定の実行時間を保証するものではありません。
 
 候補poolを小さくすると評価する候補や初期選択時の走査を減らせますが、開閉表などには全Mに比例する処理も残ります。固定施設を増やすと可動部分の再構築を減らせますが、需要点ごとの配列コピーや最終割当て作成は必要です。これが、入力準備・workspace再利用・探索量の調整を別々に考える理由です。

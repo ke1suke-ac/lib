@@ -14,10 +14,32 @@ template<class Cost = int64_t>
 class CapacitatedRouter {
     static_assert((std::is_integral_v<Cost> && std::is_signed_v<Cost> && sizeof(Cost) >= 8)
                   || std::is_same_v<Cost, double>);
+    // デバッグ出力は各配列の先頭20要素まで。indexed時の添字は要求/資源ID。
+    template<class T>
+    static std::ostream& print_list(std::ostream& os, const std::vector<T>& values, bool indexed = false) {
+        os << '[';
+        const size_t count = std::min<size_t>(values.size(), 20);
+        for (size_t i = 0; i < count; ++i) {
+            if (i) os << ", ";
+            if (indexed) os << i << ": ";
+            os << values[i];
+        }
+        if (count < values.size()) os << ", ... (+" << values.size() - count << " more)";
+        return os << ']';
+    }
 public:
     using Clock = std::chrono::steady_clock;
     enum class Objective { PenaltyPlusCost, PenaltyThenCost };
     enum class StopReason { TimeLimit, IterationLimit, NoMovableRequests, FixedConflict };
+    friend std::ostream& operator<<(std::ostream& os, StopReason reason) {
+        switch (reason) {
+            case StopReason::TimeLimit: return os << "TimeLimit";
+            case StopReason::IterationLimit: return os << "IterationLimit";
+            case StopReason::NoMovableRequests: return os << "NoMovableRequests";
+            case StopReason::FixedConflict: return os << "FixedConflict";
+        }
+        return os << "Unknown";
+    }
     struct ResourceUse { int resource; int64_t per_unit = 1, per_use = 0; };
     struct LocalLimit { int resource; int64_t upper; };
     struct Resource { int64_t capacity = -1, background_load = 0; };
@@ -27,6 +49,10 @@ public:
         bool connected = false;
         std::vector<int> arcs;
         bool operator==(const Route&) const = default;
+        friend std::ostream& operator<<(std::ostream& os, const Route& route) {
+            os << "Route{connected=" << (route.connected ? "true" : "false") << ", arcs=";
+            return CapacitatedRouter::print_list(os, route.arcs) << '}';
+        }
     };
     struct Request {
         int source, target;
@@ -38,7 +64,14 @@ public:
         std::vector<LocalLimit> limits;
         std::optional<Route> fixed_route;
     };
-    struct Solution { std::vector<Route> routes; bool operator==(const Solution&) const = default; };
+    struct Solution {
+        std::vector<Route> routes;
+        bool operator==(const Solution&) const = default;
+        friend std::ostream& operator<<(std::ostream& os, const Solution& solution) {
+            os << "Solution{routes=";
+            return CapacitatedRouter::print_list(os, solution.routes, true) << '}';
+        }
+    };
     struct Problem {
         std::vector<Vertex> vertices;
         std::vector<Arc> arcs;
@@ -99,6 +132,10 @@ public:
         // 和目的の値を返す。O(1)。
         Cost total() const { return reject_cost + route_cost + resource_cost; }
         bool operator==(const Value&) const = default;
+        friend std::ostream& operator<<(std::ostream& os, const Value& value) {
+            return os << "Value{reject_cost=" << value.reject_cost << ", route_cost=" << value.route_cost
+                      << ", resource_cost=" << value.resource_cost << ", total=" << value.total() << '}';
+        }
     };
     struct Summary {
         int missing_required = 0, overloaded_resources = 0, locally_invalid_requests = 0;
@@ -109,15 +146,39 @@ public:
             return !missing_required && !overloaded_resources && !locally_invalid_requests
                    && !forbidden_requests && !fixed_mismatches;
         }
+        friend std::ostream& operator<<(std::ostream& os, const Summary& summary) {
+            os << "Summary{feasible=" << (summary.feasible() ? "true" : "false") << ", value=";
+            if (summary.value) os << *summary.value; else os << "none";
+            return os << ", missing_required=" << summary.missing_required
+                      << ", overloaded_resources=" << summary.overloaded_resources
+                      << ", locally_invalid_requests=" << summary.locally_invalid_requests
+                      << ", forbidden_requests=" << summary.forbidden_requests
+                      << ", fixed_mismatches=" << summary.fixed_mismatches << '}';
+        }
     };
     struct Evaluation {
-        struct LimitViolation { int request, resource; int64_t used, upper; };
+        struct LimitViolation {
+            int request, resource; int64_t used, upper;
+            friend std::ostream& operator<<(std::ostream& os, const LimitViolation& violation) {
+                return os << "LimitViolation{request=" << violation.request << ", resource=" << violation.resource
+                          << ", used=" << violation.used << ", upper=" << violation.upper << '}';
+            }
+        };
         Summary summary;
         std::vector<int64_t> resource_load;
         std::vector<int> missing_required, overloaded_resources, forbidden_requests, fixed_mismatches;
         std::vector<LimitViolation> local_violations;
         // 全制約を満たすか。O(1)。
         bool feasible() const { return summary.feasible(); }
+        friend std::ostream& operator<<(std::ostream& os, const Evaluation& evaluation) {
+            os << "Evaluation{summary=" << evaluation.summary << ",\n  resource_load=";
+            CapacitatedRouter::print_list(os, evaluation.resource_load, true) << ",\n  missing_required=";
+            CapacitatedRouter::print_list(os, evaluation.missing_required) << ",\n  overloaded_resources=";
+            CapacitatedRouter::print_list(os, evaluation.overloaded_resources) << ",\n  forbidden_requests=";
+            CapacitatedRouter::print_list(os, evaluation.forbidden_requests) << ",\n  fixed_mismatches=";
+            CapacitatedRouter::print_list(os, evaluation.fixed_mismatches) << ",\n  local_violations=";
+            return CapacitatedRouter::print_list(os, evaluation.local_violations) << '}';
+        }
     };
     struct Limits {
         int64_t time_limit_us = 100'000;
@@ -127,6 +188,11 @@ public:
     struct Options { uint64_t seed = 0; };
     struct Statistics {
         int64_t iterations = 0, path_searches = 0, label_searches = 0, accepted = 0, elapsed_us = 0;
+        friend std::ostream& operator<<(std::ostream& os, const Statistics& statistics) {
+            return os << "Statistics{iterations=" << statistics.iterations << ", path_searches=" << statistics.path_searches
+                      << ", label_searches=" << statistics.label_searches << ", accepted=" << statistics.accepted
+                      << ", elapsed_us=" << statistics.elapsed_us << '}';
+        }
     };
     struct Result {
         Solution solution;
@@ -135,6 +201,10 @@ public:
         Statistics statistics;
         // 全制約を満たすか。O(1)。
         bool feasible() const { return summary.feasible(); }
+        friend std::ostream& operator<<(std::ostream& os, const Result& result) {
+            return os << "Result{stop_reason=" << result.stop_reason << ",\n  summary=" << result.summary
+                      << ",\n  statistics=" << result.statistics << ",\n  solution=" << result.solution << '}';
+        }
     };
 
     template<class Model = DefaultModel>

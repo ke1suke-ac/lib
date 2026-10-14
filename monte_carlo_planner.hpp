@@ -106,6 +106,9 @@ public:
         uint64_t generation = 0;
         int index = -1;
         friend bool operator==(const ActionId&, const ActionId&) = default;
+        friend std::ostream& operator<<(std::ostream& out, const ActionId& id) {
+            return out << id.generation << ':' << id.index;
+        }
     };
     enum class Status { ready, not_ready, terminal };
     enum class Stop { none, time, simulations, transitions, not_ready, terminal };
@@ -113,11 +116,24 @@ public:
         int started = 0, simulations = 0, transitions = 0;
         int64_t elapsed_us = 0;
         Stop stop = Stop::none;
+        friend std::ostream& operator<<(std::ostream& out, const RunStats& run) {
+            constexpr const char* names[] = {"none", "time", "simulations", "transitions", "not_ready", "terminal"};
+            auto reason = static_cast<unsigned>(run.stop);
+            return out << "RunStats{started=" << run.started << ", simulations=" << run.simulations
+                       << ", transitions=" << run.transitions << ", elapsed_us=" << run.elapsed_us
+                       << ", stop=" << (reason < std::size(names) ? names[reason] : "unknown") << '}';
+        }
     };
     struct Candidate {
         ActionId id;
         int trials = 0;
         std::optional<double> mean;
+        friend std::ostream& operator<<(std::ostream& out, const Candidate& candidate) {
+            out << "Candidate{id=" << candidate.id << ", trials=" << candidate.trials << ", mean=";
+            if (candidate.mean) out << *candidate.mean;
+            else out << "unevaluated";
+            return out << '}';
+        }
     };
     struct Result {
         std::optional<Action> action;
@@ -126,6 +142,44 @@ public:
         bool provisional = false;
         std::vector<Candidate> candidates;
         RunStats last_run;
+        // デバッグ専用。改行・flush はせず、候補は先頭20件まで表示する
+        friend std::ostream& operator<<(std::ostream& out, const Result& result) {
+            constexpr const char* names[] = {"ready", "not_ready", "terminal"};
+            auto status = static_cast<unsigned>(result.status);
+            out << "Result{status=" << (status < std::size(names) ? names[status] : "unknown") << ", action=";
+            int remaining = 20;
+            if (result.action) write_value(out, *result.action, remaining);
+            else out << "none";
+            out << ", id=" << result.id << ", provisional=" << (result.provisional ? "true" : "false")
+                << ", candidates(" << result.candidates.size() << ")=[";
+            auto count = std::min(result.candidates.size(), std::size_t(20));
+            for (std::size_t i = 0; i < count; ++i) {
+                if (i) out << ", ";
+                out << result.candidates[i];
+            }
+            if (count < result.candidates.size()) out << ", ... (+" << result.candidates.size() - count << ')';
+            return out << "], last_run=" << result.last_run << '}';
+        }
+    private:
+        // 独自の出力演算子を優先。constで反復できる配列等は入れ子全体で最大20要素
+        template<class T>
+        static void write_value(std::ostream& out, const T& value, int& remaining) {
+            if constexpr (requires { out << value; }) out << value;
+            else if constexpr (std::ranges::forward_range<const T>) {
+                out << '[';
+                auto it = std::ranges::begin(value);
+                auto end = std::ranges::end(value);
+                bool first = true;
+                for (; it != end && remaining > 0; ++it) {
+                    if (!first) out << ", ";
+                    first = false;
+                    --remaining;
+                    write_value(out, *it, remaining);
+                }
+                if (it != end) out << (first ? "..." : ", ...");
+                out << ']';
+            } else out << "<unprintable>";
+        }
     };
 
 private:

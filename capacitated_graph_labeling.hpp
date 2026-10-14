@@ -4,7 +4,8 @@
  * 各頂点へラベルを1つ割り当て、頂点とラベルの単項コスト、および辺の両端ラベルに
  * 依存する二項コストの合計を最小化する。ラベルごとに需要量と頂点数の下限・上限、頂点ごとに
  * 固定ラベル・許可ラベルを指定できる。容量を考慮した複数回のgreedy構築後、recolorとswapを
- * 混合した焼きなましで改善し、常に最良の実行可能解を保持する。
+ * 混合した焼きなましで改善し、常に最良の実行可能解を保持する。greedyが全失敗した場合は、
+ * 許可・固定を守りながら容量・件数の違反量を減らす移動／交換で実行可能解を探す。
  *
  * 主な用途:
  *   - balanced graph partition / capacitated clustering
@@ -21,7 +22,8 @@
  *   - 固定確率分岐は上位乱数bitを直接比較し、不要な実数変換を行わない
  *
  * 構成:
- *   - 公開データ型と5つの関数から利用し、探索エンジンと補助型はproblemのprivate内部に置く
+ *   - 公開データ型と5つの探索・評価関数から利用し、探索エンジンはproblemのprivate内部に置く
+ *   - 結果とstatusはostreamへ直接出力可能。各配列は先頭20要素と省略数を表示する
  *   - このヘッダ自体をコンパイルした場合だけ、main内の自己テストを実行する
  *
  * コスト型:
@@ -36,6 +38,10 @@
  *   - 一般の重み付き需要・許可ラベル付き実行可能性判定自体が難しいため、実行可能解を
  *     構築できなかった場合はresult.feasible=falseを返す。この組合せが厳しい場合は、
  *     問題固有手法で作った実行可能解をimprove_capacitated_graph_labelingへ渡す
+ *   - 制約修復はsolveの全greedy失敗時だけ行い、既存解改善の不正な初期解は修復しない。
+ *     修復中も時間・deadlineを確認し、最大min(8, max(1, initial_trials))回、
+ *     各回最大1024 + 32N手で打ち切る。修復手数はresult.iterationsには含めない。
+ *     iteration_limitは目的値改善の反復上限であり、0でも初期解を構築する。
  *   - 部分repairはimprove_capacitated_graph_labeling_subsetへ変更可能頂点列を渡す
  *   - Potts専用キャッシュは通常O(NK + N)、部分repairではO(|S|K + |S|)メモリを使う
  *   - Potts型のgreedy構築は、各頂点の隣接辺をラベル別に一度集計して高速化する
@@ -96,6 +102,21 @@ enum class capacitated_graph_labeling_status : unsigned char {
     invalid_repair_scope,
 };
 
+// statusを数値ではなく名前で表示する。改行・flush・書式設定の変更は行わない。
+inline std::ostream& operator<<(std::ostream& out, capacitated_graph_labeling_status status) {
+    switch (status) {
+    case capacitated_graph_labeling_status::success:
+        return out << "success";
+    case capacitated_graph_labeling_status::infeasible_initial_solution:
+        return out << "infeasible_initial_solution";
+    case capacitated_graph_labeling_status::construction_failed:
+        return out << "construction_failed";
+    case capacitated_graph_labeling_status::invalid_repair_scope:
+        return out << "invalid_repair_scope";
+    }
+    return out << "unknown(" << static_cast<unsigned int>(status) << ')';
+}
+
 template <class Cost = long long>
 struct capacitated_graph_labeling_result {
     std::vector<int> label;
@@ -109,6 +130,35 @@ struct capacitated_graph_labeling_result {
     bool used_potts_cache = false;
     capacitated_graph_labeling_status status =
         capacitated_graph_labeling_status::construction_failed;
+
+    // デバッグ用の1行表示。元の配列は変更せず、各配列の先頭20要素だけを出力する。
+    friend std::ostream& operator<<(std::ostream& out,
+                                    const capacitated_graph_labeling_result& result) {
+        const auto write_array = [&](const auto& values) {
+            const std::size_t shown = std::min(values.size(), std::size_t{20});
+            out << '[';
+            for (std::size_t i = 0; i < shown; ++i) {
+                if (i != 0) out << ", ";
+                out << values[i];
+            }
+            if (shown < values.size()) out << ", ... (+" << values.size() - shown << " more)";
+            out << ']';
+        };
+        out << "result{status=" << result.status
+            << ", feasible=" << (result.feasible ? "true" : "false")
+            << ", objective=" << result.objective
+            << ", initial_objective=" << result.initial_objective
+            << ", iterations=" << result.iterations
+            << ", elapsed_ms=" << result.elapsed_ms
+            << ", used_potts_cache=" << (result.used_potts_cache ? "true" : "false")
+            << ", label=";
+        write_array(result.label);
+        out << ", load=";
+        write_array(result.load);
+        out << ", count=";
+        write_array(result.count);
+        return out << '}';
+    }
 };
 
 template <class Cost = long long>
@@ -121,6 +171,31 @@ struct capacitated_graph_labeling_repair_result {
     bool used_potts_cache = false;
     capacitated_graph_labeling_status status =
         capacitated_graph_labeling_status::invalid_repair_scope;
+
+    // 変更頂点と新ラベルは同じ添字で対応する。それぞれ先頭20要素まで表示する。
+    friend std::ostream& operator<<(std::ostream& out,
+                                    const capacitated_graph_labeling_repair_result& result) {
+        const auto write_array = [&](const auto& values) {
+            const std::size_t shown = std::min(values.size(), std::size_t{20});
+            out << '[';
+            for (std::size_t i = 0; i < shown; ++i) {
+                if (i != 0) out << ", ";
+                out << values[i];
+            }
+            if (shown < values.size()) out << ", ... (+" << values.size() - shown << " more)";
+            out << ']';
+        };
+        out << "repair_result{status=" << result.status
+            << ", objective_delta=" << result.objective_delta
+            << ", iterations=" << result.iterations
+            << ", elapsed_ms=" << result.elapsed_ms
+            << ", used_potts_cache=" << (result.used_potts_cache ? "true" : "false")
+            << ", changed_vertices=";
+        write_array(result.changed_vertices);
+        out << ", new_labels=";
+        write_array(result.new_labels);
+        return out << '}';
+    }
 };
 
 template <class Cost = long long>
@@ -282,6 +357,132 @@ private:
         if (output_count != nullptr) *output_count = std::move(count);
         return true;
     }
+    // 容量・件数違反を許して移動と交換を繰り返す。固定・許可は常に守る
+    bool repair_construction(std::vector<int>& label,
+                             const capacitated_graph_labeling_options& options,
+                             std::uint64_t& random_state,
+                             std::chrono::steady_clock::time_point end_time) const {
+        const int n = vertex_count, k = label_count;
+        const auto time_expired = [&]() {
+            return end_time != std::chrono::steady_clock::time_point::max() &&
+                   std::chrono::steady_clock::now() >= end_time;
+        };
+        if (time_expired() || n == 0) return false;
+        long long total_demand = 0;
+        for (int v = 0; v < n; ++v) total_demand += get_demand(v);
+        std::vector<long long> load(k);
+        // コストpolicy固有の乱数型に依存させず、同じsplitmix64の列を引き継ぐ
+        const auto next_u64 = [&]() {
+            random_state += 0x9e3779b97f4a7c15ULL;
+            std::uint64_t z = random_state;
+            z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+            z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+            return z ^ (z >> 31);
+        };
+        const auto next_int = [&](int bound) {
+            return static_cast<int>(next_u64() % static_cast<std::uint64_t>(bound));
+        };
+        using Penalty = __int128_t;
+        const long long count_weight = std::max(1LL, total_demand / std::max(1, n));
+        const auto penalty = [&](int a, long long weight, int count) -> Penalty {
+            return static_cast<Penalty>(std::max(0LL, get_lower(a) - weight)) +
+                   std::max(0LL, weight - get_upper(a, total_demand)) +
+                   static_cast<Penalty>(count_weight) *
+                       (std::max(0, get_lower_count(a) - count) +
+                        std::max(0, count - get_upper_count(a)));
+        };
+        // 許可ラベルと必要条件を集計する。目的コストは実行可能になってから評価する
+        std::vector<std::vector<int>> choices(n);
+        std::vector<int> free_vertices, forced_count(k), possible_count(k);
+        std::vector<long long> forced_load(k), possible_load(k);
+        for (int v = 0; v < n; ++v) {
+            if ((v & 63) == 0 && time_expired()) return false;
+            for (int a = 0; a < k; ++a) if (is_allowed(v, a)) {
+                choices[v].push_back(a);
+                possible_load[a] += get_demand(v); ++possible_count[a];
+            }
+            if (choices[v].empty()) return false;
+            if (choices[v].size() > 1) free_vertices.push_back(v);
+            else {
+                const int a = choices[v][0];
+                forced_load[a] += get_demand(v); ++forced_count[a];
+            }
+        }
+        Penalty lower_sum = 0, upper_sum = 0, lower_count_sum = 0, upper_count_sum = 0;
+        for (int a = 0; a < k; ++a) {
+            const long long lo = get_lower(a), hi = get_upper(a, total_demand);
+            const int lc = get_lower_count(a), uc = get_upper_count(a);
+            if (forced_load[a] > hi || possible_load[a] < lo ||
+                forced_count[a] > uc || possible_count[a] < lc) return false;
+            lower_sum += lo; upper_sum += hi; lower_count_sum += lc; upper_count_sum += uc;
+        }
+        if (lower_sum > total_demand || upper_sum < total_demand ||
+            lower_count_sum > n || upper_count_sum < n || free_vertices.empty()) return false;
+        const int free_count = static_cast<int>(free_vertices.size());
+        std::vector<int> counts(k);
+        std::vector<Penalty> penalties(k);
+        const int restarts = std::max(1, std::min(8, options.initial_trials));
+        for (int restart = 0; restart < restarts; ++restart) {
+            // 最初は失敗したgreedyの部分解を利用し、以後は許可範囲で再配置する
+            load.assign(k, 0); std::fill(counts.begin(), counts.end(), 0);
+            for (int v = 0; v < n; ++v) {
+                const auto& list = choices[v];
+                if (restart > 0 || label[v] < 0) label[v] = list[next_int(static_cast<int>(list.size()))];
+                load[label[v]] += get_demand(v); ++counts[label[v]];
+            }
+            Penalty total = 0;
+            for (int a = 0; a < k; ++a) { penalties[a] = penalty(a, load[a], counts[a]); total += penalties[a]; }
+            Penalty record = total;
+            long long last_progress = 0;
+            const long long limit = 1024LL + 32LL * free_count;
+            for (long long step = 0; step < limit; ++step) {
+                if (total == 0) return feasible(label);
+                if ((step & 31) == 0 && time_expired()) return false;
+                // 移動と交換の標本から最小違反を選ぶ。同点・一時的な悪化も許す
+                int best_u = -1, best_v = -1, best_target = -1;
+                Penalty best_delta = 0;
+                std::uint64_t tie = 0;
+                const auto consider = [&](int u, int v, int target, Penalty delta) {
+                    const auto key = next_u64();
+                    if (best_u < 0 || delta < best_delta || (delta == best_delta && key < tie)) {
+                        best_u = u; best_v = v; best_target = target; best_delta = delta; tie = key;
+                    }
+                };
+                for (int sample = 0; sample < std::min(64, free_count); ++sample) {
+                    const int u = free_vertices[next_int(free_count)], a = label[u];
+                    const long long d = get_demand(u);
+                    for (const int b : choices[u]) if (a != b) {
+                        const auto delta = penalty(a, load[a] - d, counts[a] - 1) +
+                                           penalty(b, load[b] + d, counts[b] + 1) - penalties[a] - penalties[b];
+                        consider(u, -1, b, delta);
+                    }
+                }
+                for (int sample = 0; sample < std::min(64, free_count) * 4; ++sample) {
+                    const int u = free_vertices[next_int(free_count)], v = free_vertices[next_int(free_count)];
+                    const int a = label[u], b = label[v];
+                    if (a == b || !is_allowed(u, b) || !is_allowed(v, a)) continue;
+                    const long long du = get_demand(u), dv = get_demand(v);
+                    const auto delta = penalty(a, load[a] - du + dv, counts[a]) +
+                                       penalty(b, load[b] - dv + du, counts[b]) - penalties[a] - penalties[b];
+                    consider(u, v, b, delta);
+                }
+                // 差分で負荷と違反量を更新し、長く改善しない場合は再配置へ進む
+                if (best_u < 0) break;
+                const int a = label[best_u], b = best_target;
+                const long long du = get_demand(best_u), dv = best_v < 0 ? 0 : get_demand(best_v);
+                load[a] += dv - du; load[b] += du - dv;
+                if (best_v < 0) { --counts[a]; ++counts[b]; }
+                else label[best_v] = a;
+                label[best_u] = b;
+                penalties[a] = penalty(a, load[a], counts[a]); penalties[b] = penalty(b, load[b], counts[b]); total += best_delta;
+                if (total < record) { record = total; last_progress = step; }
+                if (step - last_progress > 4LL * free_count + 256) break;
+            }
+            if (total == 0) return feasible(label);
+        }
+        return false;
+    }
+
 };
 
 template <class Cost>
@@ -418,7 +619,7 @@ private:
     // Swap=false: targetは移動先ラベル。Swap=true: targetは交換相手の頂点。
     // swapの相手を変更済みとみなし、v側の寄与をprefixへ同じ順序で加算する。
     template <bool Swap = false>
-    Cost vertex_delta_generic(int v, int target, Cost prefix_delta = Cost()) const {
+    [[gnu::noinline]] Cost vertex_delta_generic(int v, int target, Cost prefix_delta = Cost()) const {
         const int* const labels = label.data();
         const int* const offsets = offset.data();
         const arc* const incident = arcs.data();
@@ -1170,7 +1371,11 @@ public:
                     best_objective = candidate_objective;
                 }
             }
-            if (!found) return false;
+            if (!found) {
+                if (!problem.repair_construction(label, options, random.state, end_time)) return false;
+                best_label = label;
+                best_objective = problem.evaluate(label, pair_cost);
+            }
             label = best_label;
             objective = best_objective;
             problem.feasible(label, &load,
@@ -1319,6 +1524,91 @@ int main() {
             std::cerr << "test failed: " << message << '\n';
             std::exit(1);
         }
+    };
+
+    const auto test_stream_output = [&]() {
+        using result_type = capacitated_graph_labeling_result<>;
+        using repair_type = capacitated_graph_labeling_repair_result<>;
+        using status_type = capacitated_graph_labeling_status;
+        static_assert(std::is_aggregate_v<result_type> && std::is_aggregate_v<repair_type>);
+        const auto as_text = [](const auto& value) {
+            std::ostringstream out;
+            out << value;
+            return out.str();
+        };
+        require(as_text(status_type::success) == "success", "success status text");
+        require(as_text(status_type::construction_failed) == "construction_failed", "construction status text");
+        require(as_text(status_type::infeasible_initial_solution) == "infeasible_initial_solution", "initial status text");
+        require(as_text(status_type::invalid_repair_scope) == "invalid_repair_scope", "scope status text");
+        require(as_text(static_cast<status_type>(255)) == "unknown(255)", "unknown status text");
+        const std::string empty = as_text(result_type{});
+        require(empty.find("status=construction_failed, feasible=false") != std::string::npos,
+                "failed result remains recognizable");
+        require(empty.find("label=[], load=[], count=[]}") != std::string::npos, "empty result arrays");
+        const std::string empty_repair = as_text(repair_type{});
+        require(empty_repair.find("status=invalid_repair_scope") != std::string::npos &&
+                empty_repair.find("changed_vertices=[], new_labels=[]}") != std::string::npos,
+                "empty repair result");
+
+        for (int length : {1, 20, 21, 100000}) {
+            result_type result;
+            result.label.assign(length, 7);
+            result.load.assign(length, 8);
+            result.count.assign(length, 9);
+            repair_type repair;
+            repair.changed_vertices.assign(length, 10);
+            repair.new_labels.assign(length, 11);
+            if (length > 20) {
+                result.label[20] = 123456789;
+                result.load[20] = 123456789;
+                result.count[20] = 123456789;
+                repair.changed_vertices[20] = 123456789;
+                repair.new_labels[20] = 123456789;
+            }
+            const std::string text = as_text(result);
+            const std::string repair_text = as_text(repair);
+            const auto check_array = [&](const std::string& output, const char* field) {
+                const auto start = output.find(std::string(field) + "=[");
+                require(start != std::string::npos, "array field is named");
+                const auto stop = output.find(']', start);
+                require(stop != std::string::npos, "array ends");
+                const std::string contents = output.substr(start, stop - start);
+                const int commas = static_cast<int>(std::count(contents.begin(), contents.end(), ','));
+                require(commas == (length > 20 ? 20 : length - 1), "array output limit");
+                if (length > 20) {
+                    require(contents.find("... (+" + std::to_string(length - 20) + " more)") != std::string::npos,
+                            "omitted count");
+                    require(contents.find("123456789") == std::string::npos, "21st element is omitted");
+                } else {
+                    require(contents.find("...") == std::string::npos, "no false omission");
+                }
+            };
+            check_array(text, "label"); check_array(text, "load"); check_array(text, "count");
+            check_array(repair_text, "changed_vertices"); check_array(repair_text, "new_labels");
+            require(text.size() < 1000 && repair_text.size() < 1000, "bounded output size");
+            require(result.label.size() == static_cast<std::size_t>(length) &&
+                    repair.changed_vertices.size() == static_cast<std::size_t>(length), "output does not resize arrays");
+        }
+        capacitated_graph_labeling_result<double> result;
+        result.feasible = true; result.status = status_type::success;
+        result.objective = -1.25; result.initial_objective = 2.5;
+        result.iterations = 42; result.elapsed_ms = 0.125; result.used_potts_cache = true;
+        capacitated_graph_labeling_repair_result<double> repair;
+        repair.objective_delta = -0.5;
+        repair.changed_vertices = {1}; // 手作りの不揃いな配列でも、表示は範囲外参照しない。
+        std::ostringstream out;
+        out << std::fixed << std::setprecision(3) << std::noboolalpha;
+        const auto flags = out.flags();
+        const auto precision = out.precision();
+        require(&(out << result) == &out, "result returns original stream");
+        require(&(out << repair) == &out, "repair returns original stream");
+        require(out.flags() == flags && out.precision() == precision, "preserve stream formatting");
+        require(out.str().find("feasible=true, objective=-1.250, initial_objective=2.500, iterations=42, elapsed_ms=0.125, used_potts_cache=true") != std::string::npos,
+                "readable scalar result fields");
+        require(out.str().find("objective_delta=-0.500") != std::string::npos &&
+                out.str().find("changed_vertices=[1], new_labels=[]") != std::string::npos,
+                "repair scalar and independent arrays");
+        require(out.str().find('\n') == std::string::npos, "no implicit newline");
     };
 
     const auto brute_force = [&](
@@ -2022,6 +2312,90 @@ int main() {
         }
     };
 
+    // 狭い許可先・厳密容量・件数・固定・需要0を、全列挙した可否と照合する
+    const auto test_feasibility_fallback = [&]() -> void {
+        std::mt19937_64 rng(761992377);
+        const capacitated_potts_cost<cost_type> policy;
+        int recovered = 0;
+        for (int test = 0; test < 300; ++test) {
+            problem_type p;
+            p.vertex_count = 4 + static_cast<int>(rng() % 4);
+            p.label_count = 2 + static_cast<int>(rng() % 2);
+            const int size = p.vertex_count, groups = p.label_count;
+            std::vector<int> witness(size);
+            p.demand.resize(size); p.fixed_label.assign(size, -1);
+            p.allowed.assign(size * groups, 0);
+            p.lower_capacity.assign(groups, 0); p.upper_capacity.assign(groups, 0);
+            p.lower_count.assign(groups, 0); p.upper_count.assign(groups, 0);
+            for (int v = 0; v < size; ++v) {
+                const int a = static_cast<int>(rng() % static_cast<std::uint64_t>(groups));
+                witness[v] = a; p.demand[v] = static_cast<long long>(rng() % 7);
+                p.lower_capacity[a] += p.demand[v]; ++p.lower_count[a];
+                for (int b = 0; b < groups; ++b) p.allowed[v * groups + b] = static_cast<unsigned char>(b == a || rng() % 2 == 0);
+                if (rng() % 5 == 0) { p.fixed_label[v] = a; p.allowed[v * groups + a] = 0; }
+                for (int b = 0; b < groups; ++b) p.unary_cost.push_back(static_cast<cost_type>(rng() % 15) - 7);
+                p.edges.push_back({v, (v + 1) % size, static_cast<cost_type>(rng() % 11) - 5, 0});
+            }
+            p.upper_capacity = p.lower_capacity; p.upper_count = p.lower_count;
+            // 一部は解の存在を保証せず、誤って成功を返さないことを全列挙で確認する
+            if (test % 3 == 0) {
+                for (int a = 0; a < groups; ++a) {
+                    p.lower_capacity[a] = static_cast<long long>(rng() % 13);
+                    p.upper_capacity[a] = p.lower_capacity[a] + static_cast<long long>(rng() % 5);
+                }
+            }
+            const auto exact = brute_force(p, policy);
+            capacitated_graph_labeling_options o;
+            o.time_limit_ms = -1; o.iteration_limit = 0; o.seed = rng(); o.initial_trials = 2;
+            const auto result = solve_capacitated_graph_labeling(p, policy, o);
+            if (!result.feasible) {
+                require(result.status == capacitated_graph_labeling_status::construction_failed, "fallback failure status");
+                require(result.label.empty(), "fallback must not publish an infeasible partial label");
+                continue;
+            }
+            ++recovered;
+            require(!exact.second.empty(), "fallback accepted an infeasible instance");
+            require(is_feasible_capacitated_graph_labeling(p, result.label), "fallback constraints");
+            require(result.objective == evaluate_capacitated_graph_labeling(p, result.label, policy), "fallback objective");
+            require(result.objective >= exact.first && result.initial_objective == result.objective, "fallback initial objective");
+            require(result.iterations == 0, "fallback iterations must exclude construction");
+        }
+        require(recovered >= 190, "fallback lost most planted tiny feasible cases");
+
+        // greedyで途中に行き詰まりやすい許可先を持つ、解のある小さな割当て
+        problem_type p;
+        p.vertex_count = 4; p.label_count = 4;
+        p.lower_capacity = {1, 1, 1, 1}; p.upper_capacity = p.lower_capacity;
+        p.allowed = {1, 1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0};
+        p.unary_cost = {0, 100, 0, 0, 100, 0, 0, 0, 0, 0, 0, 100, 0, 0, 100, 0};
+        for (std::uint64_t seed = 0; seed < 50; ++seed) {
+            capacitated_graph_labeling_options o;
+            o.time_limit_ms = -1; o.iteration_limit = 0; o.initial_trials = 1; o.seed = seed;
+            const auto result = solve_capacitated_graph_labeling(p, policy, o);
+            require(result.feasible && is_feasible_capacitated_graph_labeling(p, result.label), "narrow assignment fallback");
+        }
+        // 大きな整数でも違反量の重み付けや差分がオーバーフローしない
+        using engine = problem_type::solver<capacitated_potts_cost<cost_type>>;
+        p = problem_type{}; p.vertex_count = 3; p.label_count = 2;
+        p.demand = {2000000000000000000LL, 2000000000000000000LL, 2000000000000000000LL};
+        p.lower_capacity = {2000000000000000000LL, 4000000000000000000LL}; p.upper_capacity = p.lower_capacity;
+        p.lower_count = {1, 2}; p.upper_count = {1, 2};
+        capacitated_graph_labeling_options o; o.time_limit_ms = -1; o.iteration_limit = 0;
+        engine test_engine(p, policy, o); test_engine.label.assign(3, -1);
+        require(p.repair_construction(test_engine.label, o, test_engine.random.state, test_engine.end_time), "large-integer feasibility fallback");
+        require(is_feasible_capacitated_graph_labeling(p, test_engine.label), "large-integer fallback constraints");
+        o.deadline = std::chrono::steady_clock::time_point::min();
+        engine expired(p, policy, o); expired.label.assign(3, -1);
+        require(!p.repair_construction(expired.label, o, expired.random.state, expired.end_time), "expired deadline must skip feasibility fallback");
+        p = problem_type{}; p.vertex_count = 50; p.label_count = 2;
+        p.demand.assign(50, 2); p.lower_capacity = {49, 51}; p.upper_capacity = p.lower_capacity;
+        o = capacitated_graph_labeling_options{}; o.time_limit_ms = 2; o.iteration_limit = 0;
+        const auto failed = solve_capacitated_graph_labeling(p, policy, o);
+        require(!failed.feasible && failed.elapsed_ms >= 1.0, "failed fallback elapsed time must include repair");
+    };
+
+    test_stream_output();
+    test_feasibility_fallback();
     test_basic_potts();
     test_matrix_and_constraints();
     test_random_against_bruteforce();

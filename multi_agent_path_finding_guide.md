@@ -1,6 +1,6 @@
 # 複数エージェント経路計画・搬送ライブラリ 利用ガイド
 
-対象は `multi_agent_path_finding_v04.hpp`。C++20の単一ヘッダで、複数の移動体の経路計画と搬送タスクの割当を扱う。本書はこのヘッダの公開APIと実際の動作を説明する。
+対象は `multi_agent_path_finding_v06.hpp`。C++20の単一ヘッダで、複数の移動体の経路計画と搬送タスクの割当を扱う。本書はこのヘッダの公開APIと実際の動作を説明する。
 
 読み方：まず第1〜4章で問題への適合性を判断し、第5〜7章で入出力と制約を確認する。第8章はコピーして使える関数例、第9章は実装の説明である。ユースケース番号 `U01`〜`U18` は第4・6・8章で共通。
 
@@ -37,15 +37,15 @@ MAPF（Multi-Agent Path Finding）では、各エージェントの始点と専�
 | $N=\lvert V\rvert$, $M=\lvert E\rvert$ | 頂点数と、重複を除いた無向辺数 |
 | $K$ | エージェント数。1以上 |
 | $a\in\{0,\ldots,K-1\}$ | エージェント番号 |
-| $s_a$, $g_a$ | エージェント $a$ の始点と終点 |
-| $x_a(t)$ | 整数時刻 $t\geq0$ におけるエージェント $a$ の頂点 |
-| $T_a$ | 返却経路の終端時刻。以後は $g_a$ で待機する |
+| $s_ {a}$, $g_ {a}$ | エージェント $a$ の始点と終点 |
+| $x_ {a}(t)$ | 整数時刻 $t\geq0$ におけるエージェント $a$ の頂点 |
+| $T_ {a}$ | 返却経路の終端時刻。以後は $g_ {a}$ で待機する |
 | $S$ | 全エージェントの経路時間の合計（sum of costs） |
 | $L$ | 最後のエージェントの終端時刻（makespan） |
 
-返却経路は $x_a(0)=s_a$、$x_a(T_a)=g_a$ を満たし、$t>T_a$ では $x_a(t)=g_a$ と解釈する。途中で一度終点を訪れてから離れる場合、その最初の訪問は完了ではない。
+返却経路は $x_ {a}(0)=s_ {a}$、$x_ {a}(T_ {a})=g_ {a}$ を満たし、$t>T_ {a}$ では $x_ {a}(t)=g_ {a}$ と解釈する。途中で一度終点を訪れてから離れる場合、その最初の訪問は完了ではない。
 
-$$S=\sum_{a=0}^{K-1}T_a,\qquad L=\max_{0\leq a<K}T_a$$
+$$S=\sum_ {a=0}^{K-1}T_ {a},\qquad L=\max_ {0\leq a<K}T_ {a}$$
 
 指定できる目的は次の2つで、いずれも小さい値を好む。
 
@@ -56,7 +56,7 @@ $$\operatorname{lexmin}(S,L)\qquad\text{または}\qquad\operatorname{lexmin}(L,
 - `sum_of_costs`：$(S,L)$ を比較する。全員の拘束時間・到着までの待ち時間を減らしたい場合に適する。
 - `makespan`：$(L,S)$ を比較する。全員が配置につくまで次の工程を開始できない場合に適する。
 
-経路中の移動と待機は、どちらも $T_a$ を1増やす。終端後に暗黙に行う待機は加算しない。任意の報酬関数、エージェントごとの重み、総移動回数だけの最小化は指定できない。
+経路中の移動と待機は、どちらも $T_ {a}$ を1増やす。終端後に暗黙に行う待機は加算しない。任意の報酬関数、エージェントごとの重み、総移動回数だけの最小化は指定できない。
 
 ### 1.3 集荷と配達を繰り返す搬送計画：MAPD
 
@@ -66,17 +66,17 @@ MAPD（Multi-Agent Pickup and Delivery）では、各エージェントは初期
 | --- | --- |
 | $J$ | 入力されたタスク数。0件でもよい |
 | $j\in\{0,\ldots,J-1\}$ | 入力順のタスク番号 |
-| $p_j$, $q_j$ | タスク $j$ の集荷頂点と配達頂点 |
-| $r_j$ | タスク $j$ の解禁時刻。これより前は割当も集荷もできない |
+| $p_ {j}$, $q_ {j}$ | タスク $j$ の集荷頂点と配達頂点 |
+| $r_ {j}$ | タスク $j$ の解禁時刻。これより前は割当も集荷もできない |
 | $H$ | 計画する最終時刻。時刻0から $H$ までを返す |
-| $c_j$ | タスク $j$ の配達完了時刻。未完了なら定義しない |
+| $c_ {j}$ | タスク $j$ の配達完了時刻。未完了なら定義しない |
 | $\mathcal C$ | $H$ までに配達完了したタスク番号の集合 |
 | $F$ | 完了タスクのフロー時間（解禁から配達完了まで）の合計 |
 | $Q$ | 全エージェントの実移動回数。待機を含まない |
-| $x_a(t)$, $K$, $a$ | 位置、エージェント数、番号。1.2節と同じ意味 |
+| $x_ {a}(t)$, $K$, $a$ | 位置、エージェント数、番号。1.2節と同じ意味 |
 | $\mathbf1[P]$ | 条件 $P$ が真なら1、偽なら0となる指示関数 |
 
-$$F=\sum_{j\in\mathcal C}(c_j-r_j),\qquad Q=\sum_{a=0}^{K-1}\sum_{t=0}^{H-1}\mathbf1[x_a(t+1)\ne x_a(t)]$$
+$$F=\sum_ {j\in\mathcal C}(c_ {j}-r_ {j}),\qquad Q=\sum_ {a=0}^{K-1}\sum_ {t=0}^{H-1}\mathbf1[x_ {a}(t+1)\ne x_ {a}(t)]$$
 
 $$\operatorname{lexmin}(-\lvert\mathcal C\rvert,F,Q)$$
 
@@ -254,7 +254,7 @@ workspaceは再開可能なA*の探索木ではない。中断した探索の途
 必要なのはC++20、GCC系の標準ライブラリ（`<bits/stdc++.h>` を使用）、AtCoder Libraryの `atcoder/mincostflow` とその依存ヘッダ。`hash_map.hpp` は不要。MAPFだけを使う場合も、このヘッダ全体がACLをincludeする。
 
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 ```
 
 `ac-library/atcoder/mincostflow` が存在する配置なら、例えば次でビルドする。
@@ -312,15 +312,15 @@ CSRを直接組み立てるなら、`offsets.size()==n+1`、先頭0、非減少�
 
 #### 自動horizonと明示値
 
-最大独立最短距離を $D$、基準経路から再計算したmakespanを $L_0$ とする。全経路repairの $D$ は選択エージェントだけの新終点までの最大距離であり、$K$ は全エージェント数である。
+最大独立最短距離を $D$、基準経路から再計算したmakespanを $L_ {0}$ とする。全経路repairの $D$ は選択エージェントだけの新終点までの最大距離であり、$K$ は全エージェント数である。
 
-$$H_{\mathrm{auto}}=D+\max(16,D,K)$$
+$$H_ {\mathrm{auto}}=D+\max(16,D,K)$$
 
 | API | `max_time < 0` | 非負値を指定した場合 |
 | --- | --- | --- |
-| `solve_mapf` | $H_{\mathrm{auto}}$ | $D$ 未満なら `horizon_too_short` |
-| `improve_mapf` | $\max(L_0,H_{\mathrm{auto}})$ | $L_0$ または $D$ 未満なら有効な基準解を返す |
-| 全経路 `repair_mapf` | $\max(L_0,H_{\mathrm{auto}})$ | まず $L_0$ 以上が必要。その後、外部予約が長ければ予約のhorizonまで拡張する。最終値が $D$ 未満なら失敗 |
+| `solve_mapf` | $H_ {\mathrm{auto}}$ | $D$ 未満なら `horizon_too_short` |
+| `improve_mapf` | $\max(L_ {0},H_ {\mathrm{auto}})$ | $L_ {0}$ または $D$ 未満なら有効な基準解を返す |
+| 全経路 `repair_mapf` | $\max(L_ {0},H_ {\mathrm{auto}})$ | まず $L_ {0}$ 以上が必要。その後、外部予約が長ければ予約のhorizonまで拡張する。最終値が $D$ 未満なら失敗 |
 | 時間窓 `repair_mapf` | `end_time - begin_time` | `options.max_time` 自体を使わない |
 
 全経路repairは自動値の場合も、外部予約のhorizon以上まで拡張する。空の選択集合は基準解の検査だけで返るため、このhorizon設定・検査経路を通らない。
@@ -563,6 +563,75 @@ U18は同じsolverの出力を次の順で分類する。
 
 validを確認してから分類する。最終位置だけを次のMAPD呼出しへ渡しても、搬送中の荷物、担当の固定、待ち時間、乱数の内部状態は引き継がれない。
 
+### 6.9 結果をそのままデバッグ出力する
+
+`mapf_result` と `mapd_result` は `std::ostream& operator<<(std::ostream&, const Xxx&)` に対応している。`solve_mapf`・`improve_mapf`・`repair_mapf` の戻り値は前者、`solve_mapd` の戻り値は後者なので、いずれも `std::cout` や `std::cerr` に直接渡せる。`std::ostringstream` に出力して文字列にすることもできる。
+
+次は、そのままコンパイル・実行できる最小例である。
+
+```cpp
+#include "multi_agent_path_finding_v06.hpp"
+
+int main() {
+    const mapf_graph graph(3, {{0, 1}, {1, 2}});
+    const std::vector<int> starts{0}, goals{2};
+    mapf_options options;
+    options.strategy = mapf_strategy::prioritized;
+    options.time_limit_ms = -1;  // 時計ではなく固定した試行数で終了する。
+    options.max_time = 4;
+    options.prioritized_restarts = 1;
+    options.lns_iterations = 0;
+    const auto route = solve_mapf(graph, starts, goals, options);
+    std::cerr << route << '\n';  // 成否、目的値、探索統計、経路を表示する。
+
+    const std::vector<mapd_agent> agents{{0}};
+    const std::vector<mapd_task> tasks{{0, 2, 0}};
+    mapd_options delivery_options;
+    delivery_options.max_time = 3;
+    delivery_options.time_limit_ms = -1;
+    delivery_options.assignment = mapd_assignment_strategy::greedy;
+    const auto delivery = solve_mapd(graph, agents, tasks, delivery_options);
+    std::cerr << delivery << '\n';  // 完了件数、経路、担当・集荷・完了時刻を表示する。
+}
+```
+
+この例の出力は次のようになる。
+
+```text
+mapf_result{success=true, status=success, sum_of_costs=2, makespan=2, expanded_states=3, attempts=1, lns_improvements=0, strategy_used=prioritized,
+  paths(size=1)=[
+    0: [0, 1, 2]
+  ]
+}
+mapd_result{valid=true, completed_tasks=1, sum_flow_time=2, total_moves=2,
+  paths(size=1)=[
+    0: [0, 1, 2, 2]
+  ],
+  task_agent(size=1)=[0],
+  task_pickup_time(size=1)=[0],
+  task_completion_time(size=1)=[2]
+}
+```
+
+表示のルールは次のとおり。
+
+| 対象 | 表示内容・上限 |
+| --- | --- |
+| 成否・目的値・探索統計 | 全メンバを表示。boolは `true` / `false`、MAPFのstatusとstrategyは列挙名で表示する |
+| `paths` | agent番号を添え、先頭20経路までを1経路1行で表示する |
+| 各経路の頂点列 | 時刻0から先頭20頂点まで表示する |
+| MAPDの3つのタスク配列 | 各配列の先頭20要素までを、入力タスクの順番で表示する |
+| `size=N` | 表示件数ではなく元の配列全体の要素数 |
+| `... (+N)` | 頂点列・タスク配列の残りN要素を省略したことを表す |
+| `... (+N paths)` | 残りN経路を省略したことを表す |
+| 空配列 | `[]` と表示する |
+
+例えば、23要素のタスク配列は先頭20要素に続けて `... (+3)` と表示する。配列の省略は表示だけに適用され、戻り値の内容は変わらない。経路全体やタスク全体を走査せず、表示対象だけを読むため、大きな結果でも出力量は上限内に収まる。
+
+出力は現在のメンバをそのまま表示する。失敗結果・未割当の `-1`・途中で組み立てた不揃いの配列も表示できるが、検証や目的値の再計算は行わない。`success` や `valid` の意味と、結果を実行できるかの確認は第6.2〜6.4節と同じである。
+
+operatorは末尾の改行やflushを行わない。必要に応じて呼出側で `'\n'` を付ける。ストリームの書式設定は変更せず、整数は呼出側の設定に従う。コンテストの提出出力と混ぜないよう、デバッグ用途では通常 `std::cerr` を使う。
+
 ## 7. 制約・注意点
 
 ### 7.1 対応しないモデル
@@ -622,7 +691,7 @@ MAPD automaticは残り時間を次の候補に渡すが、候補ごとの均等
 
 ### 7.6 メモリと整数の範囲
 
-時空間状態数を $W=N(H+1)$、cache済み終点数を $U$ とする。典型的な32 bit `int` の環境では、A*の訪問印・二次費用・親と内部予約の主配列だけで概ね $16W$ byte、距離表で約 $4UN$ byteを使う。heap・出力・補助配列・容量余裕は別に必要。外部占有表はそのhorizonについてさらに約 $4N(H_{\mathrm{ext}}+1)$ byteであり、$H_{\mathrm{ext}}$ は外部予約の最終時刻である。
+時空間状態数を $W=N(H+1)$、cache済み終点数を $U$ とする。典型的な32 bit `int` の環境では、A*の訪問印・二次費用・親と内部予約の主配列だけで概ね $16W$ byte、距離表で約 $4UN$ byteを使う。heap・出力・補助配列・容量余裕は別に必要。外部占有表はそのhorizonについてさらに約 $4N(H_ {\mathrm{ext}}+1)$ byteであり、$H_ {\mathrm{ext}}$ は外部予約の最終時刻である。
 
 - `solve_mapf` と非空集合の全経路repairは、時空間状態数が `INT_MAX` を超える場合に `memory_limit` を返す。
 - `improve_mapf` は同条件で有効な基準解を返す。
@@ -655,10 +724,8 @@ MAPD automaticは残り時間を次の候補に渡すが、候補ごとの均等
 
 `objective` だけを切り替えれば、合計時間優先と全員完了時刻優先の両方に使える。
 
-<!-- EXAMPLE U01 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: graph は無向・重みなし。starts[i], goals[i] は agent i の頂点番号。
 // starts 内と goals 内はそれぞれ重複不可。agent 数は 1 以上。
@@ -671,16 +738,12 @@ mapf_result solve_fixed_goals(
 }
 ```
 
-<!-- END EXAMPLE U01 -->
-
 ### 8.2 U02：障害物付きグリッド
 
 `input_valid` は盤面・座標の形状検査、`result.success` はMAPF解の有無を表す。始点・終点の重複などはMAPF側の結果に現れる。
 
-<!-- EXAMPLE U02 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 struct grid_plan {
     bool input_valid = false;  // 座標入力とグリッド形状が妥当か。可解性とは別。
@@ -742,16 +805,12 @@ grid_plan solve_grid(
 }
 ```
 
-<!-- END EXAMPLE U02 -->
-
 ### 8.3 U03：短時間の初期解
 
 初期構築の方式を明示する。応答時間や成功率の保証ではない。
 
-<!-- EXAMPLE U03 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: budget_ms は計算時間の目安。移動ターン上限ではない。
 // 出力: 短い構築探索で得た解。success == false も通常の結果として扱う。
@@ -770,16 +829,12 @@ mapf_result solve_quick_initial(
 }
 ```
 
-<!-- END EXAMPLE U03 -->
-
 ### 8.4 U04：固定反復の比較
 
 `options` を値で受け取るので、呼出側の設定オブジェクトは書き換えない。
 
-<!-- EXAMPLE U04 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: options で strategy, objective, max_time, seed と反復数を指定。
 // この関数では時間制限を意図的に全て外す。対話処理の本番制限には使わない。
@@ -793,16 +848,12 @@ mapf_result solve_fixed_work(
 }
 ```
 
-<!-- END EXAMPLE U04 -->
-
 ### 8.5 U05：終点割当候補の評価
 
 候補別の最短距離の違いだけでなく、衝突回避後の目的値を比較する。同点では先に列挙した候補を残す。個々の失敗理由も必要なら、ループ内で `candidate.status` を別途記録する。
 
-<!-- EXAMPLE U05 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 struct assignment_choice {
     int index = -1;  // 成功候補なし。そうでなければ goal_candidates の添字。
@@ -837,16 +888,12 @@ assignment_choice choose_goal_assignment(
 }
 ```
 
-<!-- END EXAMPLE U05 -->
-
 ### 8.6 U06：自作の初期解を検証して改善
 
 集計値が未設定の自作経路を安全に取り込む。衝突した経路は改善の前に拒否する。
 
-<!-- EXAMPLE U06 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: initial_paths[i][0] == starts[i]、末尾 == goals[i] の衝突なし経路。
 // 自作の初期解も渡せる。経路長・評価値はこの関数で計算する。
@@ -873,16 +920,12 @@ mapf_result refine_existing_plan(
 }
 ```
 
-<!-- END EXAMPLE U06 -->
-
 ### 8.7 U07：一部agentの担当先変更
 
 変更するのは `selected` に含めたagentだけ。`new_goals` は選択agent分だけでなく全員分を渡す。
 
-<!-- EXAMPLE U07 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: new_goals は全 agent 分。変更した agent を selected に全て含める。
 // base は同じ starts から始まる有効経路。非選択 agent の経路を固定する。
@@ -898,16 +941,12 @@ mapf_result repair_changed_goals(
 }
 ```
 
-<!-- END EXAMPLE U07 -->
-
 ### 8.8 U08：自分で選んだ集合の局所改善
 
 基準解に対する目的値の比較はrepair内で行う。新たなLNSを自動で追加する例ではない。
 
-<!-- EXAMPLE U08 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: goals は base と同じ。selected は改善を試す agent 番号の重複なし集合。
 // 出力: 他 agent を固定して再最適化した解。元解が有効なら目的値を悪化させない。
@@ -923,16 +962,12 @@ mapf_result reoptimize_agents(
 }
 ```
 
-<!-- END EXAMPLE U08 -->
-
 ### 8.9 U09：時間窓だけの修復
 
 窓サイズのindex上限をラッパーで検査する。実メモリが十分かは別の問題である。
 
-<!-- EXAMPLE U09 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: 0 <= begin < end <= 基準経路の最大長-1。窓の両端位置は固定。
 // external の時刻は base.paths の時刻0と同じ原点。不要なら nullptr。
@@ -960,16 +995,12 @@ mapf_result repair_time_window(
 }
 ```
 
-<!-- END EXAMPLE U09 -->
-
 ### 8.10 U10：時刻付きの頂点・移動・両方向閉鎖
 
 閉鎖イベントは全て有限の時刻を明示する。期間閉鎖なら対象時刻分のイベントを作る。ラッパーが拒否した入力は初期状態の失敗結果（invalid_input）を返す。
 
-<!-- EXAMPLE U10 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 struct closed_vertex { int time; int vertex; };
 struct closed_move {
@@ -1008,16 +1039,12 @@ mapf_result repair_road_closures(
 }
 ```
 
-<!-- END EXAMPLE U10 -->
-
 ### 8.11 U11：外部ロボットを避ける新規計画
 
 外部経路が終わった後も残るなら、例えば `hold_until=horizon` を指定する。外部経路同士の不整合や、自グループの始点との時刻0の衝突は失敗になる。
 
-<!-- EXAMPLE U11 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 struct external_route {
     int start_time = 0;
@@ -1065,16 +1092,12 @@ mapf_result solve_around_external_routes(
 }
 ```
 
-<!-- END EXAMPLE U11 -->
-
 ### 8.12 U12：観測した現在位置からの再計画
 
 入力の `previous` は書き換えない。返却経路の時刻0は「今」である。基準経路を再利用する場合、明示horizonは残り基準経路の最大長以上にする。新規構築へ切り替わったかの記録が必要なら、`can_reuse` を返却情報に追加できる。
 
-<!-- EXAMPLE U12 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: elapsed は previous の時刻原点から経過したターン数。
 // observed_starts は「今」観測した全 agent の位置。new_goals は今から向かう goal。
@@ -1120,16 +1143,12 @@ mapf_result replan_from_observation(
 }
 ```
 
-<!-- END EXAMPLE U12 -->
-
 ### 8.13 U13：変更後のグラフで再構築
 
 辺リストの範囲検査に失敗した場合、graphとworkspaceは変更しない。グラフ構築後にMAPFが失敗しても、graph自体は変更後の状態である。
 
-<!-- EXAMPLE U13 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: n と edges は変更後のグラフ全体。starts は現在位置、goals は新頂点番号系。
 // graph と workspace は呼出側が所有する。変更中に別スレッドから使わない。
@@ -1150,16 +1169,12 @@ mapf_result solve_after_graph_change(
 }
 ```
 
-<!-- END EXAMPLE U13 -->
-
 ### 8.14 U14：共通deadlineで構築と改善
 
 呼出側で `mapf_deadline::after_ms(予算)` を1回作って渡す。各段階で作り直さない。ここではLNSを独立した改善段階として呼ぶため、入力strategyがpibtでも後段の改善は実行可能。
 
-<!-- EXAMPLE U14 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: deadline は外側 solver が作った共有終了時刻で、呼出し中は生存させる。
 // options は目的・horizon・反復数等。本関数は相対時間制限を外し、deadline を共有。
@@ -1178,16 +1193,12 @@ mapf_result solve_with_shared_deadline(
 }
 ```
 
-<!-- END EXAMPLE U14 -->
-
 ### 8.15 U15：上限付きの再試行
 
 例の再試行方針は新規MAPF専用。外部予約付きrepairには、外部制約を保った別のfallback方針が必要である。
 
-<!-- EXAMPLE U15 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: first_horizon から horizon_cap まで必要に応じて拡張。tries は呼出し回数上限。
 // per_call_ms は各回のソフト時間制限。負値なら反復数で停止。全体制限は deadline。
@@ -1218,16 +1229,12 @@ mapf_result solve_with_retries(
 }
 ```
 
-<!-- END EXAMPLE U15 -->
-
 ### 8.16 U16：同期した操作列への変換
 
 返却値に値があるかを先に確認する。外側で指定した操作horizonまで待機を出力したい場合は、この結果の末尾へ全員待機を追加する。
 
-<!-- EXAMPLE U16 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: 外部制約を使って作った解には external を必ず渡す。
 // 出力: moves[t][i] = {時刻tの頂点, 時刻t+1の頂点}。同じ頂点なら待機。
@@ -1262,16 +1269,12 @@ std::optional<std::vector<std::vector<std::pair<int, int>>>> synchronized_moves(
 }
 ```
 
-<!-- END EXAMPLE U16 -->
-
 ### 8.17 U17：即時・将来解禁タスクの搬送
 
 解禁時刻はtask配列で指定する。タスクは入力順で識別し、solver内部の処理順と混同しない。
 
-<!-- EXAMPLE U17 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 // 入力: agent の start は互いに異なる。tasks は全て事前登録する。
 // tasks[j] = {pickup, delivery, release_time}。即時タスクは release_time = 0。
@@ -1296,16 +1299,12 @@ mapd_result solve_delivery(
 }
 ```
 
-<!-- END EXAMPLE U17 -->
-
 ### 8.18 U18：完了と未完了状態の整理
 
 `all_completed` はplan.validがtrueの場合だけ解釈する。有効な空タスク集合なら全件完了である。
 
-<!-- EXAMPLE U18 -->
-
 ```cpp
-#include "multi_agent_path_finding_v04.hpp"
+#include "multi_agent_path_finding_v06.hpp"
 
 struct delivery_summary {
     mapd_result plan;
@@ -1337,8 +1336,6 @@ delivery_summary plan_until_horizon(
 }
 ```
 
-<!-- END EXAMPLE U18 -->
-
 ## 9. 実装
 
 ### 9.1 全体の流れ
@@ -1360,7 +1357,7 @@ delivery_summary plan_until_horizon(
 
 距離は終点を始点とするBFSで全頂点分を計算する。無向グラフなので、終点からの距離は各頂点から終点への距離と等しい。未使用の終点は計算せず、workspaceのtarget集合へ追加されたときに計算する。全経路repairは選択agentの新goal、時間窓repairは選択agentの窓終端頂点だけを新規targetとして要求する。
 
-新しいtarget数を $U_{\mathrm{new}}$ とするとBFSは $O(U_{\mathrm{new}}(N+M))$。距離の連続配列を拡張するときは、再確保による既存行の移動で追加の $O(UN)$ が発生し得る。$U$ は追加後のcache済みtarget数。
+新しいtarget数を $U_ {\mathrm{new}}$ とするとBFSは $O(U_ {\mathrm{new}}(N+M))$。距離の連続配列を拡張するときは、再確保による既存行の移動で追加の $O(UN)$ が発生し得る。$U$ は追加後のcache済みtarget数。
 
 ### 9.3 時空間予約と1体のA*
 
@@ -1426,15 +1423,15 @@ restart間では固定予約を再利用し、今回再計画したagentの予�
 
 ### 9.9 MAPDのタスク割当
 
-現在時刻を $t$、空きagentの現在頂点を $v_a$、グラフの最短距離を $d(u,v)$ とする。$u,v$ は頂点、$p_j,q_j,r_j,H$ は第1章の記号である。解禁済み・未割当タスクに対し、まず次の所要時間下界を確認する。
+現在時刻を $t$、空きagentの現在頂点を $v_ {a}$、グラフの最短距離を $d(u,v)$ とする。$u,v$ は頂点、$p_ {j},q_ {j},r_ {j},H$ は第1章の記号である。解禁済み・未割当タスクに対し、まず次の所要時間下界を確認する。
 
-$$d(v_a,p_j)+d(p_j,q_j)\leq H-t$$
+$$d(v_ {a},p_ {j})+d(p_ {j},q_ {j})\leq H-t$$
 
 どちらかが到達不能なら候補にしない。等号は許す。衝突待ちを無視した下界なので、候補になっても実際の完了は保証しない。
 
 候補対の割当費用 $c(a,j)$ は次で、空荷の移動を重く見る。
 
-$$c(a,j)=2d(v_a,p_j)+d(p_j,q_j)$$
+$$c(a,j)=2d(v_ {a},p_ {j})+d(p_ {j},q_ {j})$$
 
 この $c(a,j)$ は第1章の最終スコアとは異なる内部の代理費用である。
 
@@ -1460,15 +1457,15 @@ automaticの候補方式順は、greedy、端点分散greedy、最小費用流�
 
 | 処理 | 主な費用・注意 |
 | --- | --- |
-| グラフ構築 | 入力辺対数を $M_{\mathrm{in}}$ として $O(N+M_{\mathrm{in}}\log(M_{\mathrm{in}}+1))$ の上界。重複を含む入力量に依存し、隣接リストを整列・重複除去 |
-| 距離準備 | 新target分の $O(U_{\mathrm{new}}(N+M))$ と、必要なら距離配列再確保 |
+| グラフ構築 | 入力辺対数を $M_ {\mathrm{in}}$ として $O(N+M_ {\mathrm{in}}\log(M_ {\mathrm{in}}+1))$ の上界。重複を含む入力量に依存し、隣接リストを整列・重複除去 |
+| 距離準備 | 新target分の $O(U_ {\mathrm{new}}(N+M))$ と、必要なら距離配列再確保 |
 | 1回の予約初期化 | $O(N(H+1))$。固定経路の保持登録は別に $O(K(H+1))$ 程度 |
 | 1体のA* | 実際の展開数、隣接遷移数、heap操作数に依存。第二費用の更新で状態が再登録され得るため、単純に全状態を1回ずつ見るとは限らない |
 | 初期構築 | 最大 $R$ 回の経路計画。goal干渉評価には $O(K^2)$ の処理もある |
 | LNS | 最大 $I$ 回。毎回の集合選択・予約と $k$ 体の再探索。経路のコピーと費用集計も必要 |
 | 時間窓repair | 探索用horizonは窓幅。ただし基準検証と全経路への接合・検証は窓外を含む |
 | MAPF検証 | 外部予約なしなら概ね $O(P\log(\Delta+1)+(L+1)(N+K))$。$L$ は経路から求めたmakespan |
-| 外部予約付き検証 | 上の時刻走査を $\max(L,H_{\mathrm{ext}})$ まで拡張し、禁止移動照会の費用を加える |
+| 外部予約付き検証 | 上の時刻走査を $\max(L,H_ {\mathrm{ext}})$ まで拡張し、禁止移動照会の費用を加える |
 | 外部禁止移動照会 | 追加後の初回は $O(B\log(B+1))$ の整理、その後は1照会 $O(\log(B+1))$。空なら定数時間 |
 | MAPD | 距離準備、最大 $H$ ターンの割当・PIBT、$K(H+1)$ の出力と検証。automaticでは実行した候補数分の処理 |
 

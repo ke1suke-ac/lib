@@ -1,5 +1,5 @@
 /*
- * rectangle_packing v10: AHC・競技プログラミング向けの直交矩形packing solver。
+ * rectangle_packing v11: AHC・競技プログラミング向けの直交矩形packing solver。
  *
  * 対応する問題:
  *   - 固定された 1 個のビンへ、必須矩形を優先しつつ利益の高い矩形を詰める
@@ -23,6 +23,7 @@
  *     strip・外接矩形では探索用の幅と高さの積もこの範囲に収める
  *   - strip・複数ビン・外接矩形では全入力をrequired=trueとする
  *   - ヘッダー単体のコンパイルでは末尾の自己テストを実行できる
+ *   - 結果はcout/cerrへ直接出力でき、配置の表示は入力順で最大20要素とする
  *   - 計算量表記の N は矩形数、K は試行構築数、F は最大空き矩形数、B はビン数
  *   - 任意角度回転、多角形、任意形状の障害物、guillotine 切断制約は扱わない
  *     （矩形障害物は部分repairの固定配置として表現できる）
@@ -72,6 +73,38 @@ struct rectangle_pack_result {
 
     // 必須矩形をすべて配置できたなら true を返す。O(1)
     bool feasible() const { return missing_required_count == 0; }
+
+    // 集計値と先頭20配置を出力し、同じストリームを返す。O(min(N, 20))、追加領域O(1)
+    friend std::ostream& operator<<(std::ostream& os, const rectangle_pack_result& result) {
+        // 保持している集計値を表示し、検証や再計算は行わない
+        os << "rectangle_pack_result{feasible=" << (result.feasible() ? "true" : "false")
+           << ", placed_count=" << result.placed_count
+           << ", missing_required_count=" << result.missing_required_count
+           << ", bin_count=" << result.bin_count
+           << ", used_width=" << result.used_width
+           << ", used_height=" << result.used_height
+           << ", placed_profit=" << result.placed_profit
+           << ", placed_area=" << result.placed_area
+           << ", placements(" << result.placements.size() << ")=[";
+
+        // 入力IDを添えて最大20要素だけ表示し、未配置の古い座標は表示しない
+        const std::size_t count = std::min<std::size_t>(result.placements.size(), 20);
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto& p = result.placements[i];
+            os << "\n  [" << i << "] ";
+            if (!p.placed()) {
+                os << "unplaced";
+            } else {
+                os << "{bin=" << p.bin << ", x=" << p.x << ", y=" << p.y
+                   << ", width=" << p.width << ", height=" << p.height
+                   << ", rotated=" << (p.rotated ? "true" : "false") << '}';
+            }
+        }
+        if (result.placements.size() > count)
+            os << "\n  ... (" << result.placements.size() - count << " more)";
+        if (count != 0) os << '\n';
+        return os << "]}";
+    }
 
 private:
     struct engine;
@@ -1728,6 +1761,84 @@ int main() {
         }
         return true;
     };
+    // デバッグ出力の内容、未配置、表示上限、ストリームの連結を検証する
+    [&] {
+        static_assert(std::is_aggregate_v<rectangle_pack_result>);
+        std::ostringstream empty;
+        std::ostream& returned = (empty << rectangle_pack_result{});
+        require(&returned == &empty, "debug stream return reference");
+        require(empty.str() ==
+            "rectangle_pack_result{feasible=true, placed_count=0, missing_required_count=0, "
+            "bin_count=0, used_width=0, used_height=0, placed_profit=0, placed_area=0, placements(0)=[]}",
+            "debug empty result");
+
+        // 集計値をそのまま表示し、負のbinでは古い座標を表示しない
+        const rectangle_pack_result mixed{
+            {{1,2,3,4,0,false}, {99,98,97,96,-3,true}, {6,7,2,3,1,true}},
+            8,10,-5,18,2,1,2};
+        const std::string expected =
+            "rectangle_pack_result{feasible=false, placed_count=2, missing_required_count=1, "
+            "bin_count=2, used_width=8, used_height=10, placed_profit=-5, placed_area=18, placements(3)=[\n"
+            "  [0] {bin=0, x=1, y=2, width=3, height=4, rotated=false}\n"
+            "  [1] unplaced\n"
+            "  [2] {bin=1, x=6, y=7, width=2, height=3, rotated=true}\n]}";
+        std::ostringstream out;
+        out << mixed << '\n' << "end";
+        require(out.str() == expected + "\nend", "debug full contents and chaining");
+
+        // 20要素の境界と大きな配列でも、表示数と省略件数が正しい
+        for (std::size_t n : {0U, 1U, 19U, 20U, 21U, 25U, 100000U}) {
+            rectangle_pack_result result;
+            result.placements.resize(n);
+            std::ostringstream limited;
+            limited << result;
+            const std::string output = limited.str();
+            std::size_t rows = 0;
+            for (std::size_t pos = 0; (pos = output.find("\n  [", pos)) != std::string::npos; ++pos)
+                ++rows;
+            require(rows == std::min<std::size_t>(n, 20), "debug row limit");
+            require(output.find("placements(" + std::to_string(n) + ")=[") != std::string::npos,
+                    "debug total size");
+            require(output.find("[20]") == std::string::npos, "debug tail hidden");
+            if (n >= 20) require(output.find("[19] unplaced") != std::string::npos, "debug last visible id");
+            if (n > 20) {
+                require(output.find("... (" + std::to_string(n - 20) + " more)") != std::string::npos,
+                        "debug omitted count");
+            } else {
+                require(output.find("...") == std::string::npos, "debug no unnecessary omission");
+            }
+            require(output.ends_with("]}") && output.size() < 2000, "debug bounded output without trailing newline");
+        }
+
+        // 極端な値や不整合な途中状態も、追加の算術・検証をせず表示する
+        rectangle_pack_result extreme;
+        constexpr long long lo = std::numeric_limits<long long>::min();
+        constexpr long long hi = std::numeric_limits<long long>::max();
+        extreme.placed_profit = lo;
+        extreme.placements = {{hi,lo,hi,hi,std::numeric_limits<int>::max(),true}};
+        std::ostringstream boundary;
+        boundary << extreme;
+        require(boundary.str().find("placed_profit=" + std::to_string(lo)) != std::string::npos &&
+                boundary.str().find("x=" + std::to_string(hi)) != std::string::npos &&
+                boundary.str().find("y=" + std::to_string(lo)) != std::string::npos,
+                "debug integer limits");
+        require(boundary.str().find("placed_count=0") != std::string::npos, "debug does not recompute summary");
+
+        // boolの見やすさを保ち、利用者の書式設定は変更しない
+        std::ostringstream formatted;
+        formatted << std::hex << std::showbase << std::noboolalpha << std::setprecision(3);
+        formatted.fill('*');
+        const auto flags = formatted.flags();
+        const auto precision = formatted.precision();
+        const auto fill = formatted.fill();
+        formatted << mixed;
+        require(formatted.flags() == flags && formatted.precision() == precision && formatted.fill() == fill,
+                "debug preserves stream format");
+        require(formatted.str().find("feasible=false") != std::string::npos &&
+                formatted.str().find("rotated=true") != std::string::npos,
+                "debug readable booleans");
+    }();
+
     // fixed_bin の検証
     [&] {
         const std::vector<rectangle_pack_item> items{
@@ -2368,7 +2479,7 @@ int main() {
         std::cout << "Validator oracle: " << accepted << " accepted, " << rejected << " rejected.\n";
     }();
 
-    std::cout << "All rectangle_packing v10 tests passed.\n";
+    std::cout << "All rectangle_packing v11 tests passed.\n";
 }
 
 #endif

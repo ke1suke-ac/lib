@@ -1,6 +1,18 @@
-# Maximum Coverage Solver 利用ガイド
+# Maximum Coverage Solver 利用ガイド（全9章）
 
-対象ファイルは [maximum_coverage_solver_v06.hpp](maximum_coverage_solver_v06.hpp)。候補集合と被覆対象を入力し、選択数・予算・全対象被覆のいずれかを条件として候補を選ぶC++20ライブラリである。外部のアプリケーションや最適化プログラムから利用するための入力設計、公開API、関数例、実装を説明する。
+**目次（全9章）**
+
+1. 何を解くライブラリか？
+2. 厳密解アルゴリズム
+3. 差分更新
+4. ユースケース
+5. 利用準備
+6. ユースケースごとの使い方
+7. 制約・注意点
+8. ユースケースごとのコード例
+9. 実装
+
+対象ファイルは [maximum_coverage_solver_v08.hpp](maximum_coverage_solver_v08.hpp)。候補集合と被覆対象を入力し、選択数・予算・全対象被覆のいずれかを条件として候補を選ぶC++20ライブラリである。外部のアプリケーションや最適化プログラムから利用するための入力設計、公開API、関数例、実装を説明する。
 
 第1章で問題を理解し、第2章で厳密解法の適用可否、第3章で反復利用の可否を判断する。第4章・第6章・第8章の同じ枝番号は、同じユースケースを表す。たとえばセンサー配置は4.2節で問題を理解し、6.2節でAPIの使い方を確認し、8.2節の関数をコピーして使える。
 
@@ -26,9 +38,9 @@
 | $\mathcal{C}=\{0,\ldots,C-1\}$ | 候補番号の集合。$C=0$ なら空集合 | 入力から決まる |
 | $t$ | 1つの対象番号 | 式中の添字 |
 | $c$ | 1つの候補番号 | 式中の添字 |
-| $S_c\subseteq\mathcal{T}$ | 候補 $c$ が覆う対象集合 | 入力 |
-| $w_t\ge0$ | 対象 $t$ を少なくとも1回覆う価値。整数 | 入力 |
-| $a_c\ge0$ | 候補 $c$ を選ぶ費用。整数 | 入力 |
+| $S_ {c}\subseteq\mathcal{T}$ | 候補 $c$ が覆う対象集合 | 入力 |
+| $w_ {t}\ge0$ | 対象 $t$ を少なくとも1回覆う価値。整数 | 入力 |
+| $a_ {c}\ge0$ | 候補 $c$ を選ぶ費用。整数 | 入力 |
 | $X\subseteq\mathcal{C}$ | 実際に選ぶ候補番号の集合 | 求める値 |
 | $U(X)$ | 選択集合 $X$ によって覆われる対象の和集合 | $X$ から決まる |
 | $W(X)$ | 覆われた対象の価値の合計 | 目的値または診断値 |
@@ -41,7 +53,7 @@
 
 和集合、価値、費用は次のように定義する。空集合についての和は0である。
 
-$$U(X)=\bigcup_{c\in X}S_c,\qquad W(X)=\sum_{t\in U(X)}w_t,\qquad A(X)=\sum_{c\in X}a_c$$
+$$U(X)=\bigcup_ {c\in X}S_ {c},\qquad W(X)=\sum_ {t\in U(X)}w_ {t},\qquad A(X)=\sum_ {c\in X}a_ {c}$$
 
 任意の固定・禁止・候補制限を使う場合、どの問題でも次の条件を加える。
 
@@ -53,9 +65,9 @@ $$F\subseteq X\subseteq P\cup F,\qquad X\cap D=\varnothing$$
 
 「最大5か所」「最低3個、最大8個」のように選択数を決め、その範囲で覆える価値を大きくする。
 
-$$\underset{X\subseteq\mathcal{C}}{\operatorname{maximize}}\ W(X)\qquad\text{subject to}\quad L\le |X|\le K$$
+$$\underset{X\subseteq\mathcal{C}}{\operatorname{maximize}}\ W(X)\qquad\text{subject to}\quad L\le \lvert X\rvert\le K$$
 
-$|X|$ は選択候補数である。式は「個数の条件を満たす選び方の中から、覆われる対象の重み和が大きいものを求める」という意味になる。$L=0$ なら最大 $K$ 個、$L=K$ ならちょうど $K$ 個を選ぶ。候補費用 $a_c$ はこの問題の予算制約には使わない。
+$\lvert X\rvert$ は選択候補数である。式は「個数の条件を満たす選び方の中から、覆われる対象の重み和が大きいものを求める」という意味になる。$L=0$ なら最大 $K$ 個、$L=K$ ならちょうど $K$ 個を選ぶ。候補費用 $a_ {c}$ はこの問題の予算制約には使わない。
 
 ### 1.4 予算付き最大被覆
 
@@ -71,7 +83,7 @@ $$\underset{X\subseteq\mathcal{C}}{\operatorname{maximize}}\ W(X)\qquad\text{sub
 
 $$\underset{X\subseteq\mathcal{C}}{\operatorname{minimize}}\ A(X)\qquad\text{subject to}\quad U(X)=\mathcal{T}$$
 
-式は「1つも対象を取りこぼさない選び方の中で、候補費用合計を小さくする」という意味である。すべての費用を1にすると、選ぶ候補数を小さくする問題になる。対象重み $w_t$ はこの目的関数に使わず、重み0の対象も被覆必須である。
+式は「1つも対象を取りこぼさない選び方の中で、候補費用合計を小さくする」という意味である。すべての費用を1にすると、選ぶ候補数を小さくする問題になる。対象重み $w_ {t}$ はこの目的関数に使わず、重み0の対象も被覆必須である。
 
 3問題とも最適解を保証するAPIではない。また、制約を満たす解が存在しない場合や、締切までに全対象被覆が完成しない場合がある。返却結果では、目的値より先に実行可能性を確認する。
 
@@ -100,7 +112,7 @@ $$\underset{X\subseteq\mathcal{C}}{\operatorname{minimize}}\ A(X)\qquad\text{sub
 
 自由候補を採用するかしないか、全 $2^q$ 通りを調べる。各選択の被覆和集合・費用・個数を計算し、第1章の条件を満たすものの中から最良を選べば、3種類の問題すべてを厳密に解ける。探索中の被覆回数を差分管理すれば、各集合で最初から和集合を作り直す必要はない。
 
-個数制約の残り上限を $k=K-|F|$、残り下限を $\ell=\max(0,L-|F|)$ とすると、列挙対象は $\sum_{j=\ell}^{\min(k,q)}\binom{q}{j}$ 通りである。ここで $j$ は今回追加する候補数。$\ell>\min(k,q)$ なら実行不能になる。exact Kなら $j=k$ の組合せだけでよい。
+個数制約の残り上限を $k=K-\lvert F\rvert$、残り下限を $\ell=\max(0,L-\lvert F\rvert)$ とすると、列挙対象は $\sum_ {j=\ell}^{\min(k,q)}\binom{q}{j}$ 通りである。ここで $j$ は今回追加する候補数。$\ell>\min(k,q)$ なら実行不能になる。exact Kなら $j=k$ の組合せだけでよい。
 
 特に追加が最大1候補なら、固定候補からの追加利得を全候補について調べるだけで主目的の厳密解を得られる。全体の $K=1$ だけでなく、固定部分が大きく残り1枠の部分問題にも使える。
 
@@ -119,7 +131,7 @@ $$\underset{X\subseteq\mathcal{C}}{\operatorname{minimize}}\ A(X)\qquad\text{sub
 | 下限なしの個数制約 | 各被覆maskを作る最小追加候補数 | 固定候補込みでK個以内のmaskから重み和最大を選ぶ | $O((q+1)2^T)$、$O(2^T)$ |
 | 下限・exact Kを含む個数制約 | 被覆maskと追加候補数ごとの到達可否 | 下限・上限を満たす状態から重み和最大を選ぶ | $O((q+1)(k'+1)2^T)$、$O((k'+1)2^T)$ |
 
-表の $k'=\min(K-|F|,q)$ は記録する追加候補数の上限である。最初の状態は固定候補の被覆mask、追加費用・追加個数は0とする。各maskの重み和は、1ビット落としたmaskの重み和へその対象重みを加え、全 $2^T$ 状態ぶん前計算できる。最小費用の状態は「処理済み候補の範囲」とmaskが同じなら安い方だけ残せる。今後使える候補が同じであり、主目的の被覆重みもmaskだけで決まるからである。
+表の $k'=\min(K-\lvert F\rvert,q)$ は記録する追加候補数の上限である。最初の状態は固定候補の被覆mask、追加費用・追加個数は0とする。各maskの重み和は、1ビット落としたmaskの重み和へその対象重みを加え、全 $2^T$ 状態ぶん前計算できる。最小費用の状態は「処理済み候補の範囲」とmaskが同じなら安い方だけ残せる。今後使える候補が同じであり、主目的の被覆重みもmaskだけで決まるからである。
 
 各候補は0回または1回だけ使う。前段と次段を分けた2配列で遷移すれば、費用0・空集合・同一被覆候補でも同じ候補を二度使わない。exact Kでは被覆が増えない候補も個数を満たすために必要になり得るため、単純に候補を捨てたり「最小個数だけ」の状態で済ませたりしない。
 
@@ -145,9 +157,9 @@ $$\underset{X\subseteq\mathcal{C}}{\operatorname{minimize}}\ A(X)\qquad\text{sub
 
 ### 2.6 整数計画・CP-SATで最適性を証明する
 
-候補を選ぶ0/1変数を $x_c$、対象が覆われる0/1変数を $y_t$ とする。最大被覆は $\sum_t w_t y_t$ を最大化し、各対象について $y_t\le\sum_{c:t\in S_c}x_c$ を課す。個数なら $L\le\sum_c x_c\le K$、予算なら $\sum_c a_cx_c\le B$ を追加する。非負重みなのでこの制約で主目的の最適値は一致するが、重み0の $y_t$ は実際の被覆と一致しない場合がある。被覆数の報告は採用候補から再計算するか、論理ORの両方向の制約を入れる。
+候補を選ぶ0/1変数を $x_ {c}$、対象が覆われる0/1変数を $y_ {t}$ とする。最大被覆は $\sum_ {t} w_ {t} y_ {t}$ を最大化し、各対象について $y_ {t}\le\sum_ {c:t\in S_ {c}}x_ {c}$ を課す。個数なら $L\le\sum_ {c} x_ {c}\le K$、予算なら $\sum_ {c} a_ {c}x_ {c}\le B$ を追加する。非負重みなのでこの制約で主目的の最適値は一致するが、重み0の $y_ {t}$ は実際の被覆と一致しない場合がある。被覆数の報告は採用候補から再計算するか、論理ORの両方向の制約を入れる。
 
-集合被覆では各対象に $\sum_{c:t\in S_c}x_c\ge1$ を課し、$\sum_c a_cx_c$ を最小化する。固定候補は $x_c=1$、禁止・pool外の非固定候補は $x_c=0$ とする。表記のない和の添字は、それぞれ第1章の全対象または全候補を走る。対象を覆う候補がない場合、候補についての和は0である。
+集合被覆では各対象に $\sum_ {c:t\in S_ {c}}x_ {c}\ge1$ を課し、$\sum_ {c} a_ {c}x_ {c}$ を最小化する。固定候補は $x_ {c}=1$、禁止・pool外の非固定候補は $x_ {c}=0$ とする。表記のない和の添字は、それぞれ第1章の全対象または全候補を走る。対象を覆う候補がない場合、候補についての和は0である。
 
 外部の整数最適化solverなら、候補間競合・複数予算などを追加できる。ただしモデル構築・依存ライブラリ・探索時間が必要で、一般入力を短時間で厳密に解ける保証はない。CP-SATでは `OPTIMAL` と `FEASIBLE` は別の状態であり、時間内に実行可能解が見つかっただけでは最適性の証明にならない。設定したギャップ許容値がある場合は、その停止条件も確認する。[OR-Tools公式ドキュメント](https://developers.google.com/optimization/cp/cp_solver)
 
@@ -472,7 +484,7 @@ AtCoder Heuristic Contest（AHC）の部分solverとして使う場合は、全�
 
 時間上限と反復上限の両方を指定した場合は、原則として先に到達した方で停止する。モードによって1 iterationが表す処理は異なるため、異なるモード間の `iterations` を探索量として直接比較しない。
 
-予算付き最大被覆では、再始動の終了処理を数える都合で、返却される `iterations` が指定値を最大1だけ超える場合がある。厳密な反復回数制御が必要なテストでは、この点を考慮する。
+返却される `iterations` は `iteration_limit` 以下になる。予算付き最大被覆では、再始動1回と各swap試行をそれぞれ1反復として数える。
 
 #### `seed`
 
@@ -546,7 +558,7 @@ greedy_only.iteration_limit = 0;
 以下を `main.cpp` として保存すれば、そのまま実行できる。第8章には実用途の関数形例を載せる。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 #include <iostream>
 
@@ -568,6 +580,8 @@ int main() {
 
     const coverage_solution solution =
         solver.solve_maximum_coverage(2, options);
+
+    std::cerr << solution << '\n';  // 主要な集計値と先頭20個までの選択候補を確認
 
     if (!solution.feasible) {
         std::cout << "infeasible\n";
@@ -595,6 +609,8 @@ int main() {
 初期解の `std::span<const int>` には `std::vector<int>` や `std::array<int, N>` を渡せる。波括弧の `{0, 2}` を直接受け取る `std::initializer_list<int>` overloadも用意されている。以下の宣言はクラスの公開APIの抜粋であり、利用側で再宣言する必要はない。
 
 #### 全用途共通の返却値
+
+データメンバを抜粋すると次の通りである。構造体内にはデバッグ出力用の `operator<<` も定義されている。
 
 ```cpp
 struct coverage_solution {
@@ -629,6 +645,46 @@ struct coverage_solution {
 - 選択数制約: 被覆重みが大きい解、次に候補数が少ない解
 - 予算制約: 被覆重みが大きい解、次に費用が小さい解、次に候補数が少ない解
 - 集合被覆: 実行可能な解、次に費用が小さい解、次に候補数が少ない解
+
+#### 結果のデバッグ出力
+
+`coverage_solution` と `coverage_evaluation` は、`std::cout`、`std::cerr`、`std::ostringstream` へそのまま渡せる。次の例は単独でコンパイル・実行できる。
+
+```cpp
+#include "maximum_coverage_solver_v08.hpp"
+
+int main() {
+    const coverage_problem problem{
+        {10, 20, 30, 40}, {3, 4, 2}, {{0, 1}, {1, 2}, {2, 3}}, {}, {}};
+    const coverage_solver solver(problem);
+    coverage_solver_options options;
+    options.time_limit_ms = -1;
+    options.iteration_limit = 0;
+
+    const auto solution = solver.solve_maximum_coverage(2, options);
+    std::cerr << solution << '\n';
+    std::cout << solver.evaluate(solution.selected_candidates) << '\n';
+}
+```
+
+標準の数値書式では、`std::cerr` に次の1行を出力する。
+
+```text
+coverage_solution{feasible=true, covered_weight=100, total_cost=5, covered_target_count=4, uncovered_target_count=0, iterations=0, selected_candidates(size=2)=[0, 2]}
+```
+
+`std::cout` への評価結果は次の通りである。
+
+```text
+coverage_evaluation{covered_weight=100, total_cost=5, covered_target_count=4, uncovered_target_count=0, selected_count=2}
+```
+
+- 集計値はすべて項目名付きで表示する。`feasible` は `true` / `false` になる。
+- `selected_candidates(size=N)` の `N` は選択候補の総数。候補番号は格納順に先頭20個まで表示する。solveの返却値では昇順になる。
+- 20個を超える場合は `, ... (+5 more)` のように省略した件数を末尾へ付ける。これは未被覆対象数ではなく、表示しなかった候補数である。空配列は `selected_candidates(size=0)=[]` になる。
+- 結果の内容は変更しない。出力だけでは実行可能性の判定や再評価は行わないため、`feasible=false` の部分解もそのまま確認できる。
+- 演算子は改行・flushを追加せず、渡されたstreamを返す。必要な箇所で `<< '\n'` を付け、複数の結果も連結できる。呼び出し元の数値書式を使い、`boolalpha` などの書式設定は変更しない。
+- 出力処理は `coverage_solution` が選択候補数をNとして $O(\min(N,20))$、`coverage_evaluation` が $O(1)$ である。結果を出力するときだけ実行される。
 
 ### 6.1 道路・通信グラフ上の施設配置
 
@@ -869,7 +925,7 @@ struct coverage_evaluation {
 };
 ```
 
-`evaluate` の返却型である。`coverage_subproblem` の固定候補は自動追加され、禁止・pool・差し替え値もsolveと同じように解釈される。制約違反量や予算・選択数に対する `feasible` は判定しないため、呼び出し側で目的固有の上限と比較する。
+上記は `evaluate` の返却型のデータメンバである。`std::cerr << evaluation << '\n';` で全5項目を確認できる。`coverage_subproblem` の固定候補は自動追加され、禁止・pool・差し替え値もsolveと同じように解釈される。制約違反量や予算・選択数に対する `feasible` は判定しないため、呼び出し側で目的固有の上限と比較する。
 
 ## 7. 制約・注意点
 
@@ -1020,10 +1076,10 @@ AHCでは外側でも時計を管理し、出力生成と安全余裕を残す�
 
 全例の入力コメントは、候補・対象番号の対応、配列長、単位、空配列の意味を示す。戻り値が `coverage_solution` の関数では、まず `feasible` を確認し、その後に選択候補と目的値を使う。入力検証で不正を検出した場合は `std::invalid_argument` となる。実行不能の早期判定や、空のseed列・シナリオ列などでsolveを呼ばない場合には、検査されない条件もある。総和が整数範囲に収まることなど、第7章の前提は各関数でも必要になる。
 
-全例をまとめた [maximum_coverage_solver_examples_v06.cpp](maximum_coverage_solver_examples_v06.cpp) には実行テスト用のmainも含む。関数群だけを別ソースからincludeした場合は、そのmainは有効にならない。
+全例をまとめた [maximum_coverage_solver_examples_v08.cpp](maximum_coverage_solver_examples_v08.cpp) には実行テスト用のmainも含む。関数群だけを別ソースからincludeした場合は、そのmainは有効にならない。
 
 ```bash
-g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror maximum_coverage_solver_examples_v06.cpp -o examples
+g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror maximum_coverage_solver_examples_v08.cpp -o examples
 ./examples
 ```
 
@@ -1032,7 +1088,7 @@ g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror maximum_coverage_
 入力モデルは4.1節、メソッドと注意点は6.1節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleを確認し、selected_candidatesのグラフ頂点へ施設を置く。covered_weightは重要度合計。
 coverage_solution solve_graph_facility_coverage(
@@ -1118,7 +1174,7 @@ coverage_solution solve_graph_facility_coverage(
 入力モデルは4.2節、メソッドと注意点は6.2節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 struct weighted_demand_point {
     long long x;  // 入力: 同じ単位で表すx座標。long longの範囲。
@@ -1190,7 +1246,7 @@ coverage_solution solve_budgeted_sensor_placement(
 入力モデルは4.3節、メソッドと注意点は6.3節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleならselected_candidatesのテストを実行する。total_costは合計実行費。
 coverage_solution minimize_test_suite(
@@ -1221,7 +1277,7 @@ coverage_solution minimize_test_suite(
 入力モデルは4.4節、メソッドと注意点は6.4節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleならselected_candidatesが代表item番号。covered_weightは特徴の和集合の価値。
 coverage_solution select_representative_items(
@@ -1248,7 +1304,7 @@ coverage_solution select_representative_items(
 入力モデルは4.5節、メソッドと注意点は6.5節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleならselected_candidatesが採用ルート番号。固定ルートも含む。
 coverage_solution select_routes_covering_all_jobs(
@@ -1283,7 +1339,7 @@ coverage_solution select_routes_covering_all_jobs(
 入力モデルは4.6節、メソッドと注意点は6.6節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleなら候補数が指定範囲内。候補IDは入力時の番号。費用最小化は保証しない。
 coverage_solution solve_coverage_with_count_bounds(
@@ -1315,7 +1371,7 @@ coverage_solution solve_coverage_with_count_bounds(
 入力モデルは4.7節、メソッドと注意点は6.7節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleなら既設固定候補を含む完成集合。増設分だけ欲しければ固定集合との差を取る。
 coverage_solution solve_operational_budget_coverage(
@@ -1342,7 +1398,7 @@ coverage_solution solve_operational_budget_coverage(
 入力モデルは4.8節、メソッドと注意点は6.8節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleを確認して候補集合を置き換える。有効初期解のcovered_weightを悪化させない。
 coverage_solution improve_existing_budgeted_solution(
@@ -1388,7 +1444,7 @@ coverage_solution improve_existing_count_bounded_solution(
 入力モデルは4.9節、メソッドと注意点は6.9節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleなら全対象被覆の完成集合。未完成入力よりtotal_costが増える場合がある。
 coverage_solution repair_incomplete_set_cover(
@@ -1419,7 +1475,7 @@ coverage_solution repair_incomplete_set_cover(
 入力モデルは4.10節、メソッドと注意点は6.10節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: 実行可能な中の最良解。iterationsは採用回の値。seed列が空ならfeasible=false。
 coverage_solution solve_budgeted_coverage_multi_seed(
@@ -1474,7 +1530,7 @@ coverage_solution solve_budgeted_coverage_multi_seed(
 入力モデルは4.11節、メソッドと注意点は6.11節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 struct budgeted_coverage_scenario {
     std::vector<long long> target_weights;  // 入力: T個の非負重み。全0でもT個用意。
@@ -1525,7 +1581,7 @@ std::vector<coverage_solution> solve_repeated_budget_scenarios(
 最初の関数はシナリオを独立に解く。次の関数は前回解を候補として引き継ぐ点が異なる。下のブロックも単独でコピーできる。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleなら今回の条件を満たす解。selected_candidatesを次ターン用に保存する。
 // 旧解が今回の予算を超える場合は新規に解くため、旧解との品質非悪化は保証しない。
@@ -1598,7 +1654,7 @@ coverage_solution solve_budgeted_turn(
 入力モデルは4.12節、メソッドと注意点は6.12節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 // 出力: feasibleなら固定部分を含むexact_k個の案。falseなら外側で元解を保持する等の処理を行う。
 coverage_solution repair_exact_k_coverage_neighborhood(
@@ -1650,7 +1706,7 @@ coverage_solution repair_exact_k_coverage_neighborhood(
 入力モデルは4.13節、メソッドと注意点は6.13節を参照する。
 
 ```cpp
-#include "maximum_coverage_solver_v06.hpp"
+#include "maximum_coverage_solver_v08.hpp"
 
 struct checked_coverage_solution {
     coverage_evaluation evaluation;  // 出力: 固定候補も加えた重み・費用・個数。
@@ -1838,18 +1894,18 @@ repairは、一部の候補を除いた状態や未完成の初期解に、候�
 
 `time_keeper` は相対終了時刻と絶対deadlineの早い方を改善探索の締切に使う。外側の反復では毎回確認する箇所と64試行ごとに時計を確認する箇所がある。greedyは開始時とheap取り出し256回ごとに絶対deadlineを確認する。相対時間だけでは決定的初期構築を中断しない。
 
-改善試行を始めない条件でも、入力・初期解の検証、必要な下限補充などは実施する。予算版はswapの計上に加え再始動終了も数えるため、返却反復数が上限を最大1超える場合がある。`iterations == 0` は最適性を表さず、期限切れでも0になり得る。
+改善試行を始めない条件でも、入力・初期解の検証、必要な下限補充などは実施する。予算版は再始動1回を数えてから、残りの反復枠で最大8回のswapを行うため、返却反復数は指定上限を超えない。`iterations == 0` は最適性を表さず、期限切れでも0になり得る。
 
-計算量では、対象数をT、候補数をC、正規化後の被覆関係総数をE、選択候補の関係数合計を $E_X$ とする。入力に同じ対象番号を繰り返し書く場合、正規化前の関係数を $E_{\mathrm{in}}$ とし、その入力を読む・ソートする分も必要になる。以下の表には、別途渡す固定・禁止などの候補リストの読み取り時間も加える。
+計算量では、対象数をT、候補数をC、正規化後の被覆関係総数をE、選択候補の関係数合計を $E_ {X}$ とする。入力に同じ対象番号を繰り返し書く場合、正規化前の関係数を $E_ {\mathrm{in}}$ とし、その入力を読む・ソートする分も必要になる。以下の表には、別途渡す固定・禁止などの候補リストの読み取り時間も加える。
 
 | 処理 | 時間の目安・保守的な上界 |
 |---|---|
-| コンストラクタ | $O(E_{\mathrm{in}}\log(E_{\mathrm{in}}+1)+C\log(C+1)+CE+T)$。ハッシュ衝突時の列比較と逆CSR走査も含む |
+| コンストラクタ | $O(E_ {\mathrm{in}}\log(E_ {\mathrm{in}}+1)+C\log(C+1)+CE+T)$。ハッシュ衝突時の列比較と逆CSR走査も含む |
 | 追加条件のないview取得 | $O(1)$。この後の状態初期化やgreedyは別 |
 | 部分問題の条件合成 | $O(T+C+E)$ に入力リストの検証時間を加えたもの |
 | 候補の追加・削除・利得・損失 | その候補の被覆対象数に比例。空被覆状態の追加利得は前計算値で $O(1)$ |
 | 1組の候補の交換差分 | 両候補の被覆対象数の和に比例 |
-| evaluate（追加条件なし） | $O(T+C+E_X)$。自動追加の固定候補も $E_X$ に含める |
+| evaluate（追加条件なし） | $O(T+C+E_ {X})$。自動追加の固定候補も $E_ {X}$ に含める |
 | evaluate（部分問題あり） | 上記に条件合成が加わり、概ね $O(T+C+E)$ |
 | 個数下限補充 | 候補のソートと状態再構築を含め $O(T+C\log(C+1)+E)$ |
 | 保持する主データ・探索状態のメモリ | $O(T+C+E)$。構築中は正規化前の入力コピーも必要 |

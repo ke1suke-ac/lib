@@ -1,6 +1,6 @@
 # McmcEstimator 利用ガイド
 
-対象ヘッダは `mcmc_estimator_v09.hpp` です。C++20で、隠れた設定値を推定するためのライブラリです。本書はこのヘッダの公開APIと実装に基づきます。ガイドはソースと自動同期せず、明示的な更新指示があったときに更新します。
+対象ヘッダは `mcmc_estimator_v10.hpp` です。C++20で、隠れた設定値を推定するためのライブラリです。本書はこのヘッダの公開APIと実装に基づきます。ガイドはソースと自動同期せず、明示的な更新指示があったときに更新します。
 
 初めて使う場合は第1〜3章を読み、第4章から自分の問題に近い題材を選んでください。第4章と第5章は、同じU01〜U17の番号で対応しています。U16には、共通の標準偏差の同時推定、残差からの標準偏差推定、整数係数の三つの亜種も含みます。三入力の一次関数を扱いたい場合はU16、一次・二次・正弦の式の種類も推定したい場合はU17へ進めます。第5章は基本17例と3亜種の全20コード例で構成します。各コードは、それぞれ単独でコンパイルできるプログラムです。配布ZIPではヘッダがルート、個別コードが`examples/`に入るため、コンパイル時に`-I .`を指定します。
 
@@ -34,39 +34,39 @@
 
 既知の入力から予測値を計算する式を、次のように書きます。
 
-$$\widehat y_i=f(c,x_i;\theta)$$
+$$\widehat y_ {i}=f(c,x_ {i};\theta)$$
 
 | 記号 | 意味 |
 |---|---|
 | $i$ | 観測の番号。1から観測数までを数える |
-| $x_i$ | 第$i$番目に与えた既知の入力。数値だけでなく、経路や仕事列などでもよい |
-| $y_i$ | その入力に対して実際に観測した結果 |
+| $x_ {i}$ | 第$i$番目に与えた既知の入力。数値だけでなく、経路や仕事列などでもよい |
+| $y_ {i}$ | その入力に対して実際に観測した結果 |
 | $\theta$ | 調べたい隠れパラメータをまとめた候補。複数の数値や順列など |
 | $c$ | 地図など、複数の観測で共用する既知のデータ。不要なら省略する |
 | $f$ | 利用者が用意する予測関数 |
-| $\widehat y_i$ | 候補$\theta$を使った予測結果。観測値そのものとは区別する |
+| $\widehat y_ {i}$ | 候補$\theta$を使った予測結果。観測値そのものとは区別する |
 
 通常の観測モデルでは、次の目的関数を小さくする候補を求めます。
 
-$$E(\theta)=R(\theta)+\sum_{i=1}^{N}w_i\ell(\theta,x_i,y_i),\qquad \widehat\theta\in\operatorname*{arg\,min}_{\theta\in\Theta}E(\theta)$$
+$$E(\theta)=R(\theta)+\sum_ {i=1}^{N}w_ {i}\ell(\theta,x_ {i},y_ {i}),\qquad \widehat\theta\in\operatorname{argmin}_ {\theta\in\Theta}E(\theta)$$
 
 | 記号 | 意味 |
 |---|---|
 | $E(\theta)$ | 候補の悪さを表す実数。コードではenergy。小さいほどよい |
 | $R(\theta)$ | 候補全体に対する事前項。観測を見る前に分かる範囲・傾向・制約などを表す |
 | $N$ | 観測数。観測がないモデルなら0でもよい |
-| $w_i$ | 第$i$番目の観測の非負の重み。通常は1 |
-| $\ell(\theta,x_i,y_i)$ | 一件分の損失。予測$f(c,x_i;\theta)$と観測$y_i$の合い方を数値化する。既知データ$c$への依存はここでは省略して書いている |
+| $w_ {i}$ | 第$i$番目の観測の非負の重み。通常は1 |
+| $\ell(\theta,x_ {i},y_ {i})$ | 一件分の損失。予測$f(c,x_ {i};\theta)$と観測$y_ {i}$の合い方を数値化する。既知データ$c$への依存はここでは省略して書いている |
 | $\Theta$ | 許される候補の集合。変数の範囲や順列などの構造を含む |
 | $\widehat\theta$ | 目的関数を最小にする候補を表す記号。実際に返るのは、予算内で見つかった最良候補 |
 | $\sum$ | 一件ずつの値を全部足す操作 |
-| $\operatorname*{arg\,min}$ | 関数の最小値ではなく、その値を与える候補を選ぶ操作 |
+| $\operatorname{argmin}$ | 関数の最小値ではなく、その値を与える候補を選ぶ操作 |
 
 例えば、測定誤差が正規分布に従うと考える場合、標準のGaussian損失は次の形です。
 
-$$\ell(\theta,x_i,y_i)=\frac{1}{2}\left(\frac{y_i-f(c,x_i;\theta)}{\sigma_i}\right)^2+\log\sigma_i$$
+$$\ell(\theta,x_ {i},y_ {i})=\frac{1}{2}\left(\frac{y_ {i}-f(c,x_ {i};\theta)}{\sigma_ {i}}\right)^2+\log\sigma_ {i}$$
 
-$\sigma_i>0$は、その観測の誤差の標準偏差、つまり通常のぶれの大きさです。$\log$は自然対数です。ずれを$\sigma_i$で割ることで「通常のぶれの何倍ずれたか」を比べます。二乗するので大きなずれほど強く罰します。$\log\sigma_i$も含まれますが、全ての$\sigma_i$が既知なら候補によって変わらない項です。候補によらない正規分布の共通定数は省いています。
+$\sigma_ {i}>0$は、その観測の誤差の標準偏差、つまり通常のぶれの大きさです。$\log$は自然対数です。ずれを$\sigma_ {i}$で割ることで「通常のぶれの何倍ずれたか」を比べます。二乗するので大きなずれほど強く罰します。$\log\sigma_ {i}$も含まれますが、全ての$\sigma_ {i}$が既知なら候補によって変わらない項です。候補によらない正規分布の共通定数は省いています。
 
 標準損失は重みまで掛けた値を返します。独自損失を書く場合も、必要な重み付けをその関数内で行います。ライブラリが、その戻り値にもう一度重みを掛けることはありません。
 
@@ -163,7 +163,7 @@ logitは、0〜1に制限する前の実数です。例えば予測関数が$t$�
 
 ### 3.1 ヘッダと、通常の構成
 
-`#include "mcmc_estimator_v09.hpp"`で読み込みます。C++20と、ヘッダが使う`<bits/stdc++.h>`を提供するコンパイラ環境が必要です。配布ZIPのルートでU01をビルドする場合は、`g++ -std=c++20 -O2 -I . examples/mcmc_estimator_guide_example_u01_v06.cpp -o mcmc_guide_u01_v06`を実行します。`-ffast-math`は指定しません。
+`#include "mcmc_estimator_v10.hpp"`で読み込みます。C++20と、ヘッダが使う`<bits/stdc++.h>`を提供するコンパイラ環境が必要です。配布ZIPのルートでU01をビルドする場合は、`g++ -std=c++20 -O2 -I . examples/mcmc_estimator_guide_example_u01_v07.cpp -o mcmc_guide_u01_v07`を実行します。`-ffast-math`は指定しません。
 
 通常の順序は、**変数を宣言 → 観測モデルを作成 → Sessionを作成 → 予算を渡して実行**です。型名が長いSessionを自分で書く必要はなく、`auto fit = ...;`で受け取れます。U01に一式を示します。
 
@@ -316,6 +316,31 @@ Gaussian、BernoulliLogit、PoissonLogMeanには利用者が設定するフィ�
 
 全鎖の再評価が終わる前でも、有限候補を一つ評価できれば`has_estimate`がtrueになることがあります。`stop`や`has_estimate`は、統計的な収束や大域最適性を表すものではありません。
 
+#### 3.6.1 結果をそのままデバッグ出力する
+
+結果の各フィールドを手作業で並べなくても、`std::cerr << result << '\n';`のように出力できます。`std::cout`でも同じ書き方です。AHCの解答用の標準出力へ混ぜないよう、デバッグには通常`std::cerr`を使います。
+
+| 出力できる型 | 例 | 表示内容 |
+|---|---|---|
+| `Session::Result` | `std::cerr << result << '\n';` | 状態、目的関数値、Report、revision |
+| `Report` | `std::cerr << result.report << '\n';` | 停止理由、試行数・受理数・評価数・項数・標本数、実時間、同期状態、候補の有無 |
+| `Best` | `std::cerr << session.best() << '\n';` | 指す先の状態と目的関数値。ポインタのアドレスではない |
+| `Session::SampleResult<Value>` | `std::cerr << samples << '\n';` | 集計、Report、revision、残る準備量 |
+| `Session::Moments<Value>` | `std::cerr << samples.summary << '\n';` | count、mean、variance |
+| `McmcState` | `if (result.state) std::cerr << *result.state << '\n';` | realとdiscrete |
+
+ここで`result`は`solve`、`samples`は`sample`の戻り値です。`solve_view`・`sample_each`・下位APIの計算メソッドが返すReportも同じ方法で出力できます。例えば`std::cerr << session.solve_view(Solver::Budget::for_steps(1000)) << '\n';`なら、1,000遷移分を実行してそのReportを表示します。既に得た結果を見るだけなら保存済みの変数を出力します。
+
+表示は`McmcState{real=[1.5, -2], discrete=[3]}`のように、名前と値を一行にまとめます。標準状態のreal・discrete、統計値のarray・vectorは、それぞれ**先頭20要素まで**です。25要素なら末尾の`... (+5 more)`が「残り5要素を省略した」という意味です。省略は表示だけで、推定結果や集計データを切り捨てません。平均・分散の表示も全配列をコピーせず、表示する要素だけを読みます。
+
+候補がない場合のstate、0標本のmean、2標本未満のvarianceは`none`です。分散は通常の`variance()`と同じく、標本数から1を引いた数で割った各成分の標本分散です。未評価時のenergyは正の無限大のまま表示します。stopは`Budget`または`NoFiniteState`という名前です。
+
+独自Stateに`std::ostream& operator<<(std::ostream&, const State&)`があれば、その表示を使います。ない場合でも利用を妨げず、状態部分を`<unprintable>`とします。直接のarray・vector型の状態には、添字と要素数から同じ20要素制限を適用できます。独自のoperatorが内部の配列を表示する場合、その長さは独自operator側で制限してください。
+
+各operatorは渡されたostreamへの参照を返すため、`std::cerr << result << '\n' << session.best() << '\n';`と連結できます。ライブラリ側で改行やflushを追加することはありません。数値の精度は呼び出し側の`std::fixed`・`std::setprecision`などに従い、ライブラリ自身は書式設定を切り替えません。Bestの有効期限は変わらず、次の実行・更新前に出力します。これは人が読むデバッグ形式であり、保存・復元用の形式ではありません。
+
+全種類を実際に出力する独立したプログラムは、同梱の`examples/mcmc_estimator_debug_output_v01.cpp`です。
+
 ### 3.7 差分更新と、再構築の境界
 
 ターン制問題では、Sessionをターンループの外で一度作り、同じオブジェクトを使います。更新メソッドは変更を登録し、次の`solve`または`sample`の予算で必要な評価を行います。変更直後は、以前のenergyを新しいモデルの値として使えないため、公開される最良候補は一度空になります。
@@ -414,49 +439,49 @@ U16-Aは四係数と共通の標準偏差の同時推定、U16-Bは四係数を�
 
 例の遷移数は、実行結果を確認しやすくするための設定です。AHCの実時間予算に置き換える場合は、例中でBudgetを作る箇所、または引数で受け取る箇所を使い、準備と出力にも余裕を残します。これらの数値は全問題で最適という意味ではありません。
 
-配布ファイルは、ガイドとコード例の版番号をv06で揃えています。対応するライブラリの版番号はv09です。この二つの版番号は別のものです。ZIPは`mcmc_estimator_guide_examples_v06.zip`、展開先のルートは`mcmc_estimator_guide_examples_v06/`です。
+配布ファイルは、ガイドとコード例の版番号をv06で揃えています。対応するライブラリの版番号はv10です。この二つの版番号は別のものです。ZIPは`mcmc_estimator_guide_examples_v07.zip`、展開先のルートは`mcmc_estimator_guide_examples_v07/`です。
 
-全例を一つにまとめた`mcmc_estimator_guide_examples_v06.cpp`も同梱しています。例えばU04を選ぶ場合は、ルートで`g++ -std=c++20 -O2 -DMCMC_GUIDE_EXAMPLE=4 mcmc_estimator_guide_examples_v06.cpp -o mcmc_guide_demo_v06`を実行します。未指定ならU01です。基本例は1〜17、U16の亜種は161〜163で選びます。個別ファイルと同じコードを、コンパイル時に一つ選ぶ構成です。
+全例を一つにまとめた`mcmc_estimator_guide_examples_v07.cpp`も同梱しています。例えばU04を選ぶ場合は、ルートで`g++ -std=c++20 -O2 -DMCMC_GUIDE_EXAMPLE=4 mcmc_estimator_guide_examples_v07.cpp -o mcmc_guide_demo_v07`を実行します。未指定ならU01です。基本例は1〜17、U16の亜種は161〜163で選びます。個別ファイルと同じコードを、コンパイル時に一つ選ぶ構成です。
 
 | ユースケース | ZIP内の個別コード | MCMC_GUIDE_EXAMPLE |
 |---|---|---|
-| U01 | `examples/mcmc_estimator_guide_example_u01_v06.cpp` | `1` |
-| U02 | `examples/mcmc_estimator_guide_example_u02_v06.cpp` | `2` |
-| U03 | `examples/mcmc_estimator_guide_example_u03_v06.cpp` | `3` |
-| U04 | `examples/mcmc_estimator_guide_example_u04_v06.cpp` | `4` |
-| U05 | `examples/mcmc_estimator_guide_example_u05_v06.cpp` | `5` |
-| U06 | `examples/mcmc_estimator_guide_example_u06_v06.cpp` | `6` |
-| U07 | `examples/mcmc_estimator_guide_example_u07_v06.cpp` | `7` |
-| U08 | `examples/mcmc_estimator_guide_example_u08_v06.cpp` | `8` |
-| U09 | `examples/mcmc_estimator_guide_example_u09_v06.cpp` | `9` |
-| U10 | `examples/mcmc_estimator_guide_example_u10_v06.cpp` | `10` |
-| U11 | `examples/mcmc_estimator_guide_example_u11_v06.cpp` | `11` |
-| U12 | `examples/mcmc_estimator_guide_example_u12_v06.cpp` | `12` |
-| U13 | `examples/mcmc_estimator_guide_example_u13_v06.cpp` | `13` |
-| U14 | `examples/mcmc_estimator_guide_example_u14_v06.cpp` | `14` |
-| U15 | `examples/mcmc_estimator_guide_example_u15_v06.cpp` | `15` |
-| U16 | `examples/mcmc_estimator_guide_example_u16_v06.cpp` | `16` |
-| U16-A | `examples/mcmc_estimator_guide_example_u16a_v06.cpp` | `161` |
-| U16-B | `examples/mcmc_estimator_guide_example_u16b_v06.cpp` | `162` |
-| U16-C | `examples/mcmc_estimator_guide_example_u16c_v06.cpp` | `163` |
-| U17 | `examples/mcmc_estimator_guide_example_u17_v06.cpp` | `17` |
+| U01 | `examples/mcmc_estimator_guide_example_u01_v07.cpp` | `1` |
+| U02 | `examples/mcmc_estimator_guide_example_u02_v07.cpp` | `2` |
+| U03 | `examples/mcmc_estimator_guide_example_u03_v07.cpp` | `3` |
+| U04 | `examples/mcmc_estimator_guide_example_u04_v07.cpp` | `4` |
+| U05 | `examples/mcmc_estimator_guide_example_u05_v07.cpp` | `5` |
+| U06 | `examples/mcmc_estimator_guide_example_u06_v07.cpp` | `6` |
+| U07 | `examples/mcmc_estimator_guide_example_u07_v07.cpp` | `7` |
+| U08 | `examples/mcmc_estimator_guide_example_u08_v07.cpp` | `8` |
+| U09 | `examples/mcmc_estimator_guide_example_u09_v07.cpp` | `9` |
+| U10 | `examples/mcmc_estimator_guide_example_u10_v07.cpp` | `10` |
+| U11 | `examples/mcmc_estimator_guide_example_u11_v07.cpp` | `11` |
+| U12 | `examples/mcmc_estimator_guide_example_u12_v07.cpp` | `12` |
+| U13 | `examples/mcmc_estimator_guide_example_u13_v07.cpp` | `13` |
+| U14 | `examples/mcmc_estimator_guide_example_u14_v07.cpp` | `14` |
+| U15 | `examples/mcmc_estimator_guide_example_u15_v07.cpp` | `15` |
+| U16 | `examples/mcmc_estimator_guide_example_u16_v07.cpp` | `16` |
+| U16-A | `examples/mcmc_estimator_guide_example_u16a_v07.cpp` | `161` |
+| U16-B | `examples/mcmc_estimator_guide_example_u16b_v07.cpp` | `162` |
+| U16-C | `examples/mcmc_estimator_guide_example_u16c_v07.cpp` | `163` |
+| U17 | `examples/mcmc_estimator_guide_example_u17_v07.cpp` | `17` |
 
 ### 5.1 U01：頭打ちになる装置の応答
 
-個別コード：`examples/mcmc_estimator_guide_example_u01_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=1`。
+個別コード：`examples/mcmc_estimator_guide_example_u01_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=1`。
 
 **具体的な問題。** 加える電圧が0なら表示は基準値になり、電圧を大きくすると表示は増えるものの、増え方が次第に小さくなる装置を考えます。既知の式に三つの未知係数があります。
 
 $$f(x;\theta)=b+\frac{ax}{k+x},\qquad \theta=(a,k,b)$$
 
-$x\geq0$は電圧、$a>0$は基準値からの増加幅、$k>0$は曲線の曲がり方、$b$は基準値です。例えば$x=k$なら増加分は$a/2$です。測定値$y_i$とこの予測を、既知の誤差$\sigma_i$を使うGaussian損失で比べます。事前項は0とし、指定範囲内の候補を使います。
+$x\geq0$は電圧、$a>0$は基準値からの増加幅、$k>0$は曲線の曲がり方、$b$は基準値です。例えば$x=k$なら増加分は$a/2$です。測定値$y_ {i}$とこの予測を、既知の誤差$\sigma_ {i}$を使うGaussian損失で比べます。事前項は0とし、指定範囲内の候補を使います。
 
-**モデルからコードへ。** `Parameters::real`の戻り値`a,k,b`は係数の値ではなく、`state.real`の添字です。`Row`のinputが$x_i$、valueが$y_i$、scaleが$\sigma_i$に対応します。予測関数には、候補を使った式だけを書きます。
+**モデルからコードへ。** `Parameters::real`の戻り値`a,k,b`は係数の値ではなく、`state.real`の添字です。`Row`のinputが$x_ {i}$、valueが$y_ {i}$、scaleが$\sigma_ {i}$に対応します。予測関数には、候補を使った式だけを書きます。
 
 **呼び出しと結果。** `fit_response(rows, query, budget)`は、宣言・観測モデル・Sessionを作り、`solve`を一度呼びます。戻り値は4要素で、最後の要素がqueryでの予測です。`nullopt`なら有限候補を得ていません。`main`の測定は$a=4,k=2,b=1$から作っているので、電圧3での予測は3.4付近になります。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -501,17 +526,17 @@ int main() {
 
 ### 5.2 U02：二次元の座標、欠測、誤差の相関
 
-個別コード：`examples/mcmc_estimator_guide_example_u02_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=2`。
+個別コード：`examples/mcmc_estimator_guide_example_u02_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=2`。
 
 **具体的な問題。** 一つの物体を二つの計測系で測ると、片方は倍率が違い、さらに横と縦にずれているとします。対応する点から、その変換を求めます。一部の点では横または縦だけが測れます。
 
-$$\widehat u=cx+d_x,\qquad \widehat v=cy+d_y,\qquad \theta=(c,d_x,d_y)$$
+$$\widehat u=cx+d_ {x},\qquad \widehat v=cy+d_ {y},\qquad \theta=(c,d_ {x},d_ {y})$$
 
-$(x,y)$は変換前の点、$(\widehat u,\widehat v)$は変換後の予測点です。$c$は共通倍率、$d_x,d_y$は二方向のずれです。観測点を$(u,v)$、既知の各軸の標準偏差を$\sigma_u,\sigma_v$とすると、単位をそろえたずれは$z_u=(u-\widehat u)/\sigma_u$、$z_v=(v-\widehat v)/\sigma_v$です。
+$(x,y)$は変換前の点、$(\widehat u,\widehat v)$は変換後の予測点です。$c$は共通倍率、$d_ {x},d_ {y}$は二方向のずれです。観測点を$(u,v)$、既知の各軸の標準偏差を$\sigma_ {u},\sigma_ {v}$とすると、単位をそろえたずれは$z_ {u}=(u-\widehat u)/\sigma_ {u}$、$z_ {v}=(v-\widehat v)/\sigma_ {v}$です。
 
 両軸の誤差が独立なら、二つの二乗損失を足せます。両方が同時に右上へずれやすいなどの関連がある場合は、その強さを既知の相関係数$\rho$で表します。$-1<\rho<1$です。両方観測した一件の損失は次です。
 
-$$\ell=\frac{z_u^2-2\rho z_uz_v+z_v^2}{2(1-\rho^2)}+\log\sigma_u+\log\sigma_v+\frac{1}{2}\log(1-\rho^2)$$
+$$\ell=\frac{z_ {u}^2-2\rho z_ {u}z_ {v}+z_ {v}^2}{2(1-\rho^2)}+\log\sigma_ {u}+\log\sigma_ {v}+\frac{1}{2}\log(1-\rho^2)$$
 
 $\rho=0$なら独立な二軸の損失になります。$\rho>0$なら、同じ方向へ一緒にずれることを、逆方向へずれることより起こりやすいと見なします。ここで$\rho$と二つの標準偏差は推定せず、測定系の既知情報として渡します。
 
@@ -520,7 +545,7 @@ $\rho=0$なら独立な二軸の損失になります。$\rho>0$なら、同じ�
 **呼び出しと結果。** `fit_coordinates`へ観測点列と予測したい点を渡します。`solve`後、`prediction`で2次元の予測を取り出します。戻り値は`[c,dx,dy,予測横,予測縦]`です。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Point = std::array<double,2>;
@@ -579,22 +604,26 @@ int main() {
 
 ### 5.3 U03：大きな外れ値を含む処理時間
 
-個別コード：`examples/mcmc_estimator_guide_example_u03_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=3`。
+個別コード：`examples/mcmc_estimator_guide_example_u03_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=3`。
 
 **具体的な問題。** 普段の処理時間は仕事量にほぼ比例します。しかし、ときどき別の処理を待って極端に時間が延びます。その一回に合わせて通常時の予測まで大きくしたくない状況です。
 
 予測は$f(x;\theta)=ax+b$です。$x$は仕事量、$a$は仕事量あたりの時間、$b$は固定時間です。観測時間を$y$、通常のぶれを$\sigma$、標準化した残差を$z=(y-f(x;\theta))/\sigma$とします。Huber損失は、小さなずれでは二乗、大きなずれでは直線的に増える値を使います。
 
-$$h_\delta(z)=\begin{cases}z^2/2&(|z|\leq\delta)\\ \delta(|z|-\delta/2)&(|z|>\delta)\end{cases},\qquad \ell=h_\delta(z)+\log\sigma$$
+$$h_ {\delta}(z)=z^2/2\quad(\lvert z\rvert\leq\delta)$$
+
+$$h_ {\delta}(z)=\delta(\lvert z\rvert-\delta/2)\quad(\lvert z\rvert>\delta)$$
+
+$$\ell=h_ {\delta}(z)+\log\sigma$$
 
 $\delta>0$は切り替えの閾値で、コードのthresholdです。例えば$\delta=1.345$なら、通常のぶれの1.345倍を超えるずれの影響を抑え始めます。外れ値を完全に捨てるのではなく、影響の増え方を抑えます。
 
 **モデルからコードへ。** U01と同じ一出力の観測モデルを使い、損失だけ`Huber{threshold}`にします。thresholdは関数の引数で、省略時1.345です。各観測のscaleは、外れ値込みの最大幅ではなく通常時のぶれを設定します。
 
-**呼び出しと結果。** `fit_robust_time`の戻り値は`[a,b]`です。次の仕事量を$x_{\mathrm{next}}$とすれば、戻り値から$a x_{\mathrm{next}}+b$を計算できます。コードの13件中一件だけに待ち時間50を加えており、通常の係数2と1に近い推定を確認できます。
+**呼び出しと結果。** `fit_robust_time`の戻り値は`[a,b]`です。次の仕事量を$x_ {\mathrm{next}}$とすれば、戻り値から$a x_ {\mathrm{next}}+b$を計算できます。コードの13件中一件だけに待ち時間50を加えており、通常の係数2と1に近い推定を確認できます。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -631,7 +660,7 @@ int main() {
 
 ### 5.4 U04：成功確率を、複数の候補から予測する
 
-個別コード：`examples/mcmc_estimator_guide_example_u04_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=4`。
+個別コード：`examples/mcmc_estimator_guide_example_u04_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=4`。
 
 **具体的な問題。** 難しい作業ほど失敗しやすいことは分かっていますが、その関係は不明です。難しさ$x$と成功・失敗の記録から、次の難しさに対する成功確率を求めます。
 
@@ -646,7 +675,7 @@ $a$は基本的な成功しやすさ、$b\geq0$は難しさの影響、$t$はlog
 **呼び出しと結果。** `predict_success`は4鎖のSessionを作り、`sample`を直接呼びます。先に`solve`を行う必要はありません。total_stepsのうち先頭2000遷移を準備に使い、残りを集計します。戻り値は成功確率、その確率自体の分散、記録数です。標本がなければ`nullopt`です。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -693,7 +722,7 @@ int main() {
 
 ### 5.5 U05：観測時間が違う件数
 
-個別コード：`examples/mcmc_estimator_guide_example_u05_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=5`。
+個別コード：`examples/mcmc_estimator_guide_example_u05_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=5`。
 
 **具体的な問題。** サーバーに来た要求数を測っています。負荷条件だけでなく、30分測った記録と3時間測った記録が混在しています。観測時間が長いから件数が多いという違いを、負荷の影響と混同せずに推定します。
 
@@ -706,7 +735,7 @@ $x$は負荷指標、$h>0$は観測時間、$\lambda$は単位時間あたりの
 **呼び出しと結果。** `predict_count`は最良候補を求め、`mean_prediction`で平均件数へ戻します。戻り値は整数とは限らず、丸めずに期待値として使えます。例の負荷1・2時間では8件付近になります。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 struct Exposure { double load, hours; }; // loadは負荷指標、hours>0は観測時間。
@@ -742,7 +771,7 @@ int main() {
 
 ### 5.6 U06：測定のぶれも未知にする
 
-個別コード：`examples/mcmc_estimator_guide_example_u06_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=6`。
+個別コード：`examples/mcmc_estimator_guide_example_u06_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=6`。
 
 **具体的な問題。** 補正式$y\approx ax+b$だけでなく、測定値がどの程度ぶれるかも分かりません。係数と共通の標準偏差$\sigma$を同時に求めます。
 
@@ -757,7 +786,7 @@ $x,y$は入力と観測です。最後の$+\eta$は$+\log\sigma$に当たりま�
 **呼び出しと結果。** `fit_unknown_noise`へ観測とBudgetを渡します。戻り値の第3要素は、内部の対数値ではなく`exp`で戻した標準偏差です。例では同じ入力に上下0.2の観測を置いているため、標準偏差は0.2付近になります。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -804,20 +833,20 @@ int main() {
 
 ### 5.7 U07：実数・整数・カテゴリを一緒に調べる
 
-個別コード：`examples/mcmc_estimator_guide_example_u07_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=7`。
+個別コード：`examples/mcmc_estimator_guide_example_u07_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=7`。
 
 **具体的な問題。** 装置の種類には一次応答と二次応答があり、さらに未知の倍率と整数補正が入っています。種類を先に決めず、一つの問題として推定します。
 
-$$f(x;\theta)=g r_k(x)+m,\qquad r_0(x)=x,\quad r_1(x)=x^2$$
+$$f(x;\theta)=g r_ {k}(x)+m,\qquad r_ {0}(x)=x,\quad r_ {1}(x)=x^2$$
 
-$x$は入力、$g$は実数倍率、$m$は整数補正、$k$は種類IDで0または1です。$r_k$は種類に対応する既知の応答式です。未知変数は$\theta=(g,m,k)$です。測定誤差はGaussianとします。
+$x$は入力、$g$は実数倍率、$m$は整数補正、$k$は種類IDで0または1です。$r_ {k}$は種類に対応する既知の応答式です。未知変数は$\theta=(g,m,k)$です。測定誤差はGaussianとします。
 
 **モデルからコードへ。** `real`、`integer`、`category`をそれぞれ一度使います。integerとcategoryは同じdiscrete配列へ入りますが、変更方法に与える意味は違います。整数補正は近い値が似た候補で、種類IDには数値的な近さがありません。
 
 **呼び出しと結果。** `fit_device`は`DeviceEstimate`を返します。gainが倍率、offsetが整数補正、kindが種類です。kindを読んで、該当する式で新しい入力を予測できます。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -856,13 +885,13 @@ int main() {
 
 ### 5.8 U08：合計1の混合割合
 
-個別コード：`examples/mcmc_estimator_guide_example_u08_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=8`。
+個別コード：`examples/mcmc_estimator_guide_example_u08_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=8`。
 
 **具体的な問題。** 三種類の染料を混ぜた試料があります。ある測定帯域で、各染料だけを測った応答は既知です。帯域を変えた複数回の測定から、混ぜた割合を推定します。
 
-$$\widehat y_i=r_{i0}w_0+r_{i1}w_1+r_{i2}w_2,\qquad w_0,w_1,w_2\geq0,\quad w_0+w_1+w_2=1$$
+$$\widehat y_ {i}=r_ {i0}w_ {0}+r_ {i1}w_ {1}+r_ {i2}w_ {2},\qquad w_ {0},w_ {1},w_ {2}\geq0,\quad w_ {0}+w_ {1}+w_ {2}=1$$
 
-$w_0,w_1,w_2$が未知の割合です。$r_{ik}$は第$i$測定の帯域における染料$k$単独の既知の応答、$\widehat y_i$は混合物の予測です。観測とのずれはGaussian損失で比べます。
+$w_ {0},w_ {1},w_ {2}$が未知の割合です。$r_ {ik}$は第$i$測定の帯域における染料$k$単独の既知の応答、$\widehat y_ {i}$は混合物の予測です。観測とのずれはGaussian損失で比べます。
 
 **モデルからコードへ。** 三つの実数を自由に動かしてから合計で割ると、どの候補がどの確率で作られたかが変わります。ここでは状態を3要素配列にし、一方の割合に足した量を他方から引く変更にします。初期値を合計1にしておけば、合計を保ったまま動けます。負になる提案は、その試行を棄却します。
 
@@ -871,7 +900,7 @@ $w_0,w_1,w_2$が未知の割合です。$r_{ik}$は第$i$測定の帯域にお�
 **呼び出しと結果。** `fit_mixture`は`McmcEstimator<std::array<double,3>>`を使い、`sample`で割合そのものを返すprojectを指定します。戻り値は三割合の標本平均です。各標本の合計が1なので、平均も丸め誤差を除いて合計1になります。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Fractions = std::array<double,3>;
 using Solver = McmcEstimator<Fractions>;
@@ -915,20 +944,20 @@ int main() {
 
 ### 5.9 U09：地図の誤登録を訂正して継続する
 
-個別コード：`examples/mcmc_estimator_guide_example_u09_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=9`。
+個別コード：`examples/mcmc_estimator_guide_example_u09_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=9`。
 
 **具体的な問題。** 経路の所要時間から、道路種別ごとの距離あたり時間を調べます。推定を進めた後、ある辺の登録距離が間違っていたと分かりました。これまで得た候補を捨てず、正しい距離で再評価します。
 
-$$\widehat t_i=\sum_{e\in P_i}L_e v_{c_e}$$
+$$\widehat t_ {i}=\sum_ {e\in P_ {i}}L_ {e} v_ {c_ {e}}$$
 
-$P_i$は第$i$観測で通った辺の列、$L_e$は辺$e$の既知の距離、$c_e$は道路種別、$v_c$は種別$c$の未知の距離あたり時間です。$\widehat t_i$が予測所要時間で、実測時間とのGaussian損失を使います。同じ辺を二度通れば、列に現れた回数だけ足します。
+$P_ {i}$は第$i$観測で通った辺の列、$L_ {e}$は辺$e$の既知の距離、$c_ {e}$は道路種別、$v_ {c}$は種別$c$の未知の距離あたり時間です。$\widehat t_ {i}$が予測所要時間で、実測時間とのGaussian損失を使います。同じ辺を二度通れば、列に現れた回数だけ足します。
 
 **モデルからコードへ。** 変数は道路種別の個数だけ用意します。辺ID・距離・種類の表をContext、通った辺IDの列をinputにします。この分離により、各観測に辺表を複製せずに済みます。
 
 **呼び出しと結果。** `fit_corrected_map`は、最初に`solve_view`で探索し、`update_model`の中でContextを訂正します。その後の`solve`が、古い最良候補と各鎖を訂正後の目的関数で評価してから続行します。戻り値は種類別の距離あたり時間です。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 struct Edge { std::size_t road_class; double length; };
@@ -981,18 +1010,18 @@ int main() {
 
 ### 5.10 U10：シミュレータから機械速度を推定する
 
-個別コード：`examples/mcmc_estimator_guide_example_u10_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=10`。
+個別コード：`examples/mcmc_estimator_guide_example_u10_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=10`。
 
 **具体的な問題。** 二台の機械へ順番に仕事を投入します。次の仕事は、その時点で終了予定時刻が早い機械へ割り当てます。同時なら機械0です。各仕事の量と全体終了時刻だけが分かり、機械速度は不明です。
 
-未知の速度を$v_0,v_1>0$とします。機械$j$へ量$q$の仕事を割り当てたとき、終了予定時刻に$q/v_j$を加えます。全て割り当てた後の二台の終了予定時刻を$F_0,F_1$とすると、観測に対応する予測は$\max(F_0,F_1)$です。$j$は機械ID、$q$は既知の仕事量、$F_j$はシミュレーション中に計算する値で、追加の未知パラメータではありません。
+未知の速度を$v_ {0},v_ {1}>0$とします。機械$j$へ量$q$の仕事を割り当てたとき、終了予定時刻に$q/v_ {j}$を加えます。全て割り当てた後の二台の終了予定時刻を$F_ {0},F_ {1}$とすると、観測に対応する予測は$\max(F_ {0},F_ {1})$です。$j$は機械ID、$q$は既知の仕事量、$F_ {j}$はシミュレーション中に計算する値で、追加の未知パラメータではありません。
 
 **モデルからコードへ。** inputは仕事量の列、状態は二つの速度です。予測関数が終了時刻を計算します。割当先を決める分岐があるため単純な式でなくても、候補から再現可能な値を計算できれば同じ観測モデルに載せられます。
 
 **呼び出しと結果。** `fit_machines`は観測した仕事列と、新しく予測したい仕事列queryを受け取ります。戻り値には速度候補とqueryの終了時刻が入ります。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Jobs = std::vector<double>;
@@ -1038,7 +1067,7 @@ int main() {
 
 ### 5.11 U11：誤った比較を含む順序推定
 
-個別コード：`examples/mcmc_estimator_guide_example_u11_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=11`。
+個別コード：`examples/mcmc_estimator_guide_example_u11_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=11`。
 
 **具体的な問題。** 要素には隠れた順番があります。二つを比べると「AがBより前」という答えが得られますが、一定確率で逆の答えが返ります。全てを硬い制約にすると矛盾するため、誤りを許して一番説明しやすい順列を求めます。
 
@@ -1049,7 +1078,7 @@ int main() {
 **呼び出しと結果。** `fit_order`へ要素数、比較、誤り率、遷移数を渡します。`make_session`に独自状態・全体評価・対称交換を渡し、`solve`から最良順列のコピーを取り出します。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Order = std::vector<int>; // 位置から要素IDを引く。各IDが一度ずつ現れる。
 using Solver = McmcEstimator<Order>;
@@ -1105,22 +1134,22 @@ int main() {
 
 ### 5.12 U12：時間的に相関した誤差を含む補正
 
-個別コード：`examples/mcmc_estimator_guide_example_u12_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=12`。
+個別コード：`examples/mcmc_estimator_guide_example_u12_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=12`。
 
 **具体的な問題。** センサーの誤差は毎回独立ではなく、一度高めにずれると次の測定も高めになりやすいとします。補正線の係数を、誤差の持続性も考慮して求めます。
 
-$i$番目の入力・観測を$x_i,y_i$、未知係数を$a,b$とし、残差を$r_i=y_i-(ax_i+b)$と書きます。誤差のモデルは次です。
+$i$番目の入力・観測を$x_ {i},y_ {i}$、未知係数を$a,b$とし、残差を$r_ {i}=y_ {i}-(ax_ {i}+b)$と書きます。誤差のモデルは次です。
 
-$$r_i=\rho r_{i-1}+\epsilon_i,\qquad \epsilon_i\sim N(0,\sigma^2)\quad(i\geq2)$$
+$$r_ {i}=\rho r_ {i-1}+\epsilon_ {i},\qquad \epsilon_ {i}\sim N(0,\sigma^2)\quad(i\geq2)$$
 
-$\rho$は既知の持続率で$|\rho|<1$、$\epsilon_i$はその時刻で新しく加わる独立な誤差、$\sigma>0$はその標準偏差です。$N(0,\sigma^2)$は平均0・分散$\sigma^2$の正規分布を表します。最初の残差は、同じ仕組みが続いてきた状態を仮定し、標準偏差$\sigma/\sqrt{1-\rho^2}$で評価します。
+$\rho$は既知の持続率で$\lvert \rho\rvert <1$、$\epsilon_ {i}$はその時刻で新しく加わる独立な誤差、$\sigma>0$はその標準偏差です。$N(0,\sigma^2)$は平均0・分散$\sigma^2$の正規分布を表します。最初の残差は、同じ仕組みが続いてきた状態を仮定し、標準偏差$\sigma/\sqrt{1-\rho^2}$で評価します。
 
-**モデルからコードへ。** 二件目からは、残差そのものではなく$r_i-\rho r_{i-1}$をGaussian損失で評価します。現在の候補で直前の残差を計算し直す必要があるため、時間順の全行を受け持つ全体評価関数にします。予測関数が前回の呼び出し結果を記憶する設計にはしません。
+**モデルからコードへ。** 二件目からは、残差そのものではなく$r_ {i}-\rho r_ {i-1}$をGaussian損失で評価します。現在の候補で直前の残差を計算し直す必要があるため、時間順の全行を受け持つ全体評価関数にします。予測関数が前回の呼び出し結果を記憶する設計にはしません。
 
-**呼び出しと結果。** `fit_correlated_readings`の戻り値は係数と、次時刻の表示の予測です。次の入力を$x_{\mathrm{next}}$、最後の残差を$r_{\mathrm{last}}$とすれば、予測は$a x_{\mathrm{next}}+b+\rho r_{\mathrm{last}}$です。潜在的な直線の値だけを知りたい場合は、最後の項を加えません。
+**呼び出しと結果。** `fit_correlated_readings`の戻り値は係数と、次時刻の表示の予測です。次の入力を$x_ {\mathrm{next}}$、最後の残差を$r_ {\mathrm{last}}$とすれば、予測は$a x_ {\mathrm{next}}+b+\rho r_ {\mathrm{last}}$です。潜在的な直線の値だけを知りたい場合は、最後の項を加えません。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 struct Reading { double x, y; }; // 時間順。隣接行は同じ長さの時間間隔。
@@ -1168,7 +1197,7 @@ int main() {
 
 ### 5.13 U13：ターンごとに観測を追加・訂正する
 
-個別コード：`examples/mcmc_estimator_guide_example_u13_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=13`。
+個別コード：`examples/mcmc_estimator_guide_example_u13_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=13`。
 
 **具体的な問題。** 仕事量に対してどれだけ時間が掛かるかを、作業を実行しながら学びます。各ターンで新しい観測が得られ、その時点の係数を使って次の仕事を計画します。
 
@@ -1179,7 +1208,7 @@ int main() {
 **呼び出しと結果。** 各ターンの戻り値は通常の`Result`です。stateがあれば`real[0]`と`real[1]`が係数です。訂正したい場合は`replace_observations`へ残す全行を渡し、古い行を忘れたい場合は`retain_last`を使います。例では7.5と記録した値を7.0へ訂正し、最後に3行を保持しています。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -1228,20 +1257,20 @@ int main() {
 
 ### 5.14 U14：依存する測定だけを再計算する
 
-個別コード：`examples/mcmc_estimator_guide_example_u14_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=14`。
+個別コード：`examples/mcmc_estimator_guide_example_u14_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=14`。
 
 **具体的な問題。** 多数の端子について、二端子間の電圧差だけを測れます。端子0は既知の0Vです。他の端子電圧を推定しますが、一つの端子を動かしただけなら、その端子と無関係な測定を計算し直したくありません。
 
-$$E(v)=\sum_{k=1}^{M}\left\{\frac{(d_k-(v_{a_k}-v_{b_k}))^2}{2\sigma_k^2}+\log\sigma_k\right\},\qquad v_0=0$$
+$$E(v)=\sum_ {k=1}^{M}\left\lbrace \frac{(d_ {k}-(v_ {a_ {k}}-v_ {b_ {k}}))^2}{2\sigma_ {k}^2}+\log\sigma_ {k}\right\rbrace ,\qquad v_ {0}=0$$
 
-$v_j$は端子$j$の電圧です。$M$は測定数、$a_k,b_k$は第$k$測定の二端子ID、$d_k$は観測した電圧差、$\sigma_k$は既知の測定誤差です。$v_0$を固定しないと、全電圧に同じ定数を足しても電圧差が変わらず、基準を決められません。
+$v_ {j}$は端子$j$の電圧です。$M$は測定数、$a_ {k},b_ {k}$は第$k$測定の二端子ID、$d_ {k}$は観測した電圧差、$\sigma_ {k}$は既知の測定誤差です。$v_ {0}$を固定しないと、全電圧に同じ定数を足しても電圧差が変わらず、基準を決められません。
 
 **モデルからコードへ。** 独自Modelに全体評価の`operator()`と、候補用の`candidate(old,next,old_energy)`を用意します。後者が存在すると、探索中の候補評価に使われます。端子ごとに関連する測定番号を準備し、一変数だけ変わった候補では関連測定の新旧差を古いenergyへ加えます。
 
 **呼び出しと結果。** `fit_voltages`は端子数と測定を受け取り、`solve`の最良候補から電圧vectorを返します。固定端子も含め、添字が端子IDです。複数の変数が同時に変わる提案には全体評価へ戻るため、将来Sampleで集団提案を使っても、差分式の前提を破りません。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 struct VoltageRow { std::size_t a, b; double difference, sigma; };
@@ -1306,24 +1335,24 @@ int main() {
 
 ### 5.15 U15：予測の不確かさも使って設定値を選ぶ
 
-個別コード：`examples/mcmc_estimator_guide_example_u15_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=15`。
+個別コード：`examples/mcmc_estimator_guide_example_u15_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=15`。
 
 **具体的な問題。** 設定値を調整するとコストが変わりますが、少数の測定しかなく、最適な設定値は不確かです。用意された候補の中から、平均コストが小さく、必要なら不確かさも小さい設定を選びます。
 
 予測モデルを$f(x;\theta)=a(x-b)^2$とします。$x$は設定値、$a>0$は曲がり方、$b$はコストが最小になる位置で、$\theta=(a,b)$が未知です。測定コストには既知のGaussian誤差があるとします。
 
-選べる設定値を$x_0,\ldots,x_{K-1}$とし、候補$\theta$ごとに各設定の予測コストを計算します。$K$は設定候補数です。標本について求めた設定$j$の予測コスト平均を$m_j$、標準偏差を$s_j$とすると、選択基準は次です。
+選べる設定値を$x_ {0},\ldots,x_ {K-1}$とし、候補$\theta$ごとに各設定の予測コストを計算します。$K$は設定候補数です。標本について求めた設定$j$の予測コスト平均を$m_ {j}$、標準偏差を$s_ {j}$とすると、選択基準は次です。
 
-$$j^*=\operatorname*{arg\,min}_{0\leq j<K}(m_j+\lambda s_j)$$
+$$j^{\ast}=\operatorname{argmin}_ {0\leq j<K}(m_ {j}+\lambda s_ {j})$$
 
-$\lambda\geq0$は利用者が指定する不確かさへの重み、$j^*$は選んだ設定の添字です。$\lambda=0$なら平均だけで選び、大きいほど予測が不確かな候補を避けます。この基準はライブラリが決めるのではなく、行動選択として利用側で定めます。
+$\lambda\geq0$は利用者が指定する不確かさへの重み、$j^{\ast}$は選んだ設定の添字です。$\lambda=0$なら平均だけで選び、大きいほど予測が不確かな候補を避けます。この基準はライブラリが決めるのではなく、行動選択として利用側で定めます。
 
 **モデルからコードへ。** `sample_each`で標本を受け取り、各actionの予測コストをvectorにします。`Session::Moments<std::vector<double>>`は、各要素の平均と分散を蓄積します。計算を5000遷移ずつに分けても、同じ目的関数とactionsなら同じ集計へ足せます。
 
 **呼び出しと結果。** `choose_setting`へ観測、候補設定値、risk、総遷移数を渡します。riskが$\lambda$です。戻り値のindexは入力actionsの添字、settingは実際に使う値です。最初の4000遷移を準備へ使い、標本が2件未満なら`nullopt`を返します。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using Row = Solver::Observation<double>;
@@ -1389,34 +1418,34 @@ int main() {
 
 ### 5.16 U16：三つの入力から、一次関数の四係数を推定する
 
-個別コード：`examples/mcmc_estimator_guide_example_u16_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=16`。
+個別コード：`examples/mcmc_estimator_guide_example_u16_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=16`。
 
-**具体的な問題。** 三つのつまみを持つ装置があり、それぞれの設定値を$x_1,x_2,x_3$にすると、一つの表示値$y$が返るとします。設定値は基準位置からの差で、正にも負にもできます。三つの設定は表示に足し算で作用しますが、それぞれの効き方と、基準位置での表示は分かりません。異なる設定で測った記録から、この四つの値を調べます。
+**具体的な問題。** 三つのつまみを持つ装置があり、それぞれの設定値を$x_ {1},x_ {2},x_ {3}$にすると、一つの表示値$y$が返るとします。設定値は基準位置からの差で、正にも負にもできます。三つの設定は表示に足し算で作用しますが、それぞれの効き方と、基準位置での表示は分かりません。異なる設定で測った記録から、この四つの値を調べます。
 
 **観測からモデルへ。** 一つの入力に対する予測式は次です。
 
-$$f(x_1,x_2,x_3;\theta)=a_1x_1+a_2x_2+a_3x_3+b,\qquad \theta=(a_1,a_2,a_3,b)$$
+$$f(x_ {1},x_ {2},x_ {3};\theta)=a_ {1}x_ {1}+a_ {2}x_ {2}+a_ {3}x_ {3}+b,\qquad \theta=(a_ {1},a_ {2},a_ {3},b)$$
 
 | 記号 | この問題での意味 |
 |---|---|
-| $x_1,x_2,x_3$ | 利用者が指定した三つの既知の設定値 |
-| $a_1,a_2,a_3$ | 各設定の未知の効き方。他の設定を固定して$x_j$を1増やすと、予測値が$a_j$増える。$j$は1、2、3のいずれか |
+| $x_ {1},x_ {2},x_ {3}$ | 利用者が指定した三つの既知の設定値 |
+| $a_ {1},a_ {2},a_ {3}$ | 各設定の未知の効き方。他の設定を固定して$x_ {j}$を1増やすと、予測値が$a_ {j}$増える。$j$は1、2、3のいずれか |
 | $b$ | 三つの設定が全て0のときの未知の基準表示 |
 | $\theta$ | 四つの未知係数をまとめた候補。全観測に共通する |
 | $f$ | 候補係数を使って表示を再現するユーザー定義関数 |
 
-例えば、誤差がなく、真の係数が$a_1=2,a_2=-3,a_3=0.5,b=1$なら、次のような記録が得られます。
+例えば、誤差がなく、真の係数が$a_ {1}=2,a_ {2}=-3,a_ {3}=0.5,b=1$なら、次のような記録が得られます。
 
-| $x_1$ | $x_2$ | $x_3$ | 観測値$y$ | 読み取れること |
+| $x_ {1}$ | $x_ {2}$ | $x_ {3}$ | 観測値$y$ | 読み取れること |
 |---|---|---|---|---|
 | 0 | 0 | 0 | 1 | 基準表示は1 |
 | 1 | 0 | 0 | 3 | 第一の設定だけを1増やすと表示が2増える |
 | 0 | 1 | 0 | -2 | 第二の設定だけを1増やすと表示が3減る |
 | 0 | 0 | 1 | 1.5 | 第三の設定だけを1増やすと表示が0.5増える |
 
-実測では誤差を含むため、一組の差だけで決める代わりに、全観測で予測と実測がよく合う係数を求めます。観測番号を$i$、観測数を$N$、その行の三入力を$x_{i1},x_{i2},x_{i3}$、実測値を$y_i$とすると、以下のコードの目的関数は次になります。
+実測では誤差を含むため、一組の差だけで決める代わりに、全観測で予測と実測がよく合う係数を求めます。観測番号を$i$、観測数を$N$、その行の三入力を$x_ {i1},x_ {i2},x_ {i3}$、実測値を$y_ {i}$とすると、以下のコードの目的関数は次になります。
 
-$$E(a_1,a_2,a_3,b)=\frac{1}{2}\sum_{i=1}^{N}(y_i-a_1x_{i1}-a_2x_{i2}-a_3x_{i3}-b)^2$$
+$$E(a_ {1},a_ {2},a_ {3},b)=\frac{1}{2}\sum_ {i=1}^{N}(y_ {i}-a_ {1}x_ {i1}-a_ {2}x_ {i2}-a_ {3}x_ {i3}-b)^2$$
 
 $E$は候補の悪さです。全行の予測誤差を二乗して足します。係数はそれぞれ$-10$以上10以下で、事前項は0です。`scale=1, weight=1`のGaussian損失なので、第1章の式はこの形になります。観測ごとの既知の標準偏差を使う場合は`scale`に正の値を指定すると、第1章の誤差尺度付きの式になります。誤差のない動作確認データでも、`scale=0`にはしません。
 
@@ -1429,12 +1458,12 @@ $E$は候補の悪さです。全行の予測誤差を二乗して足します�
 | 基準表示 | 4回目の`p.real`が返す添字`bi`に対応 |
 | 観測の比較 | `make_observation_model(rows,predict)`。既定のGaussian損失と事前項0を使用 |
 | 探索 | `make_numeric_session`で作ったSessionに`solve(budget)`を呼ぶ |
-| 返される係数 | `r->a[0], r->a[1], r->a[2], r->b`が、それぞれ$a_1,a_2,a_3,b$ |
+| 返される係数 | `r->a[0], r->a[1], r->a[2], r->b`が、それぞれ$a_ {1},a_ {2},a_ {3},b$ |
 
 **呼び出しと結果。** `fit_affine3(rows,budget)`へ空でない観測列を渡します。`std::optional<AffineEstimate>`が空なら、有限な候補を得られていません。初回の予算が0の場合などが該当します。値があれば、その係数を同じ一次式へ代入して新しい三入力の出力を予測できます。例えば上の係数で入力が全て1なら、予測は0.5です。戻るのは探索中の最良候補であり、真値との一致や誤差の上限を保証するものではありません。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using AffineInput = std::array<double, 3>;
@@ -1490,9 +1519,9 @@ int main() {
 }
 ```
 
-`main`では、三入力をそれぞれ-1、0、1に変えた27件を作ります。推定結果は$a_1=2,a_2=-3,a_3=0.5,b=1$付近になります。実際の利用では、真の係数を使うデータ生成部分を手元の観測に置き換えます。推定関数へ真の係数を渡す必要はありません。
+`main`では、三入力をそれぞれ-1、0、1に変えた27件を作ります。推定結果は$a_ {1}=2,a_ {2}=-3,a_ {3}=0.5,b=1$付近になります。実際の利用では、真の係数を使うデータ生成部分を手元の観測に置き換えます。推定関数へ真の係数を渡す必要はありません。
 
-**入力の選び方と注意。** 4件あれば必ず四係数が決まるわけではありません。例えば全行で$x_1=x_2$なら、観測で分かるのは$a_1+a_2$だけです。また$x_3$がいつも同じなら、その寄与と$b$を分離できない場合があります。三入力を独立に変え、基準表示との違いも観測できる記録を用意します。値の桁が大きく違う場合は入力を既知の基準で換算し、推定係数の単位もその換算に合わせます。
+**入力の選び方と注意。** 4件あれば必ず四係数が決まるわけではありません。例えば全行で$x_ {1}=x_ {2}$なら、観測で分かるのは$a_ {1}+a_ {2}$だけです。また$x_ {3}$がいつも同じなら、その寄与と$b$を分離できない場合があります。三入力を独立に変え、基準表示との違いも観測できる記録を用意します。値の桁が大きく違う場合は入力を既知の基準で換算し、推定係数の単位もその換算に合わせます。
 
 この関数形サンプルは呼ぶたびにSessionを作ります。同じ四係数について毎ターン記録が増える場合は、U13のようにSessionを保持し、新しい`AffineRow`だけを`add_observations`して再実行できます。変数の数・上下限を変える場合の扱いは第3.7節を参照してください。
 
@@ -1508,19 +1537,19 @@ $\sigma$が既知なら、基本例の`AffineRow{{x1,x2,x3},y,sigma}`で指定�
 
 #### 5.16.1 U16-A：四係数と共通の標準偏差を同時に推定する
 
-個別コード：`examples/mcmc_estimator_guide_example_u16a_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=161`。
+個別コード：`examples/mcmc_estimator_guide_example_u16a_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=161`。
 
 **具体的な問題。** 基本例と同じ装置で、同じ三入力を与えても測定のたびに表示が少し変わるとします。四係数は全測定で共通ですが、測定系がどの程度ぶれるかも分かりません。全観測に共通する一つの標準偏差$\sigma$を、四係数と一緒に調べます。「共通」とは値が測定ごとに変わらないという意味で、値が既知という意味ではありません。
 
-**問題から目的関数へ。** 第$i$番目の測定は、平均値に誤差$\varepsilon_i$を加えたものと考えます。
+**問題から目的関数へ。** 第$i$番目の測定は、平均値に誤差$\varepsilon_ {i}$を加えたものと考えます。
 
-$$y_i=a_1x_{i1}+a_2x_{i2}+a_3x_{i3}+b+\varepsilon_i,\qquad \varepsilon_i\sim\mathcal N(0,\sigma^2)$$
+$$y_ {i}=a_ {1}x_ {i1}+a_ {2}x_ {i2}+a_ {3}x_ {i3}+b+\varepsilon_ {i},\qquad \varepsilon_ {i}\sim\mathcal N(0,\sigma^2)$$
 
-$i$は観測番号、$x_{i1},x_{i2},x_{i3}$は既知の入力、$y_i$は実測値です。$a_1,a_2,a_3,b$は未知係数です。$\mathcal N(0,\sigma^2)$は平均0、分散$\sigma^2$の正規分布を表し、誤差は観測間で独立と仮定します。$\sigma>0$は表示値と同じ単位の、通常のぶれの大きさです。
+$i$は観測番号、$x_ {i1},x_ {i2},x_ {i3}$は既知の入力、$y_ {i}$は実測値です。$a_ {1},a_ {2},a_ {3},b$は未知係数です。$\mathcal N(0,\sigma^2)$は平均0、分散$\sigma^2$の正規分布を表し、誤差は観測間で独立と仮定します。$\sigma>0$は表示値と同じ単位の、通常のぶれの大きさです。
 
-観測数を$N$とすると、未知の組$\theta=(a_1,a_2,a_3,b,\sigma)$に対する目的関数は次です。
+観測数を$N$とすると、未知の組$\theta=(a_ {1},a_ {2},a_ {3},b,\sigma)$に対する目的関数は次です。
 
-$$E(\theta)=\frac{1}{2\sigma^2}\sum_{i=1}^{N}(y_i-a_1x_{i1}-a_2x_{i2}-a_3x_{i3}-b)^2+N\log\sigma$$
+$$E(\theta)=\frac{1}{2\sigma^2}\sum_ {i=1}^{N}(y_ {i}-a_ {1}x_ {i1}-a_ {2}x_ {i2}-a_ {3}x_ {i3}-b)^2+N\log\sigma$$
 
 $E$は観測の負の対数尤度から候補によらない定数を除いた値です。$\log$は自然対数です。第一項は「予測からのずれが、通常のぶれの何倍か」を評価します。第二項も必要で、これを省くと$\sigma$を大きくするだけで第一項を小さくできてしまいます。コードでは各観測の損失に$\log\sigma$を一回ずつ含めるため、合計が$N\log\sigma$になります。
 
@@ -1533,7 +1562,7 @@ $E$は観測の負の対数尤度から候補によらない定数を除いた�
 **呼び出しと結果。** `fit_affine3_joint_sigma(rows,budget)`は、空でない観測列を受け取り、5変数のSessionを作って`solve`します。戻り値は`std::optional<AffineSigmaEstimate>`です。空なら候補が得られていません。値があれば`a[0],a[1],a[2],b`が四係数、`sigma`が共通の標準偏差の推定値です。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using AffineInput = std::array<double, 3>;
@@ -1607,13 +1636,13 @@ int main() {
 
 #### 5.16.2 U16-B：四係数の推定後、残差から標準偏差を求める
 
-個別コード：`examples/mcmc_estimator_guide_example_u16b_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=162`。
+個別コード：`examples/mcmc_estimator_guide_example_u16b_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=162`。
 
 **具体的な問題。** 調べたいものはU16-Aと同じ四係数と共通の$\sigma$です。この一次モデルで、全観測の重みが等しく、事前項がないという条件を使い、四係数を推定した後に残差から$\sigma$を計算します。
 
-**残差とは何か。** 推定した四係数による予測を$\widehat y_i$とすると、実測との差$r_i=y_i-\widehat y_i$を残差と呼びます。残差の二乗を全行について足したものを$\mathrm{RSS}$と書きます。
+**残差とは何か。** 推定した四係数による予測を$\widehat y_ {i}$とすると、実測との差$r_ {i}=y_ {i}-\widehat y_ {i}$を残差と呼びます。残差の二乗を全行について足したものを$\mathrm{RSS}$と書きます。
 
-$$\mathrm{RSS}=\sum_{i=1}^{N}r_i^2,\qquad r_i=y_i-\widehat y_i$$
+$$\mathrm{RSS}=\sum_ {i=1}^{N}r_ {i}^2,\qquad r_ {i}=y_ {i}-\widehat y_ {i}$$
 
 $N$は観測数です。二乗することで正負のずれが打ち消し合うのを防ぎます。$\mathrm{RSS}/N$は一件あたりの二乗誤差、その平方根は元の表示値と同じ単位の誤差の大きさになります。
 
@@ -1627,7 +1656,7 @@ $$\frac{dE}{d\sigma}=-\frac{\mathrm{RSS}}{\sigma^3}+\frac{N}{\sigma}=0$$
 
 $\mathrm{RSS}>0$の場合、これを整理すると$N\sigma^2=\mathrm{RSS}$なので、正の解は次です。
 
-$$\widehat\sigma_{\mathrm{ML}}=\sqrt{\frac{\mathrm{RSS}}{N}}$$
+$$\widehat\sigma_ {\mathrm{ML}}=\sqrt{\frac{\mathrm{RSS}}{N}}$$
 
 添字MLは最尤推定を表します。この値を目的関数に入れると$N/2+(N/2)\log(\mathrm{RSS}/N)$となり、$\mathrm{RSS}$が小さいほどよいことが分かります。したがって、同じ係数範囲で四係数の二乗誤差を最小化し、その後に上式を使えば、共通$\sigma$も同時に最尤推定する場合と整合します。探索が途中なら、推定した四係数の残差に対する値が返ります。
 
@@ -1638,7 +1667,7 @@ $$\widehat\sigma_{\mathrm{ML}}=\sqrt{\frac{\mathrm{RSS}}{N}}$$
 **呼び出しと結果。** `fit_affine3_residual_sigma(rows,budget)`の入力はU16-Aと同じです。戻り値も`std::optional<AffineSigmaEstimate>`で、`sigma`が残差の二乗平均の平方根です。`main`はU16-Aと同じ観測を使うため、四係数と$\sigma$を比較できます。二つの方法は探索の進み方が異なるので、有限予算での結果が完全一致するとは限りません。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using AffineInput = std::array<double, 3>;
@@ -1720,18 +1749,18 @@ $$s^2=\frac{\mathrm{RSS}}{N-4}$$
 
 #### 5.16.3 U16-C：四係数が整数である場合
 
-個別コード：`examples/mcmc_estimator_guide_example_u16c_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=163`。
+個別コード：`examples/mcmc_estimator_guide_example_u16c_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=163`。
 
-**具体的な問題。** 三つの入力に対する装置の補正係数が、内部で整数ステップに設定されているとします。入力と表示は小数を含んでも、未知の$a_1,a_2,a_3,b$は整数に限られます。この既知の条件を探索候補にも反映します。
+**具体的な問題。** 三つの入力に対する装置の補正係数が、内部で整数ステップに設定されているとします。入力と表示は小数を含んでも、未知の$a_ {1},a_ {2},a_ {3},b$は整数に限られます。この既知の条件を探索候補にも反映します。
 
-予測式は基本例と同じ$a_1x_1+a_2x_2+a_3x_3+b$、目的関数も予測と実測の二乗誤差です。違いは四係数の許容範囲で、例ではそれぞれ$-10,-9,\ldots,10$の整数のみを許します。値が小さいほどよい目的関数の意味や、入力の変化が不十分だと係数を区別できない点は基本例と共通です。
+予測式は基本例と同じ$a_ {1}x_ {1}+a_ {2}x_ {2}+a_ {3}x_ {3}+b$、目的関数も予測と実測の二乗誤差です。違いは四係数の許容範囲で、例ではそれぞれ$-10,-9,\ldots,10$の整数のみを許します。値が小さいほどよい目的関数の意味や、入力の変化が不十分だと係数を区別できない点は基本例と共通です。
 
 **モデルからコードへ。** 四係数を`p.integer(0,-10,10)`で登録し、返された添字を`state.discrete`に使います。探索中も整数の候補を作るため、返却時の丸め処理はありません。出力の`AffineIntegerEstimate`も`std::int64_t`を持ちます。一方、入力は`std::array<double,3>`なので、整数係数を掛けた予測値の計算は`double`で行われます。
 
-**呼び出しと結果。** `fit_affine3_integer(rows,budget)`へ観測列と予算を渡し、値が得られたら`a[0],a[1],a[2],b`を整数係数として使います。`main`は$a_1=2,a_2=-3,a_3=1,b=1$で観測を作ります。三番目の係数も整数とし、入力には0.5や0.25を含めることで、整数に制限されるのが係数であることを示します。
+**呼び出しと結果。** `fit_affine3_integer(rows,budget)`へ観測列と予算を渡し、値が得られたら`a[0],a[1],a[2],b`を整数係数として使います。`main`は$a_ {1}=2,a_ {2}=-3,a_ {3}=1,b=1$で観測を作ります。三番目の係数も整数とし、入力には0.5や0.25を含めることで、整数に制限されるのが係数であることを示します。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 using AffineInput = std::array<double, 3>;
@@ -1813,7 +1842,7 @@ int main() {
 
 ### 5.17 U17：一次・二次・正弦のどの応答かを、係数と一緒に推定する
 
-個別コード：`examples/mcmc_estimator_guide_example_u17_v06.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=17`。
+個別コード：`examples/mcmc_estimator_guide_example_u17_v07.cpp`。一体版では`MCMC_GUIDE_EXAMPLE=17`。
 
 **具体的な問題。** 入力$x$に対して表示値$y$を返す装置があります。応答は「直線的に増える」「入力の二乗に従う」「正弦波のように変わる」の三種類のいずれかですが、種類を示す設定が読めません。さらに、応答の倍率$a$と、表示全体のずれ$b$も不明です。様々な$x$で測った表示から、種類$t$と二つの係数を一緒に推定します。
 
@@ -1827,13 +1856,13 @@ int main() {
 
 $x$は既知の入力、$a$は符号も含めた未知の倍率、$b$は未知の基準表示、$t$は未知の種類です。$t$は観測ごとに別々に決める値ではありません。また、正弦関数の周波数や位相は、このモデルでは未知変数にしていません。
 
-ここで、$g_1(x)=x$、$g_2(x)=x^2$、$g_3(x)=\sin x$という三つの既知の関数を用意すると、予測を共通の形で書けます。
+ここで、$g_ {1}(x)=x$、$g_ {2}(x)=x^2$、$g_ {3}(x)=\sin x$という三つの既知の関数を用意すると、予測を共通の形で書けます。
 
-$$f(x;\theta)=a g_t(x)+b,\qquad \theta=(t,a,b)$$
+$$f(x;\theta)=a g_ {t}(x)+b,\qquad \theta=(t,a,b)$$
 
-$g_t$は$t$で選んだ関数、$f$は選択と係数適用を含む予測関数、$\theta$は未知の組全体です。観測番号$i$、観測数$N$、入力$x_i$、実測値$y_i$を使うと、コードで小さくする目的関数は次です。
+$g_ {t}$は$t$で選んだ関数、$f$は選択と係数適用を含む予測関数、$\theta$は未知の組全体です。観測番号$i$、観測数$N$、入力$x_ {i}$、実測値$y_ {i}$を使うと、コードで小さくする目的関数は次です。
 
-$$E(t,a,b)=\frac{1}{2}\sum_{i=1}^{N}(y_i-a g_t(x_i)-b)^2$$
+$$E(t,a,b)=\frac{1}{2}\sum_ {i=1}^{N}(y_ {i}-a g_ {t}(x_ {i})-b)^2$$
 
 $E$は全観測での予測誤差を二乗して足した値です。$t$は1、2、3のいずれか、$a,b$はそれぞれ$-10$以上10以下とします。Gaussian損失の`scale=1, weight=1`と事前項0を使います。既知の観測誤差に応じた重み付けをしたい場合は、第3.5節の`scale`を設定します。
 
@@ -1851,7 +1880,7 @@ $E$は全観測での予測誤差を二乗して足した値です。$t$は1、2
 **呼び出しと結果。** `fit_function_type(rows,budget)`へ空でない観測列を渡します。戻り値は`std::optional<FunctionEstimate>`で、値が得られたら、その`t`の式に`a,b`と新しい入力を代入して予測します。例えば`t=3,a=2,b=1`なら、入力$\pi/2$に対する予測は3です。$\pi$は円周率で、$\pi/2$ラジアンは90度に相当します。
 
 ```cpp
-#include "mcmc_estimator_v09.hpp"
+#include "mcmc_estimator_v10.hpp"
 
 using Solver = McmcEstimator<>;
 
@@ -2002,11 +2031,11 @@ U16で常に二入力が等しい場合や、U17で倍率が0の場合のよう�
 
 ### 6.5 掲載コードの確認方法
 
-第5章の基本17例とU16の3亜種、全20個のC++コードを本文から抽出し、配布する各個別ファイルと一致することを確認しています。各コードを個別の実行ファイルとしてビルド・実行し、既知の係数・予測値、一次・二次・正弦の種類、標準偏差の推定、整数係数、確率の範囲、標本数、割合の合計、順列、観測更新後の結果を検査しています。一体版も1〜17と161〜163の全選択値でコンパイル・実行し、個別版と同じ出力になることを確認しています。
+第5章の基本17例とU16の3亜種、全20個のC++コードを本文から抽出し、配布する各個別ファイルと一致することを確認しています。各コードを個別の実行ファイルとしてビルド・実行し、既知の係数・予測値、一次・二次・正弦の種類、標準偏差の推定、整数係数、確率の範囲、標本数、割合の合計、順列、観測更新後の結果を検査しています。一体版の1〜17と161〜163の各分岐は、個別版の本文と一致することを検査しています。
 
 追加検査では、予算0・準備未完了の戻り値、複数回の観測追加、値を実際に変えた観測訂正、モデル改訂番号、途中でのモデル変更、同じ推定器からの再開を確認しました。U16-A・U16-Bは別のノイズ付き観測に対する最小二乗解と残差尺度との比較、予算0、残差0と標準偏差の正の下限も検査しています。詳細は同梱の検証プログラムと実行結果にあります。これらはコードの利用契約と例の計算結果の検証であり、あらゆる入力で推定が収束する証明ではありません。
 
-検証環境はGCC 13.3.0、C++20です。通常のassertあり、`NDEBUG`、AddressSanitizerとUndefinedBehaviorSanitizerの設定で確認しています。LeakSanitizerは実行環境の制約で無効にしており、リーク検査は含みません。GCC 12.2そのものでは実行していないため、その環境での確認を代替するものではありません。
+検証環境はGCC 13.3.0、C++20です。全20例と追加シナリオをassert有効ビルドで確認しています。デバッグ表示のテストはassert有効・`NDEBUG`・AddressSanitizerとUndefinedBehaviorSanitizerの設定で確認しています。LeakSanitizerは無効のため、リーク検査は含みません。異なるコンパイラそのものでの確認を代替するものではありません。
 
 ## 7. 実装
 
@@ -2041,9 +2070,9 @@ $E$は目的関数、$A$は採用確率です。実装では0より大きく1以
 
 ### 7.3 Searchの冷却と座標変更
 
-温度は開始温度$T_0$から終端温度$T_1$まで、進捗$r$に従って指数的に変わります。
+温度は開始温度$T_ {0}$から終端温度$T_ {1}$まで、進捗$r$に従って指数的に変わります。
 
-$$T(r)=T_0\exp\left(r\log\frac{T_1}{T_0}\right),\qquad 0\leq r\leq1$$
+$$T(r)=T_ {0}\exp\left(r\log\frac{T_ {1}}{T_ {0}}\right),\qquad 0\leq r\leq1$$
 
 $r$は予定遷移数または共通の期限から求める0〜1の進捗です。予定を過ぎた部分は1として扱います。温度計画は、同じ目的関数で継続するSearchの間に保持されます。
 
@@ -2075,9 +2104,9 @@ Sampleでは幅を変更しません。モデル改訂時には途中の試行�
 
 可動実数の次元数を$d$とすると、提案比の対数として$(d-1)\log z$を返します。固定変数や離散変数はこの次元数に含めません。範囲外は棄却します。
 
-差分提案では、対象以外の異なる二鎖を順序付きで選び、その実数部分を$y_1,y_2$とすると、候補は次の形です。
+差分提案では、対象以外の異なる二鎖を順序付きで選び、その実数部分を$y_ {1},y_ {2}$とすると、候補は次の形です。
 
-$$x'=x+\gamma(y_1-y_2)+\eta,\qquad \gamma=\frac{2.38}{\sqrt{2d}}$$
+$$x'=x+\gamma(y_ {1}-y_ {2})+\eta,\qquad \gamma=\frac{2.38}{\sqrt{2d}}$$
 
 $x'$は候補、$d$は可動実数の次元数、$\eta$は座標ごとに現在の変更幅の0.001倍の標準偏差を持つ正規ノイズです。二鎖を逆の順序でも同じ確率で選ぶので、この提案比の対数は0です。これも範囲外は棄却します。
 

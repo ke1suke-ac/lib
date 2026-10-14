@@ -72,6 +72,58 @@ public:
 
     struct edge_type { int from; int to; long long cost; };
 
+    // 状態・最短路モードを列挙子名で表示する O(1)
+    friend std::ostream &operator<<(std::ostream &out, status value) {
+        switch (value) {
+        case status::feasible: return out << "feasible";
+        case status::proven_infeasible: return out << "proven_infeasible";
+        case status::not_found: return out << "not_found";
+        case status::invalid_candidate: return out << "invalid_candidate";
+        case status::invalid_input: return out << "invalid_input";
+        }
+        return out << "unknown(" << static_cast<int>(value) << ')';
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, path_mode value) {
+        switch (value) {
+        case path_mode::auto_select: return out << "auto_select";
+        case path_mode::terminal_cache: return out << "terminal_cache";
+        case path_mode::on_demand: return out << "on_demand";
+        }
+        return out << "unknown(" << static_cast<int>(value) << ')';
+    }
+
+    // 結果の要点を1行で表示する。辺番号は先頭20要素まで、統計はstatsを別途出力する O(min(L, 20))
+    friend std::ostream &operator<<(std::ostream &out, const result &value) {
+        out << "result{state=" << value.state << ", cost=" << value.cost << ", edges=";
+        return print_edge_ids(out, value.edges) << '}';
+    }
+
+    friend std::ostream &operator<<(std::ostream &out, const augmentation_result &value) {
+        out << "augmentation_result{state=" << value.state << ", added_cost=" << value.added_cost << ", added_edges=";
+        return print_edge_ids(out, value.added_edges) << '}';
+    }
+
+    // 全カウンタと使用モードを表示する O(1)
+    friend std::ostream &operator<<(std::ostream &out, const statistics &value) {
+        return out << "statistics{path_mode_used=" << value.path_mode_used
+            << ", path_memory_bytes=" << value.path_memory_bytes
+            << ", initial_solution_count=" << value.initial_solution_count
+            << ", restart_count=" << value.restart_count
+            << ", local_move_count=" << value.local_move_count
+            << ", improvement_count=" << value.improvement_count
+            << ", dijkstra_count=" << value.dijkstra_count
+            << ", edge_relaxation_count=" << value.edge_relaxation_count
+            << ", constraint_nodes=" << value.constraint_nodes
+            << ", conflict_candidates=" << value.conflict_candidates
+            << ", feasible_candidates=" << value.feasible_candidates << '}';
+    }
+
+    // 登録辺の両端と費用を表示する O(1)
+    friend std::ostream &operator<<(std::ostream &out, const edge_type &value) {
+        return out << "edge{from=" << value.from << ", to=" << value.to << ", cost=" << value.cost << '}';
+    }
+
     class selection_rules {
         friend class constrained_steiner_tree;
         int vertex_count_ = 0;
@@ -130,6 +182,13 @@ public:
 
 private:
 
+    static std::ostream &print_edge_ids(std::ostream &out, std::span<const int> ids) {
+        const size_t count = std::min(ids.size(), size_t{20});
+        out << '[';
+        for (size_t i = 0; i < count; ++i) out << (i == 0 ? "" : ", ") << ids[i];
+        if (count < ids.size()) out << ", ... (+" << ids.size() - count << " more)";
+        return out << ']';
+    }
 
     struct tree_solution {
         bool ok = false;

@@ -18,6 +18,7 @@ coverage_solver solver(problem);
 auto a = solver.solve_maximum_coverage(選択数上限);
 auto b = solver.solve_budgeted_maximum_coverage(予算);
 auto c = solver.solve_minimum_set_cover();
+std::cerr << a << '\n'; // 結果の概要と先頭20個までの選択候補を表示
 
 探索の流れ:
 1. 重複候補と、安価な上位集合に包含支配される候補を安全に除去する
@@ -71,6 +72,29 @@ struct coverage_solution {
     int uncovered_target_count = 0;
     long long iterations = 0;
     bool feasible = false;
+
+    // 全集計値と先頭20個までの選択候補を出力する O(min(selected_candidates.size(), 20))
+    friend std::ostream& operator<<(std::ostream& os, const coverage_solution& solution) {
+        // 実行可能性を先に示し、真偽値の表示設定を変更せず集計値を並べる
+        os << "coverage_solution{feasible=" << (solution.feasible ? "true" : "false")
+           << ", covered_weight=" << solution.covered_weight
+           << ", total_cost=" << solution.total_cost
+           << ", covered_target_count=" << solution.covered_target_count
+           << ", uncovered_target_count=" << solution.uncovered_target_count
+           << ", iterations=" << solution.iterations
+           << ", selected_candidates(size=" << solution.selected_candidates.size() << ")=[";
+
+        // 保存された順番で表示し、省略があれば残りの件数を添える
+        const std::size_t count = std::min<std::size_t>(solution.selected_candidates.size(), 20);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) os << ", ";
+            os << solution.selected_candidates[i];
+        }
+        if (count < solution.selected_candidates.size()) {
+            os << ", ... (+" << solution.selected_candidates.size() - count << " more)";
+        }
+        return os << "]}";
+    }
 };
 
 
@@ -95,6 +119,15 @@ struct coverage_evaluation {
     int covered_target_count = 0;
     int uncovered_target_count = 0;
     int selected_count = 0;
+
+    // 選択集合の評価値と個数を出力する O(1)
+    friend std::ostream& operator<<(std::ostream& os, const coverage_evaluation& evaluation) {
+        return os << "coverage_evaluation{covered_weight=" << evaluation.covered_weight
+                  << ", total_cost=" << evaluation.total_cost
+                  << ", covered_target_count=" << evaluation.covered_target_count
+                  << ", uncovered_target_count=" << evaluation.uncovered_target_count
+                  << ", selected_count=" << evaluation.selected_count << '}';
+    }
 };
 
 class coverage_solver {
@@ -1681,6 +1714,66 @@ struct coverage_solver::selftest {
         return options;
     }
 
+    static void test_debug_output() {
+        static_assert(std::is_aggregate_v<coverage_solution>);
+        static_assert(std::is_aggregate_v<coverage_evaluation>);
+
+        // 空結果・一時オブジェクト・連結出力・全フィールドの表示を確認する
+        std::ostringstream empty;
+        std::ostream& returned = empty << coverage_solution{} << '\n' << coverage_evaluation{};
+        require(&returned == &empty, "debug output returns original stream");
+        require(empty.str() ==
+            "coverage_solution{feasible=false, covered_weight=0, total_cost=0, "
+            "covered_target_count=0, uncovered_target_count=0, iterations=0, "
+            "selected_candidates(size=0)=[]}\n"
+            "coverage_evaluation{covered_weight=0, total_cost=0, covered_target_count=0, "
+            "uncovered_target_count=0, selected_count=0}", "debug empty results");
+        const coverage_solution solution{{9, 2}, 30, 7, 2, 1, 4, true};
+        std::ostringstream populated;
+        populated << solution << '\n' << coverage_evaluation{30, 7, 2, 1, 2};
+        require(populated.str() ==
+            "coverage_solution{feasible=true, covered_weight=30, total_cost=7, "
+            "covered_target_count=2, uncovered_target_count=1, iterations=4, "
+            "selected_candidates(size=2)=[9, 2]}\n"
+            "coverage_evaluation{covered_weight=30, total_cost=7, covered_target_count=2, "
+            "uncovered_target_count=1, selected_count=2}", "debug populated results");
+        require(solution.selected_candidates == std::vector<int>({9, 2}), "debug keeps input order");
+
+        // 1個・上限ちょうど・上限超過・大きな配列でも先頭20個だけを表示する
+        const std::string first_twenty =
+            "0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19";
+        for (int size : {1, 20, 21, 100000}) {
+            coverage_solution large;
+            large.selected_candidates.resize(static_cast<std::size_t>(size));
+            std::iota(large.selected_candidates.begin(), large.selected_candidates.end(), 0);
+            std::ostringstream output;
+            output << large;
+            std::string expected = "coverage_solution{feasible=false, covered_weight=0, total_cost=0, "
+                "covered_target_count=0, uncovered_target_count=0, iterations=0, "
+                "selected_candidates(size=" + std::to_string(size) + ")=[";
+            expected += size == 1 ? "0" : first_twenty;
+            if (size > 20) expected += ", ... (+" + std::to_string(size - 20) + " more)";
+            require(output.str() == expected + "]}", "debug truncation boundary");
+        }
+
+        // 呼び出し元の書式を保ち、true/falseの表示にboolalphaを要求しない
+        std::ostringstream formatted;
+        formatted << std::hex << std::showbase << std::noboolalpha << std::setprecision(3)
+                  << std::setfill('*');
+        const auto flags = formatted.flags();
+        const auto precision = formatted.precision();
+        const auto fill = formatted.fill();
+        formatted << solution << coverage_evaluation{30, 7, 2, 1, 2};
+        require(formatted.flags() == flags && formatted.precision() == precision &&
+                formatted.fill() == fill, "debug preserves formatting");
+        require(formatted.str().find("feasible=true") != std::string::npos &&
+                formatted.str().find("covered_weight=0x1e") != std::string::npos,
+                "debug explicit bool and caller numeric format");
+        formatted << std::boolalpha << coverage_solution{} << ' ' << true;
+        require((formatted.flags() & std::ios_base::boolalpha) != 0 &&
+                formatted.str().ends_with(" true"), "debug preserves boolalpha");
+    }
+
     static void test_basic_cases() {
         coverage_problem problem;
         problem.target_weights = {5, 7, 11, 13};
@@ -2345,6 +2438,7 @@ struct coverage_solver::selftest {
     }
 
     static void run_all_tests() {
+        test_debug_output();
         test_iteration_limits();
         test_review_regressions();
         test_subproblem_boundaries();
@@ -2361,7 +2455,7 @@ struct coverage_solver::selftest {
 int main() {
     try {
         coverage_solver::selftest::run_all_tests();
-        std::cout << "maximum_coverage_solver_v07: all tests passed (49920 iteration-boundary calls, 400 subproblems, 20000 state operations, legacy tests)\n";
+        std::cout << "maximum_coverage_solver_v08: all tests passed (debug output, 49920 iteration-boundary calls, 400 subproblems, 20000 state operations, legacy tests)\n";
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

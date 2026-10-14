@@ -1,5 +1,6 @@
 // 重み付き集合パッキング：競合辺・単位資源容量・必須/禁止を扱う単一スレッドの近似solver
 // Nは1e7以下、M・重複除去前のCSR要素数はint内、整数重みの絶対値合計はLLONG_MAX/4以下、実数の絶対値合計は有限値
+// 通常は元のCSRを直接使い、固定指定があり有効候補が1/4以下のときだけ縮約して再利用する
 // time_limit_usは-1または0以上1e12以下。時間上限は初期化・単一操作・復元の完了分だけ超過し得る
 #pragma once
 #include <bits/stdc++.h>
@@ -21,6 +22,19 @@ struct SetPackingResult {
     vector<int> selected;
     double elapsed_us = 0;
     long long iterations = 0;
+
+    // デバッグ用の1行表示。選択IDは先頭20件までで、改行は呼び出し側に任せる。
+    friend ostream& operator<<(ostream& os, const SetPackingResult& result) {
+        os << "SetPackingResult{feasible=" << (result.feasible ? "true" : "false")
+           << ", value=" << result.value << ", selected=[";
+        size_t count = min(result.selected.size(), size_t{20});
+        for (size_t i = 0; i < count; ++i) {
+            if (i) os << ", ";
+            os << result.selected[i];
+        }
+        if (count < result.selected.size()) os << ", ... (" << result.selected.size() << " total)";
+        return os << "], elapsed_us=" << result.elapsed_us << ", iterations=" << result.iterations << '}';
+    }
 };
 
 template<class Weight = long long>
@@ -68,6 +82,20 @@ private:
             data.resize((size_t)out);
         }
     };
+    struct Data {
+        Csr adjacent, resources, members;
+        vector<int> owner;
+        bool indexed = false;
+        void index(int m) {
+            indexed = true;
+            owner.resize(resources.data.size());
+            for (int i = 0; i + 1 < (int)resources.offset.size(); ++i)
+                for (int p = resources.offset[i]; p < resources.offset[i + 1]; ++p) owner[p] = i;
+            members.build(m, [&](auto emit) {
+                for (int p = 0; p < (int)owner.size(); ++p) emit(resources.data[p], owner[p]);
+            });
+        }
+    };
     struct Rng {
         uint64_t state = 1;
         uint64_t next() {
@@ -80,23 +108,32 @@ private:
         double unit() { return (double)(next() >> 11) * 0x1.0p-53; }
     } rng_;
 
-    int n_ = 0, m_ = 0, mandatory_ = 0;
+    int n_ = 0, m_ = 0;
     vector<Weight> weight_;
     vector<int> capacity_;
     vector<int8_t> fixed_;
-    Csr adjacent_, resources_, members_;
-    vector<int> owner_, location_, occupants_, use_, block_, position_, selected_, active_;
+    Data data_, spare_;
+    bool reduced_ = false, adjusted_ = false;
+    vector<int> required_, original_capacity_, involved_;
+    vector<int> location_, occupants_, use_, block_, position_, selected_, active_;
     vector<uint8_t> eligible_;
     vector<uint32_t> mark_;
     uint32_t stamp_ = 0, work_ = 0;
     vector<int> removed_, added_, pool_;
     vector<double> priority_;
+    vector<int> order_;
+    bool order_dirty_ = true;
     double scale_ = 0;
     Weight value_{};
-    Result best_;
+    Result best_, result_;
+    bool result_dirty_ = true;
     bool dirty_ = true, weights_changed_ = false, stopped_ = false, constructed_ = false;
     long long steps_ = 0;
     Clock::time_point stop_ = Clock::time_point::max();
+
+    const Data& source() const { return reduced_ ? spare_ : data_; }
+    const vector<int>& capacities() const { return adjusted_ ? original_capacity_ : capacity_; }
+    Result& answer() { return required_.empty() ? best_ : result_; }
 
     uint32_t stamp() {
         if (++stamp_ == 0) {
@@ -121,17 +158,17 @@ private:
     }
     bool can_add(int i) const {
         if (position_[i] >= 0 || block_[i] != 0) return false;
-        for (int r : resources_[i]) if (use_[r] >= capacity_[r]) return false;
+        for (int r : data_.resources[i]) if (use_[r] >= capacity_[r]) return false;
         return true;
     }
     void add(int i) {
         position_[i] = (int)selected_.size();
         selected_.push_back(i);
         value_ += weight_[i];
-        for (int j : adjacent_[i]) ++block_[j];
-        for (int p = resources_.offset[i]; p < resources_.offset[i + 1]; ++p) {
-            int r = resources_.data[p];
-            int slot = members_.offset[r] + use_[r]++;
+        for (int j : data_.adjacent[i]) ++block_[j];
+        for (int p = data_.resources.offset[i]; p < data_.resources.offset[i + 1]; ++p) {
+            int r = data_.resources.data[p];
+            int slot = data_.members.offset[r] + use_[r]++;
             occupants_[slot] = p;
             location_[p] = slot;
         }
@@ -143,10 +180,10 @@ private:
         selected_.pop_back();
         position_[i] = -1;
         value_ -= weight_[i];
-        for (int j : adjacent_[i]) --block_[j];
-        for (int p = resources_.offset[i]; p < resources_.offset[i + 1]; ++p) {
-            int r = resources_.data[p];
-            int moved = occupants_[members_.offset[r] + --use_[r]];
+        for (int j : data_.adjacent[i]) --block_[j];
+        for (int p = data_.resources.offset[i]; p < data_.resources.offset[i + 1]; ++p) {
+            int r = data_.resources.data[p];
+            int moved = occupants_[data_.members.offset[r] + --use_[r]];
             occupants_[location_[p]] = moved;
             location_[moved] = location_[p];
         }
@@ -160,34 +197,65 @@ private:
         best_.feasible = true;
         best_.value = value_;
         best_.selected = selected_;
+        result_dirty_ = true;
     }
-    bool prepare(span<const int> hint) {
-        // 必須候補だけで実行可能性を確定し、更新前の状態を破棄する
+    bool build_search() {
+        order_dirty_ = true;
+        // 元構造と元容量へ戻す。必須がなければ容量の複製は作らない。
+        if (reduced_) { swap(data_, spare_); reduced_ = false; }
+        if (adjusted_) { swap(capacity_, original_capacity_); adjusted_ = false; }
         fill(position_.begin(), position_.end(), -1);
         fill(block_.begin(), block_.end(), 0);
-        fill(use_.begin(), use_.end(), 0);
-        selected_.clear();
-        value_ = Weight{};
-        active_.clear();
-        scale_ = 0;
         fill(eligible_.begin(), eligible_.end(), 0);
-        for (int i = 0; i < n_; ++i) if (fixed_[i] == 1) {
-            if (!can_add(i)) return false;
-            add(i);
+        required_.clear(); active_.clear(); selected_.clear(); involved_.clear();
+        value_ = Weight{}; scale_ = 0;
+        int fixed_count = 0;
+        for (int i = 0; i < n_; ++i) {
+            fixed_count += fixed_[i] != -1;
+            if (fixed_[i] != 1) continue;
+            if (block_[i]) return false;
+            if (!adjusted_) { original_capacity_ = capacity_; adjusted_ = true; }
+            required_.push_back(i);
+            for (int j : data_.adjacent[i]) ++block_[j];
+            for (int r : data_.resources[i]) if (--capacity_[r] < 0) return false;
         }
-        mandatory_ = (int)selected_.size();
-        // 必須集合と両立する正重みの自由候補を残し、静的な構築順を用意する
-        for (int i = 0; i < n_; ++i) if (fixed_[i] == -1 && weight_[i] > Weight{} && can_add(i)) {
-            eligible_[i] = 1;
-            active_.push_back(i);
+        for (int i = 0; i < n_; ++i) if (fixed_[i] == -1 && weight_[i] > Weight{} && !block_[i]) {
+            bool allowed = true;
+            for (int r : data_.resources[i]) if (capacity_[r] == 0) { allowed = false; break; }
+            if (allowed) { eligible_[i] = 1; active_.push_back(i); }
+        }
+        // 固定が少ない通常経路では元のCSRを直接使い、探索中の分岐を増やさない。
+        if (fixed_count && active_.size() <= (size_t)n_ / 4) {
+            spare_.adjacent.build(n_, [&](auto emit) {
+                for (int i : active_) for (int j : data_.adjacent[i]) if (eligible_[j]) emit(i, j);
+            });
+            spare_.resources.build(n_, [&](auto emit) {
+                for (int i : active_) for (int r : data_.resources[i]) emit(i, r);
+            });
+            spare_.index(m_);
+            swap(data_, spare_); reduced_ = true;
+            for (int r = 0; r < m_; ++r) if (!data_.members[r].empty()) involved_.push_back(r);
+        } else if (!data_.indexed) data_.index(m_);
+        location_.resize(data_.owner.size()); occupants_.resize(data_.owner.size());
+        for (int i : active_) {
             scale_ += (double)weight_[i];
-            double pressure = 1.0 + (double)adjacent_[i].size();
-            for (int r : resources_[i]) {
-                pressure += (double)(members_[r].size() - 1) / (double)(capacity_[r] - use_[r]);
-            }
+            double pressure = 1.0 + (double)data_.adjacent[i].size();
+            for (int r : data_.resources[i]) pressure += (double)(data_.members[r].size() - 1) / (double)capacity_[r];
             priority_[i] = (double)weight_[i] / pressure;
         }
         if (!active_.empty()) scale_ /= (double)active_.size();
+        return true;
+    }
+    void prepare(span<const int> hint, bool reset = true) {
+        // 構造を作り直した直後は位置・有効候補の競合数が初期化済み。
+        // 元CSRでは不使用候補の競合数も更新するため、再投入では全体を消す。
+        if (reset) {
+            if (reduced_) for (int i : active_) { position_[i] = -1; block_[i] = 0; }
+            else { fill(position_.begin(), position_.end(), -1); fill(block_.begin(), block_.end(), 0); }
+        }
+        if (reduced_) for (int r : involved_) use_[r] = 0;
+        else fill(use_.begin(), use_.end(), 0);
+        selected_.clear(); value_ = Weight{};
         auto tag = stamp();
         for (int i : hint) {
             assert(0 <= i && i < n_ && mark_[i] != tag);
@@ -196,15 +264,17 @@ private:
         }
         constructed_ = false;
         steps_ = 0;
-        return true;
     }
     void greedy() {
         // 圧迫度当たりの利益が高い順に、追加できる候補を採用する
-        pool_ = active_;
-        sort(pool_.begin(), pool_.end(), [&](int a, int b) {
-            return priority_[a] != priority_[b] ? priority_[a] > priority_[b] : a < b;
-        });
-        for (int i : pool_) {
+        if (order_dirty_) {
+            order_ = active_;
+            sort(order_.begin(), order_.end(), [&](int a, int b) {
+                return priority_[a] != priority_[b] ? priority_[a] > priority_[b] : a < b;
+            });
+            order_dirty_ = false;
+        }
+        for (int i : order_) {
             if (tick()) break;
             if (can_add(i)) add(i);
         }
@@ -231,8 +301,8 @@ private:
                     if (++first == (int)list.size()) first = 0;
                 }
             };
-            scan(adjacent_[i]);
-            for (int r : resources_[i]) if (use_[r] < capacity_[r]) scan(members_[r]);
+            scan(data_.adjacent[i]);
+            for (int r : data_.resources[i]) if (use_[r] < capacity_[r]) scan(data_.members[r]);
             if (pool_.size() >= 512 || stopped_) break;
         }
         for (int k = (int)pool_.size() - 1; k > 0; --k) swap(pool_[k], pool_[rng_.index(k + 1)]);
@@ -248,28 +318,19 @@ private:
         Weight before = value_, delta = weight_[target];
         auto drop = [&](int i) { delta -= weight_[i]; remove(i); removed_.push_back(i); };
         // 明示的な競合相手は全て除去する
-        for (int j : adjacent_[target]) if (position_[j] >= 0) drop(j);
+        for (int j : data_.adjacent[target]) if (position_[j] >= 0) drop(j);
         // 容量が不足する資源から、小さい重みの自由候補をサンプルで探す
-        for (int r : resources_[target]) if (use_[r] >= capacity_[r]) {
+        for (int r : data_.resources[target]) if (use_[r] >= capacity_[r]) {
             int chosen = -1;
             int count = min(use_[r], 8);
             int offset = count < use_[r] ? rng_.index(use_[r]) : 0;
             for (int k = 0; k < count; ++k) {
-                int p = occupants_[members_.offset[r] + offset];
+                int p = occupants_[data_.members.offset[r] + offset];
                 if (++offset == use_[r]) offset = 0;
-                int j = owner_[p];
-                if (fixed_[j] == 1) continue;
+                int j = data_.owner[p];
                 if (chosen < 0 || weight_[j] < weight_[chosen]) chosen = j;
             }
-            // サンプルが必須候補だけだった場合も、必須は決して外さない
-            if (chosen < 0) {
-                for (int k = 0; k < use_[r]; ++k) {
-                    int j = owner_[occupants_[members_.offset[r] + k]];
-                    if (fixed_[j] != 1) { chosen = j; break; }
-                    if (tick()) break;
-                }
-            }
-            if (chosen < 0 || tick()) {
+            if (tick()) {
                 for (int j : removed_) add(j);
                 value_ = before;
                 return;
@@ -299,10 +360,11 @@ private:
         vector<int> previous;
         if (supplied) previous.assign(hint.begin(), hint.end());
         if (dirty_) {
-            vector<int> old = move(best_.selected);
+            vector<int> old = move(answer().selected);
             best_ = Result{};
             if (supplied && old.empty()) { old = move(previous); supplied = false; }
-            if (prepare(old)) save_best();
+            result_dirty_ = true;
+            if (build_search()) { prepare(old, false); save_best(); }
             dirty_ = false;
         }
         else if (weights_changed_ && best_.feasible) {
@@ -312,13 +374,13 @@ private:
             save_best();
         }
         weights_changed_ = false;
-        if (supplied && best_.feasible && prepare(previous)) save_best();
+        if (supplied && best_.feasible) { prepare(previous); save_best(); }
         long long iterations = 0;
         if (best_.feasible && !active_.empty() && options.iteration_limit != 0 && !expired()) {
             if (!constructed_) { greedy(); constructed_ = true; }
             int cycle = max(256, 8 * (int)active_.size());
             double temperature = scale_ * 0.3 * pow(0.01, (double)(steps_ % cycle) / (double)cycle);
-            while (!stopped_ && selected_.size() < active_.size() + (size_t)mandatory_ &&
+            while (!stopped_ && selected_.size() < active_.size() &&
                    (options.iteration_limit < 0 || iterations < options.iteration_limit)) {
                 if ((iterations & 31) == 0 && expired()) break;
                 ++iterations;
@@ -327,9 +389,21 @@ private:
                 exchange(target, temperature);
             }
         }
-        best_.iterations = iterations;
-        best_.elapsed_us = chrono::duration<double, micro>(Clock::now() - begin).count();
-        return best_;
+        // 必須集合と最良の自由集合は返却時にだけ合流する
+        if (!required_.empty() && result_dirty_) {
+            result_.feasible = best_.feasible;
+            result_.selected.clear(); result_.value = Weight{};
+            if (best_.feasible) {
+                result_.selected = required_;
+                result_.selected.insert(result_.selected.end(), best_.selected.begin(), best_.selected.end());
+                result_.value = evaluate(result_.selected);
+            }
+        }
+        result_dirty_ = false;
+        auto& result = answer();
+        result.iterations = iterations;
+        result.elapsed_us = chrono::duration<double, micro>(Clock::now() - begin).count();
+        return result;
     }
 
 #if __INCLUDE_LEVEL__ == 0
@@ -368,22 +442,25 @@ public:
                     int i = s.selected_[k];
                     assert(positions[i] < 0); positions[i] = k;
                     sum += p.weight[i];
-                    for (auto [a, b] : p.conflicts) { if (a == i) ++blocks[b]; if (b == i) ++blocks[a]; }
+                    for (int j : s.data_.adjacent[i]) ++blocks[j];
                     for (int r : p.resources[i]) ++used[r];
-                    for (int at = s.resources_.offset[i]; at < s.resources_.offset[i + 1]; ++at) {
-                        int r = s.resources_.data[at], location = s.location_[at];
-                        assert(location >= s.members_.offset[r] && location < s.members_.offset[r] + s.use_[r]);
-                        assert(s.occupants_[location] == at && s.owner_[at] == i);
+                    for (int at = s.data_.resources.offset[i]; at < s.data_.resources.offset[i + 1]; ++at) {
+                        int r = s.data_.resources.data[at], location = s.location_[at];
+                        assert(location >= s.data_.members.offset[r] && location < s.data_.members.offset[r] + s.use_[r]);
+                        assert(s.occupants_[location] == at && s.data_.owner[at] == i);
                     }
                 }
-                assert(positions == s.position_ && blocks == s.block_ && used == s.use_);
+                for (int i : s.active_) assert(positions[i] == s.position_[i] && blocks[i] == s.block_[i]);
+                for (int r : s.involved_) assert(used[r] == s.use_[r]);
                 assert(equal(sum, s.value_));
-                assert(s.is_feasible(s.selected_));
-                assert(s.best_.feasible && s.is_feasible(s.best_.selected));
+                auto whole = s.required_; whole.insert(whole.end(), s.selected_.begin(), s.selected_.end());
+                assert(s.is_feasible(whole));
+                whole = s.required_; whole.insert(whole.end(), s.best_.selected.begin(), s.best_.selected.end());
+                assert(s.best_.feasible && s.is_feasible(whole));
                 assert(equal(s.best_.value, s.evaluate(s.best_.selected)));
-                for (int i = 0; i < n; ++i) {
+                for (int i : s.active_) {
                     bool possible = positions[i] < 0 && blocks[i] == 0;
-                    for (int r : p.resources[i]) possible = possible && used[r] < p.capacity[r];
+                    for (int r : p.resources[i]) possible = possible && used[r] < s.capacity_[r];
                     assert(s.can_add(i) == possible);
                 }
                 ++checks;
@@ -427,7 +504,7 @@ public:
                 if constexpr (is_floating_point_v<Weight>) w /= 7.0;
                 u.weights = {{i, w}}; p.weight[i] = w;
                 Weight lower{};
-                for (int j : s.best_.selected) lower += p.weight[j];
+                for (int j : s.answer().selected) lower += p.weight[j];
                 s.update(u);
                 auto r = s.solve(no_work);
                 assert(r.feasible && s.is_feasible(r.selected));
@@ -439,9 +516,9 @@ public:
                     for (int resource : p.resources[j]) ++mandatory_use[resource];
                 for (int j : s.active_) {
                     total += (double)p.weight[j];
-                    double pressure = 1.0 + (double)s.adjacent_[j].size();
+                    double pressure = 1.0 + (double)s.data_.adjacent[j].size();
                     for (int resource : p.resources[j])
-                        pressure += (double)(s.members_[resource].size() - 1) / (p.capacity[resource] - mandatory_use[resource]);
+                        pressure += (double)(s.data_.members[resource].size() - 1) / (p.capacity[resource] - mandatory_use[resource]);
                     double expected = (double)p.weight[j] / pressure;
                     assert(abs(s.priority_[j] - expected) < 1e-10 * max(1.0, expected));
                 }
@@ -570,8 +647,7 @@ public:
                     assert(csr.offset.back() == size && (int)csr.data.size() == size);
                 };
                 for (auto& row : adjacent) sort(row.begin(), row.end());
-                check(s.adjacent_, adjacent); check(s.resources_, resources); check(s.members_, members);
-                for (int i = 0; i < n; ++i) for (int at = s.resources_.offset[i]; at < s.resources_.offset[i + 1]; ++at) assert(s.owner_[at] == i);
+                check(s.source().adjacent, adjacent); check(s.source().resources, resources);
                 Options zero; zero.time_limit_us = -1; zero.iteration_limit = 0;
                 const auto& result = s.solve_view(zero);
                 assert(result.feasible && result.value == Weight{} && result.selected.empty());
@@ -602,11 +678,208 @@ public:
                 for (int i = 0; i < n; ++i) if (flag(i) == 1) expected.push_back(i);
                 for (int i : hint) if (flag(i) == -1 && p.weight[i] > Weight{}) expected.push_back(i);
                 s.rebuild(p);
-                assert(s.prepare(hint) && s.selected_ == expected);
+                assert(s.build_search()); s.prepare(hint);
+                auto combined = s.required_; combined.insert(combined.end(), s.selected_.begin(), s.selected_.end());
+                assert(combined == expected);
                 Weight total{};
-                for (int i : expected) total += p.weight[i];
+                for (int i : s.selected_) total += p.weight[i];
                 assert(s.value_ == total && s.evaluate(s.selected_) == total);
                 for (int i = 0; i < n; ++i) assert(s.fixed_[i] == flag(i));
+                ++checks;
+            }
+        }
+        // 固定部分を手動で切り出した問題と、元IDで解く問題を多数の更新後にも照合する
+        {
+            long long compared = 0;
+            for (int trial = 0; trial < 120; ++trial) {
+                int n = 15 + draw(90), m = 1 + draw(20);
+                Problem p; p.weight.resize((size_t)n); p.fixed.assign((size_t)n, -1);
+                p.capacity.resize((size_t)m); p.resources.resize((size_t)n);
+                for (auto& w : p.weight) { w = (Weight)(draw(100) - 10); if constexpr (is_floating_point_v<Weight>) w /= 7.0; }
+                for (auto& c : p.capacity) c = 1 + draw(4);
+                for (int i = 0; i < n; ++i) {
+                    for (int r = 0; r < m; ++r) if (draw(8) == 0) p.resources[i].push_back(r);
+                    for (int j = 0; j < i; ++j) if (draw(20) == 0) p.conflicts.emplace_back(i, j);
+                }
+                SetPackingSolver s(p, (uint64_t)trial + 77);
+                Options zero; zero.time_limit_us = -1; zero.iteration_limit = 0;
+                Options work = zero; work.iteration_limit = 120;
+                vector<int> current;
+                for (int turn = 0; turn < 16; ++turn) {
+                    // 前回の実行可能解を基準に範囲を変え、必須と禁止を同時に更新する
+                    vector<uint8_t> chosen((size_t)n);
+                    for (int i : current) chosen[i] = 1;
+                    Update changes;
+                    int free_count = 0;
+                    for (int i = 0; i < n; ++i) {
+                        bool free = draw(4) == 0 && free_count < n / 4;
+                        free_count += free;
+                        p.fixed[i] = free ? (int8_t)-1 : (int8_t)chosen[i];
+                        changes.fixed.emplace_back(i, p.fixed[i]);
+                    }
+                    int id = draw(n);
+                    p.weight[id] = (Weight)(draw(110) - 10);
+                    if constexpr (is_floating_point_v<Weight>) p.weight[id] /= 7.0;
+                    changes.weights.emplace_back(id, p.weight[id]);
+                    s.update(changes);
+                    auto initial = s.improve(current, zero);
+                    assert(initial.feasible && s.is_feasible(initial.selected));
+
+                    // 独立に残容量、境界の禁止、局所IDと資源IDの対応を作る
+                    Problem local;
+                    auto remaining = p.capacity;
+                    vector<int> to_local((size_t)n, -1), ids, mandatory;
+                    vector<uint8_t> forbidden((size_t)n);
+                    for (int i = 0; i < n; ++i) if (p.fixed[i] == 1) {
+                        mandatory.push_back(i);
+                        for (int r : p.resources[i]) --remaining[r];
+                    }
+                    for (auto [a, b] : p.conflicts) {
+                        if (p.fixed[a] == 1) forbidden[b] = 1;
+                        if (p.fixed[b] == 1) forbidden[a] = 1;
+                    }
+                    vector<int> resource_ids((size_t)m, -1);
+                    for (int i = 0; i < n; ++i) if (p.fixed[i] == -1 && p.weight[i] > Weight{} && !forbidden[i]) {
+                        bool okay = true;
+                        for (int r : p.resources[i]) if (remaining[r] == 0) okay = false;
+                        if (!okay) continue;
+                        to_local[i] = (int)ids.size(); ids.push_back(i);
+                        local.weight.push_back(p.weight[i]); local.resources.push_back(p.resources[i]);
+                        for (int r : p.resources[i]) resource_ids[r] = 0;
+                    }
+                    for (int r = 0; r < m; ++r) if (resource_ids[r] == 0) {
+                        resource_ids[r] = (int)local.capacity.size(); local.capacity.push_back(remaining[r]);
+                    }
+                    for (auto& row : local.resources) for (int& r : row) r = resource_ids[r];
+                    for (auto [a, b] : p.conflicts) if (to_local[a] >= 0 && to_local[b] >= 0)
+                        local.conflicts.emplace_back(to_local[a], to_local[b]);
+                    vector<int> hint;
+                    for (int i : initial.selected) if (to_local[i] >= 0) hint.push_back(to_local[i]);
+                    uint64_t seed = random();
+                    SetPackingSolver compact(local, seed);
+                    compact.improve(hint, zero);
+                    s.improve(initial.selected, zero); s.seed(seed);
+                    for (int repeat = 0; repeat < 3; ++repeat) {
+                        auto a = s.solve(work), b = compact.solve(work);
+                        vector<int> mapped = mandatory;
+                        for (int i : b.selected) mapped.push_back(ids[i]);
+                        assert(a.selected == mapped && equal(a.value, s.evaluate(mapped)));
+                        assert(a.iterations == b.iterations && s.rng_.state == compact.rng_.state);
+                        assert(s.is_feasible(a.selected));
+                        assert(s.selected_.size() <= ids.size() && s.best_.selected.size() <= ids.size());
+                        for (int i : s.data_.owner) assert(p.fixed[i] == -1);
+                        current = a.selected; ++compared;
+                    }
+                    // 初期案の渡し直しと同値更新はCSRのバッファを再利用する
+                    auto adjacency = s.data_.adjacent.data.data(), members = s.data_.members.data.data();
+                    auto offsets = s.data_.resources.offset.data();
+                    Update unchanged; unchanged.fixed = changes.fixed; unchanged.weights = changes.weights;
+                    s.update(unchanged);
+                    assert(!s.dirty_ && !s.weights_changed_);
+                    auto saved = s.solve_view(zero).selected;
+                    auto alias = s.improve(s.solve_view(zero).selected, zero);
+                    assert(alias.selected == saved);
+                    assert(adjacency == s.data_.adjacent.data.data() && members == s.data_.members.data.data());
+                    assert(offsets == s.data_.resources.offset.data());
+                    SetPackingSolver copied = s;
+                    auto a = s.solve(work), b = copied.solve(work);
+                    assert(a.value == b.value && a.selected == b.selected);
+                    ++checks;
+                }
+            }
+            cout << "PASS local equivalence: " << compared << " (" << (is_same_v<Weight, double> ? "double" : "long long") << ")\n";
+        }
+        // 大きい必須利益は自由部分の比較へ混ぜず、返却時だけ合計する
+        {
+            Problem p; p.weight = {(Weight)1e16, (Weight)1, (Weight)2}; p.fixed = {1, -1, -1};
+            p.capacity = {2}; p.resources = {{0}, {0}, {0}};
+            SetPackingSolver s(p);
+            Options o; o.time_limit_us = -1; o.iteration_limit = 0;
+            s.improve(vector<int>{0, 1}, o); s.exchange(2, 0);
+            assert(s.best_.value == (Weight)2 && s.best_.selected == vector<int>{2});
+            auto result = s.solve(o); assert((result.selected == vector<int>{0, 2}));
+            assert(s.selected_.size() == 1 && s.capacity_[0] == 1);
+            Update release; release.fixed = {{0, -1}, {1, 0}, {2, 0}};
+            s.update(release); result = s.solve(o);
+            assert(result.feasible && result.selected == vector<int>{0});
+            ++checks;
+        }
+        // 通常・縮約・必須なしを繰り返し切り替え、全体解と元構造を保つ。
+        {
+            long long transitions = 0;
+            for (int trial = 0; trial < 48; ++trial) {
+                const int n = 96, m = 16;
+                Problem p; p.weight.resize(n); p.fixed.assign(n, -1);
+                p.resources.resize(n); p.capacity.assign(m, 8);
+                for (int i = 0; i < n; ++i) {
+                    p.weight[i] = (Weight)(1 + draw(100));
+                    if constexpr (is_floating_point_v<Weight>) p.weight[i] /= 7.0;
+                    p.resources[i] = {i % m, (i + 3) % m};
+                    p.conflicts.emplace_back(i, (i + 1) % n);
+                }
+                SetPackingSolver s(p, (uint64_t)trial + 101);
+                Options zero; zero.time_limit_us = -1; zero.iteration_limit = 0;
+                Options work = zero; work.iteration_limit = 240;
+                auto current = s.solve(work);
+                auto original_edges = s.source().adjacent.data;
+                auto original_uses = s.source().resources.data;
+                auto original_members = s.source().members.data;
+                for (int turn = 0; turn < 56; ++turn) {
+                    int count = array<int, 7>{96, 95, 86, 48, 24, 8, 0}[(size_t)turn % 7];
+                    vector<uint8_t> chosen(n), free(n);
+                    for (int i : current.selected) chosen[i] = 1;
+                    for (int k = 0; k < count; ++k) free[(k + 13 * turn) % n] = 1;
+                    Update u;
+                    for (int i = 0; i < n; ++i) {
+                        p.fixed[i] = free[i] ? (int8_t)-1 : (int8_t)chosen[i];
+                        u.fixed.emplace_back(i, p.fixed[i]);
+                    }
+                    if (turn % 4 == 0) {
+                        int r = turn % m, used = 0;
+                        for (int i : current.selected) used += (int)count_if(p.resources[i].begin(), p.resources[i].end(), [&](int x) { return x == r; });
+                        p.capacity[r] = used + 1; u.capacities = {{r, p.capacity[r]}};
+                    }
+                    auto before = current;
+                    s.update(u);
+                    assert(s.is_feasible(before.selected));
+                    current = s.improve(before.selected, zero);
+                    assert(current.feasible && equal(current.value, before.value));
+                    assert(s.is_feasible(current.selected) && equal(current.value, s.evaluate(current.selected)));
+                    assert(s.source().adjacent.data == original_edges && s.source().resources.data == original_uses);
+                    assert(s.source().members.data == original_members && s.capacities() == p.capacity);
+                    if (count == n) assert(!s.reduced_ && !s.adjusted_ && &s.solve_view(zero) == &s.best_);
+                    if (count <= n / 4) assert(s.reduced_);
+                    for (int r = 0; r < m; ++r) if (!s.reduced_ || !s.data_.members[r].empty()) for (int k = 0; k < s.use_[r]; ++k) {
+                        int member = s.occupants_[s.data_.members.offset[r] + k];
+                        assert(p.fixed[s.data_.owner[member]] == -1);
+                    }
+                    SetPackingSolver copy = s;
+                    auto a = s.solve(work), b = copy.solve(work);
+                    assert(a.selected == b.selected && equal(a.value, b.value) && s.rng_.state == copy.rng_.state);
+                    current = a;
+                    SetPackingSolver assigned(Problem{}); assigned = s;
+                    SetPackingSolver moved(move(assigned));
+                    auto c = s.solve(work), d = moved.solve(work);
+                    assert(c.selected == d.selected && equal(c.value, d.value));
+                    current = c;
+                    auto saved = s.solve_view(zero).selected;
+                    auto alias = s.improve(s.solve_view(zero).selected, zero);
+                    assert(alias.selected == saved);
+                    ++transitions; ++checks;
+                }
+                s.rebuild(Problem{});
+                auto empty = s.solve(zero);
+                assert(empty.feasible && empty.selected.empty() && empty.value == Weight{});
+            }
+            cout << "PASS mode transitions: " << transitions << " (" << (is_same_v<Weight, double> ? "double" : "long long") << ")\n";
+        }
+        // 非正重みの隣接先も持つ通常経路で、improveを重ねても競合数を累積しない。
+        {
+            Problem p; p.weight = {(Weight)7, (Weight)-1, (Weight)3}; p.conflicts = {{0, 1}, {1, 2}};
+            SetPackingSolver s(p); Options o; o.time_limit_us = -1; o.iteration_limit = 0;
+            for (int repeat = 0; repeat < 100; ++repeat) {
+                auto r = s.improve(vector<int>{0, 2}, o);
+                assert(!s.reduced_ && r.value == (Weight)10 && s.block_[1] == 2);
                 ++checks;
             }
         }
@@ -626,6 +899,8 @@ public:
         n_ = (int)problem.weight.size(); m_ = (int)problem.capacity.size();
         assert(problem.resources.empty() || (int)problem.resources.size() == n_);
         assert(problem.fixed.empty() || (int)problem.fixed.size() == n_);
+        if (reduced_) { swap(data_, spare_); reduced_ = false; }
+        adjusted_ = false; required_.clear(); data_.indexed = false;
         weight_ = problem.weight; capacity_ = problem.capacity;
         fixed_ = problem.fixed; fixed_.resize((size_t)n_, -1);
         for (int i = 0; i < n_; ++i) {
@@ -634,30 +909,26 @@ public:
         }
         for (int c : capacity_) { assert(c >= 0); (void)c; }
         // 直接CSRへ詰め、各行のソートと重複除去で正規化する
-        adjacent_.build(n_, [&](auto emit) {
+        data_.adjacent.build(n_, [&](auto emit) {
             for (auto [i, j] : problem.conflicts) {
                 assert(0 <= i && i < n_ && 0 <= j && j < n_ && i != j);
                 emit(i, j); emit(j, i);
             }
         }, true);
-        resources_.build(n_, [&](auto emit) {
+        data_.resources.build(n_, [&](auto emit) {
             for (int i = 0; i < (int)problem.resources.size(); ++i) for (int r : problem.resources[i]) {
                 assert(0 <= r && r < m_);
                 emit(i, r);
             }
         }, true);
-        owner_.resize(resources_.data.size());
-        for (int i = 0; i < n_; ++i) for (int p = resources_.offset[i]; p < resources_.offset[i + 1]; ++p) owner_[p] = i;
-        members_.build(m_, [&](auto emit) {
-            for (int p = 0; p < (int)owner_.size(); ++p) emit(resources_.data[p], owner_[p]);
-        });
-        // 状態と作業配列の容量を確保し、次の探索で必須集合を判定する
-        location_.resize(owner_.size()); occupants_.resize(owner_.size());
+        // 固定ゼロは通常経路をここで完成させる。縮約時に不要な逆引きは作らない。
+        if (all_of(fixed_.begin(), fixed_.end(), [](int8_t f) { return f == -1; })) data_.index(m_);
+        // 大きさが変わるため、全体IDで参照する配列だけをここで用意する
         use_.resize((size_t)m_); block_.resize((size_t)n_); position_.resize((size_t)n_);
         eligible_.resize((size_t)n_); priority_.resize((size_t)n_);
         mark_.assign((size_t)max(n_, m_), 0); stamp_ = 0;
         selected_.clear(); selected_.reserve((size_t)n_);
-        best_ = Result{}; dirty_ = true; weights_changed_ = false;
+        best_ = Result{}; result_ = Result{}; dirty_ = true; weights_changed_ = false; result_dirty_ = true;
     }
     // 乱数状態だけを設定する O(1)
     void seed(uint64_t value) { rng_.state = value; }
@@ -665,10 +936,11 @@ public:
     void update(const Update& changes) {
         // 制約や正重み候補の集合が変わる場合だけ、全体を再初期化する
         auto tag = stamp();
+        auto& original = adjusted_ ? original_capacity_ : capacity_;
         for (auto [r, c] : changes.capacities) {
             assert(0 <= r && r < m_ && c >= 0 && mark_[r] != tag); mark_[r] = tag;
-            dirty_ = dirty_ || capacity_[r] != c;
-            capacity_[r] = c;
+            dirty_ = dirty_ || original[r] != c;
+            original[r] = c;
         }
         tag = stamp();
         for (auto [i, f] : changes.fixed) {
@@ -681,7 +953,8 @@ public:
             assert(0 <= i && i < n_ && mark_[i] != tag); mark_[i] = tag;
             if constexpr (is_floating_point_v<Weight>) assert(isfinite(w));
             if (weight_[i] == w) continue;
-            weights_changed_ = true;
+            order_dirty_ = true;
+            weights_changed_ = true; result_dirty_ = true;
             dirty_ = dirty_ || (fixed_[i] == -1 && (weight_[i] > Weight{}) != (w > Weight{}));
             if (!dirty_ && eligible_[i]) {
                 priority_[i] = (priority_[i] / (double)weight_[i]) * (double)w;
@@ -690,7 +963,7 @@ public:
             weight_[i] = w;
         }
     }
-    // 探索を継続し、次の非const操作まで有効な結果参照を返す O(初期化+探索)、参照返却はO(1)
+    // 探索を継続し、次の非const操作まで有効な結果参照を返す O(初期化+探索+結果更新時の選択数)
     const Result& solve_view(const Options& options) { return run(options, {}, false, Clock::now()); }
     // 探索を継続し、所有する結果を返す O(初期化+探索+選択数)
     Result solve(const Options& options) {
@@ -730,8 +1003,8 @@ public:
             assert(0 <= i && i < n_ && !chosen[i]);
             if (fixed_[i] == 0) return false;
             chosen[i] = 1;
-            for (int j : adjacent_[i]) if (chosen[j]) return false;
-            for (int r : resources_[i]) if (++usage[r] > capacity_[r]) return false;
+            for (int j : source().adjacent[i]) if (chosen[j]) return false;
+            for (int r : source().resources[i]) if (++usage[r] > capacities()[r]) return false;
         }
         for (int i = 0; i < n_; ++i) if (fixed_[i] == 1 && !chosen[i]) return false;
         return true;

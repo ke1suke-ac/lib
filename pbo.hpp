@@ -82,12 +82,33 @@ struct PboEvaluation {
     }
 };
 
+// 評価結果を項目名付きで出力する。改行やストリームの書式変更は行わない
+inline std::ostream& operator<<(std::ostream& os, const PboEvaluation& e) {
+    return os << "PboEvaluation{feasible=" << (e.feasible() ? "true" : "false")
+              << ", objective=" << e.objective
+              << ", violated_hard_rows=" << e.violated_hard_rows
+              << ", violated_fixed_variables=" << e.violated_fixed_variables << '}';
+}
+
 struct PboResult {
     std::vector<uint8_t> x;
     PboEvaluation evaluation;
     int64_t iterations = 0;
     double elapsed_us = 0;
 };
+
+// xは先頭20要素まで表示し、省略時は...を添える。sizeは省略前の総要素数
+inline std::ostream& operator<<(std::ostream& os, const PboResult& r) {
+    os << "PboResult{evaluation=" << r.evaluation << ", x=[";
+    const std::size_t count = std::min<std::size_t>(r.x.size(), 20);
+    for (std::size_t i = 0; i < count; ++i) {
+        if (i) os << ", ";
+        os << int(r.x[i]);
+    }
+    if (r.x.size() > count) os << ", ...";
+    return os << "] (size=" << r.x.size() << "), iterations=" << r.iterations
+              << ", elapsed_us=" << r.elapsed_us << '}';
+}
 
 struct PboParam {
     double time_limit_us = 1'950'000.0;
@@ -124,7 +145,7 @@ class PboSolver {
     // 比較実験で選んだ小さな固定構成を使う
     static constexpr int CHAIN_DEPTH = 12;
     static constexpr int CANDIDATES = 12;
-    static constexpr int LNS_NODES = 256;
+    static constexpr int LNS_NODES = 1024;
     static constexpr int LNS_INTERVAL = 512;
     static constexpr int TEMPERATURE_PERIOD = 4096;
 
@@ -397,7 +418,12 @@ class PboSolver {
         return best_gain;
     }
 
-    bool exact_block(const std::vector<int>& vars, int64_t node_limit) {
+    template<bool Repair = false>
+    bool exact_block(const std::vector<int>& input_vars, int64_t node_limit) {
+        // 通常の厳密探索には修復用の分岐とコピーを生成しない
+        std::vector<int> sorted_vars;
+        if constexpr (Repair) sorted_vars = input_vars;
+        const auto& vars = Repair ? sorted_vars : input_vars;
         // 外側を固定した残余区間を作り、外側の減点も上界に含める
         std::vector<uint8_t> seen(rows_.size(), 0);
         std::vector<int> touched;
@@ -416,21 +442,57 @@ class PboSolver {
                 high[j] += std::max(0LL, coef) - coef * x_[v];
             }
         }
+        // 密に絡む部分は従来の256ノード修復に留め、探索時間を奪いすぎない
+        bool partial = Repair && std::count_if(touched.begin(), touched.end(), [&](int j) {
+            return rows_[j].kind == PboRowKind::Hard;
+        }) <= 2 * (int)vars.size();
+        if (Repair && !partial) node_limit = std::min<int64_t>(node_limit, 256);
+        if (Repair && partial) {
+            // 少数のハード行へ強く影響する変数から分岐する
+            std::vector<std::pair<double, int>> order;
+            for (int v : vars) {
+                double score = 0;
+                for (int c = col_begin_[v]; c < col_begin_[v + 1]; ++c) {
+                    const auto& row = rows_[column_row_[c]];
+                    if (row.kind == PboRowKind::Hard) score += std::abs((double)column_coef_[c]) * row.scale;
+                }
+                order.emplace_back(-score, v);
+            }
+            std::sort(order.begin(), order.end());
+            for (int i = 0; i < (int)vars.size(); ++i) sorted_vars[i] = order[i].second;
+        }
         int64_t nodes = 0;
         bool complete = true;
         // 楽観的な利益上界と各行の到達区間で枝刈りする
         auto visit = [&](auto&& self, int depth, long long upper) -> void {
             if (nodes >= node_limit || !tick()) { complete = false; return; }
             ++nodes;
+            // 疎な部分修復では、全行の同時解消に届かなくても違反減少を残す
+            [[maybe_unused]] int bad_bound = (int)bad_rows_.size();
+            [[maybe_unused]] double violation_bound = violation_;
             long long bound = upper - outside_penalty;
             for (int j : touched) {
                 const auto& row = rows_[j];
                 long long v = (std::max(row.lower, high[j]) - high[j])
                             + (low[j] - std::min(row.upper, low[j]));
-                if (row.kind == PboRowKind::Hard && v) return;
+                if (row.kind == PboRowKind::Hard) {
+                    if constexpr (!Repair) {
+                        if (v) return;
+                    } else {
+                        if ((best_.evaluation.feasible() || !partial) && v) return;
+                        if (partial && !best_.evaluation.feasible()) {
+                            bad_bound += (v != 0) - (row.amount != 0);
+                            violation_bound += (double)(v - row.amount) * row.scale;
+                        }
+                    }
+                }
                 bound -= penalty(row, v);
             }
             if (best_.evaluation.feasible() && bound <= best_.evaluation.objective) return;
+            if constexpr (Repair) if (partial && !best_.evaluation.feasible() &&
+                (bad_bound > best_.evaluation.violated_hard_rows ||
+                 (bad_bound == best_.evaluation.violated_hard_rows &&
+                  violation_bound > best_violation_ + 1e-9))) return;
             if (depth == (int)vars.size()) { remember(); return; }
             int var = vars[depth], original = x_[var];
             for (int k = 0; k < 2; ++k) {
@@ -455,7 +517,7 @@ class PboSolver {
         return complete;
     }
 
-    void lns() {
+    void lns(bool repair) {
         // 未解消の違反行の周囲を厳密に修復し、全ペア・全近傍は展開しない
         load_state(best_.x);
         std::vector<int> vars;
@@ -480,7 +542,9 @@ class PboSolver {
             }
         }
         for (int v : vars) locked_[v] = 0;
-        exact_block(vars, LNS_NODES);
+        // 既存候補からの再修復は従来の探索経路を保つ
+        if (repair) exact_block<true>(vars, LNS_NODES);
+        else exact_block(vars, 256);
         load_state(best_.x);
     }
 
@@ -600,7 +664,7 @@ class PboSolver {
             }
             if (!best_.evaluation.feasible() && iterations_ - last_improvement_ > 128 &&
                 iterations_ >= next_lns && check_time()) {
-                lns(); next_lns = iterations_ + LNS_INTERVAL;
+                lns(fresh && !supplied); next_lns = iterations_ + LNS_INTERVAL;
             }
             if (iterations_ - last_improvement_ > 512 && iterations_ % 128 == 0 && check_time()) {
                 load_state(best_.x);
@@ -1280,7 +1344,81 @@ struct PboSolverTest {
             require(stopped.iterations == 0); verify_state(s, p);
         }
     }
+    static void partial_repair_tests() {
+        // 一度の部分変更では全行を直せないが、2回に分ければ直せる
+        PboProblem p; p.profit.assign(4, 0);
+        p.add_eq({{0, 1}, {1, 1}}, 2);
+        p.add_eq({{0, 1}, {2, 1}}, 2);
+        p.add_eq({{1, 1}, {3, 1}}, 2);
+        PboSolver s(p); s.scales(); s.load_state({0, 0, 0, 0}); s.remember();
+        s.end_ = PboSolver::Clock::time_point::max(); s.limit_ = -1;
+        require(s.exact_block<true>({0, 1}, 100));
+        require(s.best_.evaluation.violated_hard_rows == 2);
+        require(s.best_.x == vector<uint8_t>({1, 1, 0, 0}));
+        require(s.x_ == vector<uint8_t>({0, 0, 0, 0})); verify_state(s, p);
+        s.load_state(s.best_.x);
+        require(s.exact_block<true>({2, 3}, 100));
+        require(s.best_.evaluation.feasible());
+        require(s.best_.x == vector<uint8_t>({1, 1, 1, 1}));
+        require(s.x_ == vector<uint8_t>({1, 1, 0, 0})); verify_state(s, p);
+
+        // 緩和した枝刈りが最良の部分修復を落とさないことを全列挙で確認
+        mt19937_64 rng(69102573);
+        for (int trial = 0; trial < 160; ++trial) {
+            auto model = random_problem(rng, 8, 12, trial % 3 == 0);
+            PboSolver t(model); t.scales();
+            vector<uint8_t> original(8);
+            vector<int> vars;
+            for (int v = 0; v < 8; ++v) {
+                original[v] = model.fixed[v] >= 0 ? (uint8_t)model.fixed[v] : (uint8_t)(rng() % 2);
+                if (model.fixed[v] < 0 && rng() % 3) vars.push_back(v);
+            }
+            t.load_state(original); t.remember();
+            t.end_ = PboSolver::Clock::time_point::max(); t.limit_ = -1;
+            int best_bad = INT_MAX;
+            double best_amount = 0;
+            long long best_objective = 0;
+            auto x = original;
+            for (int mask = 0; mask < (1 << vars.size()); ++mask) {
+                for (int k = 0; k < (int)vars.size(); ++k) x[vars[k]] = (uint8_t)((mask >> k) & 1);
+                auto e = naive(model, x);
+                double amount = 0;
+                for (int j = 0; j < (int)model.rows.size(); ++j) {
+                    const auto& row = model.rows[j];
+                    if (row.kind != PboRowKind::Hard) continue;
+                    long long sum = 0, v = 0;
+                    for (auto a : row.terms) sum += a.coef * x[a.var];
+                    if (row.lower && sum < *row.lower) v += *row.lower - sum;
+                    if (row.upper && sum > *row.upper) v += sum - *row.upper;
+                    amount += (double)v * t.rows_[j].scale;
+                }
+                if (e.violated_hard_rows < best_bad || (e.violated_hard_rows == best_bad &&
+                    (amount < best_amount - 1e-8 ||
+                     (abs(amount - best_amount) <= 1e-8 && e.objective > best_objective)))) {
+                    best_bad = e.violated_hard_rows; best_amount = amount; best_objective = e.objective;
+                }
+            }
+            set<int> hard_rows;
+            for (int v : vars) for (int c = t.col_begin_[v]; c < t.col_begin_[v + 1]; ++c)
+                if (t.rows_[t.column_row_[c]].kind == PboRowKind::Hard) hard_rows.insert(t.column_row_[c]);
+            require(t.exact_block<true>(vars, 100000));
+            if (hard_rows.size() <= vars.size() * 2 || best_bad == 0) {
+                require(t.best_.evaluation.violated_hard_rows == best_bad);
+                require(abs(t.best_violation_ - best_amount) < 1e-7);
+                require(t.best_.evaluation.objective == best_objective);
+            }
+            require(t.x_ == original); verify_state(t, model);
+        }
+        // 全自由変数の厳密探索には部分修復を適用せず、簡単な矛盾を即座に枝刈りする
+        PboProblem impossible; impossible.profit.assign(18, 1);
+        impossible.add_eq({{0, 2}}, 1);
+        PboSolver exact(impossible);
+        auto result = exact.solve(deterministic());
+        require(!result.evaluation.feasible() && result.iterations <= 3);
+    }
+
     static void run() {
+        partial_repair_tests();
         ownership_tests(); bound_and_column_tests(); time_budget_tests(); feasible_prefix_test(); timeout_regressions(); compound_tests(); metamorphic_tests(); mixed_update_tests();
         numeric_and_repair_tests(); api_tests(); exact_tests(); state_tests(); subset_tests(); search_tests();
         cout << "PboSolver tests passed: " << checks << " checks\n";
@@ -1288,3 +1426,4 @@ struct PboSolverTest {
 };
 int main() { PboSolverTest::run(); }
 #endif
+

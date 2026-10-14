@@ -1,6 +1,6 @@
 # 一般化割当ソルバー 利用ガイド
 
-対象は `generalized_assignment_solver_v12.hpp` に定義された `generalized_assignment_solver` です。GNU C++20で利用する、1ヘッダー完結のライブラリです。
+対象は `generalized_assignment_solver_v13.hpp` に定義された `generalized_assignment_solver` です。GNU C++20で利用する、1ヘッダー完結のライブラリです。
 
 用途を判断したい場合は1～4章、実際に呼び出したい場合は5～8章、内部の仕組みを理解したい場合は9章を読んでください。ユースケース番号U01～U13は4章・6章・8章で共通です。
 
@@ -18,15 +18,15 @@
 
 ### 1.2 目的関数と制約
 
-各仕事が選ぶ候補を $x_i$ と書くと、最小化する値は次です。
+各仕事が選ぶ候補を $x_ {i}$ と書くと、最小化する値は次です。
 
-$$z(x)=\sum_{i=0}^{N-1} c_{x_i}$$
+$$z(x)=\sum_ {i=0}^{N-1} c_ {x_ {i}}$$
 
 選択と容量に関する条件は次です。
 
-$$x_i\in O_i\quad(0\le i<N)$$
+$$x_ {i}\in O_ {i}\quad(0\le i<N)$$
 
-$$L_a(x)=\sum_{i:a_{x_i}=a} d_{x_i}\le C_a\quad(0\le a<A)$$
+$$L_ {a}(x)=\sum_ {i:a_ {x_ {i}}=a} d_ {x_ {i}}\le C_ {a}\quad(0\le a<A)$$
 
 | 記号 | 意味 | ライブラリとの対応 |
 | --- | --- | --- |
@@ -34,15 +34,15 @@ $$L_a(x)=\sum_{i:a_{x_i}=a} d_{x_i}\le C_a\quad(0\le a<A)$$
 | $A$ | 割当先の個数 | `agents` / `agent_count()` |
 | $i$ | 仕事番号。0以上N未満 | `job` |
 | $a$ | 割当先番号。0以上A未満 | `agent` |
-| $O_i$ | 仕事iに許された候補の集合 | `add_option(i, ...)` で登録した候補 |
+| $O_ {i}$ | 仕事iに許された候補の集合 | `add_option(i, ...)` で登録した候補 |
 | $o$ | 1個の候補を表す番号 | `add_option` が返す候補ID |
-| $a_o$ | 候補oを選んだときの割当先 | 候補の `agent` |
-| $d_o$ | 候補oを選んだときに消費する容量。非負 | 候補の `demand` |
-| $c_o$ | 候補oを選んだときの費用。負値も可 | 候補の `cost` |
-| $C_a$ | 割当先aが持つ総容量。非負 | `capacities[a]` |
-| $x_i$ | 仕事iが選択する候補 | `result.option_ids[i]` |
+| $a_ {o}$ | 候補oを選んだときの割当先 | 候補の `agent` |
+| $d_ {o}$ | 候補oを選んだときに消費する容量。非負 | 候補の `demand` |
+| $c_ {o}$ | 候補oを選んだときの費用。負値も可 | 候補の `cost` |
+| $C_ {a}$ | 割当先aが持つ総容量。非負 | `capacities[a]` |
+| $x_ {i}$ | 仕事iが選択する候補 | `result.option_ids[i]` |
 | $x$ | すべての仕事の選択を並べたもの | `result.option_ids` 全体 |
-| $L_a(x)$ | 割当先aで消費される容量の合計 | `result.load_of_agent[a]` |
+| $L_ {a}(x)$ | 割当先aで消費される容量の合計 | `result.load_of_agent[a]` |
 | $z(x)$ | 選択した候補の費用の合計 | 完全解の `result.objective` |
 
 目的関数の意味は、各仕事が実際に選んだ候補の費用を1回ずつ足すことです。容量の式では、その割当先を選んだ仕事だけの需要を足します。費用と需要は別の値で、単位も同じである必要はありません。
@@ -104,7 +104,7 @@ ACLの `mcf_graph` へ辺を追加するときの費用は非負である必要�
 
 容量状態数をSとすると、次の大きさです。
 
-$$S=\prod_{a=0}^{A-1}(C_a+1)$$
+$$S=\prod_ {a=0}^{A-1}(C_ {a}+1)$$
 
 素直な実装では時間は概ね `O(E*S)`、費用だけならメモリは `O(S)` です。割当復元には追加の記録か再計算が必要です。容量や割当先数が大きくなると急増するため、小さい整数容量に限って実用的です。1つの実binと未採用候補なら、通常の0/1 knapsack DPが使える場合もあります。
 
@@ -278,7 +278,7 @@ seedの列、各試行の探索条件、全体の期限を指定します。固�
 GNU C++20を使います。ヘッダーは `bits/stdc++.h`、`std::span`、GNUの整数拡張などを使用します。ACLや添付のhash mapは、ライブラリ本体の利用には必要ありません。
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 ```
 
@@ -469,6 +469,44 @@ sessionを直接デフォルト構築することはできません。作成済�
 | `invalid_input` | ID列の長さ、可変集合、固定仕事IDなどが不正 | 入力を直す。探索時間を増やしても解消しない |
 | `fixed_part_infeasible` | 固定仕事だけで容量超過 | 固定条件・容量・可変集合を見直す |
 
+### 共通：結果をそのままデバッグ出力する
+
+`result` には `std::ostream& operator<<(std::ostream&, const result&)` があり、solver版・session版の `solve`、`improve`、`repair`、`evaluate` の戻り値をそのまま `std::cout` や `std::cerr` へ渡せます。追加のincludeや変換関数は不要です。
+
+```cpp
+#include "generalized_assignment_solver_v13.hpp"
+
+int main() {
+    using Gap = generalized_assignment_solver;
+    Gap solver(2, 2, {3, 3});
+    solver.add_option(0, 0, 2, 5);  // 仕事0は割当先0で容量2、費用5
+    solver.add_option(1, 1, 1, 7);  // 仕事1は割当先1で容量1、費用7
+
+    const auto result = solver.solve({});
+    std::cerr << result << '\n';   // constの結果を直接表示できる
+    auto session = solver.make_session();
+    std::cout << session.evaluate(result.option_ids) << '\n';
+}
+```
+
+最初の出力は次の1行です。
+
+```text
+result{feasible=true, objective=12, unassigned_count=0, total_overflow=0, iterations=0, lower_bound=12, initial_solution_used=false, repair_state=not_requested, option_ids[2]=[0, 1], agent_of_job[2]=[0, 1], load_of_agent[2]=[2, 1]}
+```
+
+全fieldと `feasible()` を名前付きで表示します。`repair_state` は `completed` などの列挙値名、真偽値は `true` / `false` で表示します。空の配列は `option_ids[0]=[]` の形です。
+
+3つの配列はそれぞれ先頭20要素まで表示し、配列名の直後の角括弧に全体の要素数を示します。例えば候補IDが0から24まで並ぶ25要素なら、次のように末尾の `...` が省略を表します。
+
+```text
+option_ids[25]=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ...]
+```
+
+元の結果の配列は変更しません。
+
+出力末尾に改行やflushは追加しないので、必要に応じて `<< '\n'` を続けます。数値は出力先の精度・基数などの設定に従い、演算子自身はそれらの設定を変更しません。表示は結果の要約であり、省略された割当の復元には元の `option_ids` を使ってください。
+
 ### 6.1 U01：候補登録から一括solve
 
 `Gap(jobs, agents, capacity)` でサイズと容量を設定し、候補を `add_option` で登録してから `solve(options)` を呼びます。8.1節の `solve_capacitated_assignment` は、この準備を関数内に含みます。
@@ -647,7 +685,7 @@ sessionのsetterには不正範囲・長さ・負容量を拒否するガード�
 ### 8.1 U01：一般的な容量付き割当
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 // jobs: 仕事数。capacity[a]: 割当先aの総容量（非負）。
@@ -679,7 +717,7 @@ Gap::result solve_capacitated_assignment(
 ### 8.2 U02：機械の負荷割当と仕事一覧の復元
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct MachineChoice {
@@ -729,7 +767,7 @@ MachinePlan solve_machine_loads(
 ### 8.3 U03：開設済み施設への顧客割当
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 // facility_capacity[a]: 開設済み施設aの容量。施設の開設判断は入力時に確定。
@@ -766,7 +804,7 @@ Gap::result solve_clients_to_facilities(
 ### 8.4 U04：任意採用・利益最大化
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct ProfitChoice {
@@ -827,7 +865,7 @@ ProfitPlan solve_optional_profit(
 ### 8.5 U05：複数実行モードの割当
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct ModeChoice {
@@ -879,7 +917,7 @@ ModePlan solve_execution_modes(
 ### 8.6 U06：外部解の検査と残容量
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct AssignmentInspection {
@@ -932,7 +970,7 @@ AssignmentInspection inspect_assignment(
 ### 8.7 U07：有効な完全初期解の改善
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 // initial_ids[j]: choices列での仕事jの選択候補番号。完全かつ容量内が必須。
@@ -970,7 +1008,7 @@ std::optional<Gap::result> improve_external_assignment(
 ### 8.8 U08：sessionを再利用した複数近傍repair
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct NeighborhoodRun {
@@ -1020,7 +1058,7 @@ NeighborhoodRun repair_neighborhoods(
 ### 8.9 U09：コスト差分を反映するターン処理
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct CostChange {
@@ -1081,7 +1119,7 @@ std::vector<Gap::result> solve_cost_turns(
 ### 8.10 U10：容量変更後の部分repair
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct CapacityTurn {
@@ -1157,7 +1195,7 @@ std::vector<Gap::result> solve_capacity_turns(
 ### 8.11 U11：代理費用と真の目的による外側探索
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct SurrogateStep {
@@ -1282,7 +1320,7 @@ SurrogatePlan solve_pair_penalties(
 ### 8.12 U12：複数seedのportfolio
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 // seeds: 試すseedの列。空ならnullopt。
@@ -1324,7 +1362,7 @@ std::optional<Gap::result> solve_seed_portfolio(
 ### 8.13 U13：構造変更時の再構築とID移し替え
 
 ```cpp
-#include "generalized_assignment_solver_v12.hpp"
+#include "generalized_assignment_solver_v13.hpp"
 using Gap = generalized_assignment_solver;
 
 struct KeyedChoice {
@@ -1440,7 +1478,7 @@ profileによるスキップ、期限による停止、完全解未発見によ�
 
 各仕事について、単独で対象agentの容量内に収まる候補の最小費用を足します。仕事同士の容量競合を無視しているので、完全解の費用はこの和以上です。
 
-$$B=\sum_i\min_{o\in O_i,\ d_o\le C_{a_o}}c_o$$
+$$B=\sum_ {i}\min_ {o\in O_ {i},\ d_ {o}\le C_ {a_ {o}}}c_ {o}$$
 
 ここでBは整数下界、他の記号は1章と同じです。該当候補がない仕事があれば、この下界による一致判定は使いません。完全解の費用とBが整数で一致した場合は、その問題ではこれ以上改善できないため停止できます。
 
@@ -1450,11 +1488,11 @@ $$B=\sum_i\min_{o\in O_i,\ d_o\le C_{a_o}}c_o$$
 
 容量制約ごとに非負の価格lambda_aを付けます。混雑している割当先で容量を使う候補ほど、見かけの費用を高くして構築を誘導します。
 
-$$s_o=c_o+\lambda_{a_o}d_o$$
+$$s_ {o}=c_ {o}+\lambda_ {a_ {o}}d_ {o}$$
 
 lambda_aは割当先aの容量価格、s_oは候補oの価格込み費用です。容量制約を外し、仕事ごとに最小のs_oを選んだときの緩和値は次です。
 
-$$B(\lambda)=\sum_i\min_{o\in O_i}(c_o+\lambda_{a_o}d_o)-\sum_a\lambda_a C_a$$
+$$B(\lambda)=\sum_ {i}\min_ {o\in O_ {i}}(c_ {o}+\lambda_ {a_ {o}}d_ {o})-\sum_ {a}\lambda_ {a} C_ {a}$$
 
 容量内の解なら価格付き需要和から価格付き容量を引いた値は0以下なので、この値は真の最適費用の下界になります。実装は独立に選んだ候補の負荷を集計し、容量超過方向なら価格を上げ、余る方向なら下げ、0未満へは下げません。
 
@@ -1466,15 +1504,15 @@ $$B(\lambda)=\sum_i\min_{o\in O_i}(c_o+\lambda_{a_o}d_o)-\sum_a\lambda_a C_a$$
 
 仕事iの候補数をk_i、候補の最大需要比をr_i、価格込み最良・第2候補の差をq_iとすると、基本の難易度は次です。
 
-$$r_i=\max_{o\in O_i} d_o/\max(1,C_{a_o})$$
+$$r_ {i}=\max_ {o\in O_ {i}} d_ {o}/\max(1,C_ {a_ {o}})$$
 
-$$h_i=3/\max(1,k_i)+2r_i+q_i/(R+1)$$
+$$h_ {i}=3/\max(1,k_ {i})+2r_ {i}+q_ {i}/(R+1)$$
 
 候補がない仕事ではr_iを0とします。第2候補がない場合のq_iは4Rを使います。複数startでは難易度へ小さい乱数を加えて順序を変えます。基礎の難易度は同じsolve内で再利用します。
 
 仕事を割り当てる候補の評価は、元費用、容量価格、割当後の余裕の少なさを足したものです。割当後残容量をu_oとすると、容量圧力項は次です。
 
-$$p_o=0.12R\,d_o/(u_o+D_{bar})$$
+$$p_ {o}=0.12R d_ {o}/(u_ {o}+D_ {bar})$$
 
 実行可能な候補だけを比較します。決定的な初回構築では最良1個を保持し、ランダム化構築では上位3個を保持して、少量の乱数で第2・第3候補を選ぶこともあります。乱数を値として使わない区間では、状態だけを必要回数進める処理があります。
 
@@ -1533,11 +1571,11 @@ watcherにはversionを付け、候補が変わった後に残る古い監視記
 
 現在解に対する費用差をdelta、今回取り出した仕事数をk、反復番号をt、`alns_temperature` をtauとすると、温度は次です。
 
-$$T_t=R\sqrt{k}\left(\tau/(1+0.0005t)+0.002\right)$$
+$$T_ {t}=R\sqrt{k}\left(\tau/(1+0.0005t)+0.002\right)$$
 
 費用が下がるか同じなら受理し、悪化する場合も次の確率で受理します。
 
-$$P=\exp(-\mathrm{delta}/T_t)$$
+$$P=\exp(-\mathrm{delta}/T_ {t})$$
 
 deltaは再構築後費用から直前費用を引いた値です。受理しない場合は元の仕事割当へ戻します。現在解が悪化を受理しても、最良解は別に保持し、最良費用を下げたときだけ更新します。周期的なrelocateも現在解へ適用し、その結果が最良なら保存します。
 

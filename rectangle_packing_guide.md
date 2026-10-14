@@ -1,6 +1,6 @@
 # rectangle_packing ユーザーガイド
 
-対象ソースは`rectangle_packing_v09.hpp`。C++20の公開インターフェースを使って、整数座標上に直交矩形を配置するためのガイドである。
+対象ソースは`rectangle_packing_v11.hpp`。C++20の公開インターフェースを使って、整数座標上に直交矩形を配置するためのガイドである。
 
 この文書は次の順に読むと、問題の選択から実装までを追いやすい。
 
@@ -40,40 +40,40 @@
 |---|---|
 | $N$ | 入力矩形の個数 |
 | $i,j$ | 矩形の番号 |
-| $w_i,h_i$ | 矩形$i$の入力時の幅・高さ |
-| $p_i$ | 矩形$i$を配置したときのprofit。固定ビンで使う価値 |
-| $q_i$ | 必須矩形なら1、任意矩形なら0 |
-| $z_i$ | 結果で配置済みなら1、未配置なら0 |
-| $a_i,b_i$ | 配置時の幅・高さ。通常は$(w_i,h_i)$、回転時は$(h_i,w_i)$ |
-| $x_i,y_i$ | 配置済み矩形$i$の左上座標 |
-| $k_i$ | 配置済み矩形$i$の0始まりのビン番号 |
+| $w_ {i},h_ {i}$ | 矩形$i$の入力時の幅・高さ |
+| $p_ {i}$ | 矩形$i$を配置したときのprofit。固定ビンで使う価値 |
+| $q_ {i}$ | 必須矩形なら1、任意矩形なら0 |
+| $z_ {i}$ | 結果で配置済みなら1、未配置なら0 |
+| $a_ {i},b_ {i}$ | 配置時の幅・高さ。通常は$(w_ {i},h_ {i})$、回転時は$(h_ {i},w_ {i})$ |
+| $x_ {i},y_ {i}$ | 配置済み矩形$i$の左上座標 |
+| $k_ {i}$ | 配置済み矩形$i$の0始まりのビン番号 |
 | $W,H$ | 利用者が指定する固定ビンの幅・高さ。stripでは$W$だけを固定する |
 | $U,V$ | 結果の使用幅・使用高さ。配置済み矩形の最大右端・最大下端 |
 | $M$ | 未配置の必須矩形数 |
 | $P$ | 配置済み矩形のprofit合計 |
 | $A$ | 配置済み矩形の面積合計 |
 | $B$ | 使用ビン番号の最大値に1を足した数。通常の連番出力では使用ビン数 |
-| $A_{\mathrm{last}}$ | 番号$B-1$の末尾ビンへ配置された矩形の面積合計 |
+| $A_ {\mathrm{last}}$ | 番号$B-1$の末尾ビンへ配置された矩形の面積合計 |
 | $\alpha,\beta$ | 外接矩形で幅・高さにかける正の重み |
 | $f(U,V)$ | 外接矩形の目的値。面積、半周長、重み付き和のいずれか |
 
-配置済み矩形がなければ$U,V,B,A_{\mathrm{last}}$はすべて0とする。各集計値は次の意味を持つ。
+配置済み矩形がなければ$U,V,B,A_ {\mathrm{last}}$はすべて0とする。各集計値は次の意味を持つ。
 
-$$M=\sum_{i=0}^{N-1}q_i(1-z_i),\quad P=\sum_{i=0}^{N-1}p_i z_i,\quad A=\sum_{i=0}^{N-1}w_i h_i z_i.$$
+$$M=\sum_ {i=0}^{N-1}q_ {i}(1-z_ {i}),\quad P=\sum_ {i=0}^{N-1}p_ {i} z_ {i},\quad A=\sum_ {i=0}^{N-1}w_ {i} h_ {i} z_ {i}.$$
 
-配置済みの$i$について右端は$x_i+a_i$、下端は$y_i+b_i$である。$U$と$V$はそれぞれの最大値。複数ビンでも座標は各ビン内の座標なので、$UV$は全ビンを横につないだ面積ではない。
+配置済みの$i$について右端は$x_ {i}+a_ {i}$、下端は$y_ {i}+b_ {i}$である。$U$と$V$はそれぞれの最大値。複数ビンでも座標は各ビン内の座標なので、$UV$は全ビンを横につないだ面積ではない。
 
 同じビンに配置された異なる2矩形$i,j$は、次のいずれかを満たす。つまり「左・右・上・下のどちらかに完全に分離している」という条件である。
 
-$$x_i+a_i\le x_j\quad\mathrm{or}\quad x_j+a_j\le x_i\quad\mathrm{or}\quad y_i+b_i\le y_j\quad\mathrm{or}\quad y_j+b_j\le y_i.$$
+$$x_ {i}+a_ {i}\le x_ {j}\quad\mathrm{or}\quad x_ {j}+a_ {j}\le x_ {i}\quad\mathrm{or}\quad y_ {i}+b_ {i}\le y_ {j}\quad\mathrm{or}\quad y_ {j}+b_ {j}\le y_ {i}.$$
 
 ### 1.3 固定ビン：必須矩形と価値の高い任意矩形を置く
 
-$W,H$を両方固定する。配置済みの各矩形について、$x_i+a_i\le W$、$y_i+b_i\le H$が必要になる。
+$W,H$を両方固定する。配置済みの各矩形について、$x_ {i}+a_ {i}\le W$、$y_ {i}+b_ {i}\le H$が必要になる。
 
 必須矩形はなるべくすべて置き、任意矩形は価値を見て選ぶ。ライブラリが結果を比較する順序は次の辞書式最小化である。
 
-$$\min_{\mathrm{lex}}(M,-P,-A,UV,V,U).$$
+$$\min_ {\mathrm{lex}}(M,-P,-A,UV,V,U).$$
 
 辞書式とは、左から比べ、最初に違った項だけで優劣を決めること。profitがいくら増えても、必須矩形の欠落が1個増える解は採用しない。$M$が同じなら$P$が大きい方、その次は$A$が大きい方、その後は小さな外接枠を優先する。
 
@@ -85,7 +85,7 @@ $M=0$は必須矩形を置けたという意味であり、任意矩形まで全
 
 幅$W$のロール材に部品を並べる場面を考える。横には$W$の上限があり、縦には必要に応じて伸ばせる。対象は全矩形を置く問題なので、全入力を必須にして使う。
 
-$$\min_{\mathrm{lex}}(M,V,U).$$
+$$\min_ {\mathrm{lex}}(M,V,U).$$
 
 全配置できた解では$M=0$なので、使用高さ$V$が主目的になる。高さが同じなら使用幅$U$で比較する。返る$U$は実際に使った幅であり、指定幅$W$より小さいこともある。profitを最大化する問題ではない。
 
@@ -93,7 +93,7 @@ $$\min_{\mathrm{lex}}(M,V,U).$$
 
 すべてのビンが同じ$W,H$を持ち、必要な数だけ使える。全矩形を必須にし、配置するビンとビン内の座標を求める。
 
-$$\min_{\mathrm{lex}}(M,B,A_{\mathrm{last}}).$$
+$$\min_ {\mathrm{lex}}(M,B,A_ {\mathrm{last}}).$$
 
 主目的は全配置したうえで$B$を減らすこと。同じ$B$なら末尾ビンの中身を少なくする。これは全ビンの空き面積を個別に最小化する目的ではなく、各ビンの利用率を均等にする目的でもない。
 
@@ -103,7 +103,7 @@ $$\min_{\mathrm{lex}}(M,B,A_{\mathrm{last}}).$$
 
 ビン寸法を先に指定せず、全矩形を囲む枠の幅$U$と高さ$V$も求める。全入力を必須にする。
 
-$$\min_{\mathrm{lex}}(M,f(U,V),UV,V,U).$$
+$$\min_ {\mathrm{lex}}(M,f(U,V),UV,V,U).$$
 
 | 目的の種類 | $f(U,V)$ | 意味 |
 |---|---|---|
@@ -146,7 +146,7 @@ $$\min_{\mathrm{lex}}(M,f(U,V),UV,V,U).$$
 
 ### 2.3 相対的な位置関係まで固定すると差分制約になる
 
-たとえば「矩形$i$は矩形$j$の左」と決めると、横座標に$x_j\ge x_i+a_i$という制約が付く。「上」と決めれば縦座標に同様の制約が付く。
+たとえば「矩形$i$は矩形$j$の左」と決めると、横座標に$x_ {j}\ge x_ {i}+a_ {i}$という制約が付く。「上」と決めれば縦座標に同様の制約が付く。
 
 すべての重なりを防ぐ関係が固定され、各矩形の向きも固定されているなら、横と縦をそれぞれ有向グラフにする。辺は「この矩形より先に置く」という制約で、重みは幅または高さ。座標0を起点として最長距離を求めると、各下限制約を満たす最小の座標になる。正の寸法を足しながら一周する閉路があれば矛盾である。
 
@@ -330,7 +330,7 @@ CP-SATの`FEASIBLE`は「解は見つかったが最適性は未確定」、`OPT
 
 ### 5.1 導入と呼出の形
 
-通常の利用で必要なのは`rectangle_packing_v09.hpp`だけ。同じディレクトリに置き、`#include "rectangle_packing_v09.hpp"`で読み込む。ACLと添付の`hash_map.hpp`には依存しない。
+通常の利用で必要なのは`rectangle_packing_v11.hpp`だけ。同じディレクトリに置き、`#include "rectangle_packing_v11.hpp"`で読み込む。ACLと添付の`hash_map.hpp`には依存しない。
 
 C++20、GCC系の環境を想定し、`std::span`、`bits/stdc++.h`、`__int128_t`、GNU属性を使う。GCC 13.3でコード例を検証している。標準C++のヘッダーだけで構成された完全な処理系独立ライブラリではない。
 
@@ -428,7 +428,7 @@ U02では必須矩形のprofitを0、任意矩形のprofitを指定値にする�
 次は1枚の固定ビンへ全矩形を置く例である。必須の準備と、結果の確認を省略していない。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 rectangle_pack_result make_fixed_bin_example() {
     // 100×80の領域へ置く。寸法の単位は全体で統一する。
@@ -452,6 +452,44 @@ rectangle_pack_result make_fixed_bin_example() {
 ```
 
 U02では入力にprofitと必須フラグを加える。U05では枠寸法の代わりにobjectiveを作る。U08〜U10、U12、U14では、呼出前に初期配置の準備・集計・検査が必要になる。
+
+### 5.7 結果をそのままデバッグ出力する
+
+`rectangle_pack_result`には`std::ostream& operator<<(std::ostream&, const rectangle_pack_result&)`がある。固定ビン・strip・複数ビン・外接矩形の新規配置、improve、repair、repackの結果は、すべて`std::cout << result`や`std::cerr << result`で表示できる。
+
+```cpp
+#include "rectangle_packing_v11.hpp"
+
+void print_rectangle_packing_debug_example() {
+    // 幅4・高さ4のビンへ配置する。2個目は大きすぎるため未配置となる。
+    const std::vector<rectangle_pack_item> items{
+        {3, 2, 7, false, true},
+        {8, 8, 5, false, true}
+    };
+    rectangle_pack_options options;
+    options.restart_limit = 0;
+    const auto result = pack_rectangles_fixed_bin(items, 4, 4, options);
+
+    // 集計と各入力IDの配置を出力する。末尾の改行は呼出側で付ける。
+    std::cerr << result << '\n';
+}
+```
+
+出力例は次のとおり。
+
+```text
+rectangle_pack_result{feasible=false, placed_count=1, missing_required_count=1, bin_count=1, used_width=3, used_height=2, placed_profit=7, placed_area=6, placements(2)=[
+  [0] {bin=0, x=0, y=0, width=3, height=2, rotated=false}
+  [1] unplaced
+]}
+```
+
+- 先頭に集計値、続いて`placements(全要素数)`と配置を表示する。`[i]`は入力矩形のIDである。
+- 配置は未配置も含めた入力順の先頭20要素まで。たとえば25要素なら末尾に`... (5 more)`と表示する。元の配列を短くする処理ではない。
+- 配置済みなら所属ビン・座標・回転後の寸法・回転フラグを表示する。未配置なら`unplaced`とし、残っている古い座標・寸法を表示しない。
+- `feasible`と`rotated`は`true`または`false`で表示する。数値はストリームの書式設定に従う。出力処理は書式設定を変更せず、末尾の改行や明示的なflushも行わない。
+- 集計値は保持している値を表示し、再計算や妥当性検査は行わない。自作配置を編集した場合の再集計・検査は6.12節を参照する。
+- 返り値は渡したストリームへの参照なので、`std::cerr << result << '\n';`のように連結できる。表示対象の走査は`O(min(N, 20))`、追加領域は`O(1)`。呼び出さなければ出力処理は実行されない。
 
 ## 6. ユースケースごとの使い方
 
@@ -547,9 +585,9 @@ Scoreは比較可能な値を返す純粋な関数として用意する。欠落
 
 各寸法を幅・高さともgapだけ拡張し、枠は外周余白を引いてからgapを加える。呼出は拡張入力に対する固定ビンpackingである。
 
-$$w'_i=w_i+g,\quad h'_i=h_i+g,\quad W'=W-2m+g,\quad H'=H-2m+g.$$
+$$w'_ {i}=w_ {i}+g,\quad h'_ {i}=h_ {i}+g,\quad W'=W-2m+g,\quad H'=H-2m+g.$$
 
-$w'_i,h'_i$は探索用の拡張寸法、$W',H'$は探索用の枠、$g$は`gap`、$m$は`border`である。$W-2m,H-2m$はともに正が必要。成功したら左上座標へborderを足し、配置幅・高さからgapを引く。等量拡張なので90度回転にも対応する。
+$w'_ {i},h'_ {i}$は探索用の拡張寸法、$W',H'$は探索用の枠、$g$は`gap`、$m$は`border`である。$W-2m,H-2m$はともに正が必要。成功したら左上座標へborderを足し、配置幅・高さからgapを引く。等量拡張なので90度回転にも対応する。
 
 こうすると拡張矩形の非重複が元矩形間のgapを保証し、探索枠に加えた末尾のgapを取り除くことで外周に余分なgapを要求しない。最後に元入力で集計を再計算する。通常validatorはgapやborder自体を検査しないため、独自条件の検査も別に行う。
 
@@ -602,11 +640,11 @@ $w'_i,h'_i$は探索用の拡張寸法、$W',H'$は探索用の枠、$g$は`gap`
 ### 7.1 入力と整数演算
 
 - 各寸法とsolverへ渡す枠寸法は正。矩形数・可動IDはintで表せる範囲にする。
-- 座標・寸法・profitの合計、各面積、比較用の幅×高さ、重み付き和は`long long`に収める。
+- 座標・寸法・各面積・面積合計・比較用の幅×高さ・重み付き和は`long long`に収める。配置済みprofitの最終合計も`long long`の範囲が必要である。
 - strip・外接では内部の高さ上限として各矩形の幅+高さの合計を使う。その合計だけでなく、探索幅との積も範囲内にする。
-- 面積下界の切上げに使う面積合計+幅−1、外接幅の割合計算、丸め前の幅候補も安全な範囲にする。計算後に上限へ丸める処理があっても、計算途中のoverflowを防ぐとは限らない。
-- 固定ビン比較ではprofit合計を符号反転するので、`LLONG_MIN`を取らせない。負の任意profitは新規の配置候補から外れるが、固定された既存配置や保護された初期解の中身まで自動で削除するものではない。
-- validatorも集計を計算してから幾何を検査する。極端な不正数値を安全に受け入れる入力サニタイザーではない。
+- 面積下界の切上げは商と余りで計算する。ただし探索中の面積・幅高さの和や積まで任意精度になるわけではない。最終解の寸法だけでなく、内部の探索範囲でも演算結果を`long long`に収める。
+- profitの比較では符号反転を行わず、合計は128bit整数で計算してから`long long`へ格納する。最終合計が範囲内なら、`LLONG_MIN`や途中で64bitを超える正負の相殺も扱える。ただし探索中に評価する各候補の最終合計も範囲内でなければならない。負の任意profitは新規の配置候補から外れるが、固定された既存配置や保護された初期解の中身まで自動で削除するものではない。
+- validatorは入力寸法、配置寸法・座標、端点や面積の演算範囲、ビン数、profit合計を検査し、不正ならfalseを返す。これと異なり、solverや`recompute_rectangle_packing_summary`へ渡す入力の前提は呼出側で守る。
 - 多くの入力前提はassertであり、`-DNDEBUG`では無効になる。外部入力をそのまま信用してよいという意味ではない。
 
 ### 7.2 使えない組合せと、効かない設定
@@ -636,7 +674,7 @@ $w'_i,h'_i$は探索用の拡張寸法、$W',H'$は探索用の枠、$g$は`gap`
 
 validatorは単一ビンのbin0制約、最大ビン数、ビン番号の欠番、障害物IDが固定か、可動集合外が不変か、gap・border、目的値の最適性を検査しない。必要なものは外側で検査する。
 
-未配置の判定は`bin < 0`である。`bin == -1`だけと解釈しない。未配置要素の古い寸法・座標は通常の配置検査対象ではないが、利用側が誤用しないよう初期化しておくとよい。
+未配置の判定は`bin < 0`である。`bin == -1`だけと解釈しない。未配置要素の古い配置寸法・座標は通常の配置検査対象ではないが、入力側の`items[i].width`と`items[i].height`は未配置でも正である必要がある。利用側が誤用しないよう、未配置の配置情報は初期化しておくとよい。
 
 ### 7.5 時間と再現性
 
@@ -666,14 +704,14 @@ validatorは単一ビンのbin0制約、最大ビン数、ビン番号の欠番�
 
 `std::optional`を返す例では、まず`if (!answer)`で候補が得られたかを確認する。nulloptは最適性・不可能性の証明ではない。resultを直接返す例では、未配置requiredを含む中間解もあり得る。初期解の不正やID不正を例外で返すものは、各例の説明に従う。
 
-コードをまとめた実行可能なファイルは[rectangle_packing_examples_v09.cpp](rectangle_packing_examples_v09.cpp)。末尾のmainには代表例と境界ケースの検査を含む。実際の提出では必要な関数だけをコピーしてよい。
+コードをまとめた実行可能なファイルは[rectangle_packing_examples_v11.cpp](rectangle_packing_examples_v11.cpp)。末尾のmainには代表例と境界ケースの検査を含む。実際の提出では必要な関数だけをコピーしてよい。
 
 ### 8.1 U01：固定ビンの全配置
 
 piecesの要素は幅、高さ、回転可否。全要素を必須に変換する。例として`solve_fixed_bin_all({{3, 2, false}, {2, 2, true}}, 8, 6)`を呼べる。戻り値があれば、入力順のplacementsを使う。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct fixed_bin_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -725,7 +763,7 @@ std::optional<rectangle_pack_result> solve_fixed_bin_all(
 piecesの要素は幅、高さ、profit、回転可否、必須かどうか。必須profitはこのwrapper内で0にする。`selected_optional_ids`は入力側の0始まりの番号。必須を置けなければnullopt。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct profitable_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -792,7 +830,7 @@ std::optional<profitable_fixed_bin_answer> solve_profitable_fixed_bin(
 piecesの要素は幅、高さ、回転可否。`strip_width`だけを固定し、使用高さを`used_height`から読む。各矩形に、その幅へ入る向きがあるかも確認する。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct strip_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -842,7 +880,7 @@ std::optional<rectangle_pack_result> solve_strip_height(
 全ビン共通の幅・高さを指定する。`item_ids_by_bin[b]`はビンbに入った入力ID一覧。1個でもビンに入らない場合はnullopt。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct multiple_bin_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -909,7 +947,7 @@ std::optional<multiple_bin_answer> solve_identical_bins(
 目的を省略すると面積。周長なら`rectangle_bounding_objective{rectangle_bounding_objective_type::perimeter, 1, 1}`、幅を3倍で評価するなら`rectangle_bounding_objective{rectangle_bounding_objective_type::weighted_sum, 3, 1}`を第2引数へ渡す。`objective_value`と配置を返す。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct bounding_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -968,7 +1006,7 @@ std::optional<bounding_box_answer> solve_free_bounding_box(
 candidatesは幅・高さの組の配列。たとえば`{{256, 256}, {512, 256}, {512, 512}}`。`candidate_index`はこの配列の番号であり、入力順をソートし直さず保持する。成功した候補だけを外枠の基準で比較する。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct allowed_canvas_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -1041,7 +1079,7 @@ std::optional<allowed_canvas_answer> solve_best_allowed_canvas(
 たとえば`std::array<std::uint64_t, 3> seeds{1, 2, 3};`を準備する。空seed一覧はnullopt。返るのは指定した試行全体の最良解であり、初期配置の座標固定ではない。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct multiseed_strip_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -1097,7 +1135,7 @@ std::optional<rectangle_pack_result> solve_strip_with_multiple_seeds(
 itemsとcurrentは同じ入力ID順にする。movable_item_idsには、置きたい未配置矩形と動かしてよい配置済み矩形の両方を入れる。前提違反は例外、正常時は中間解を含むresultを返すので、必要ならfeasible()も確認する。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 // 入力: 固定ビンの現在解と、今回だけ動かしてよい矩形ID
 // 出力: 固定ビン比較でcurrentより悪化しない配置
@@ -1154,7 +1192,7 @@ rectangle_pack_result repair_fixed_bin_neighborhood(
 scoreは小さい方を良しとする評価関数。例えば`[](const rectangle_pack_result& r) { return std::pair{r.missing_required_count, r.used_width * r.used_height}; }`。必須欠落を許さないなら、例のように欠落を第1キーへ入れる。採択時だけcurrentを書き換える。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 // scoreは小さい値ほど良い。未配置を許さない場合は欠落数を第1キーにする。
 // 戻り値がtrueならcurrentを候補で置き換えた。falseならcurrentは不変。
@@ -1218,7 +1256,7 @@ bool try_repack_fixed_bin_by_external_score(
 obstaclesの要素はx、y、幅、高さ。返るplacementsの先頭は障害物、その後がpieces。既存領域を動かさない用途なので、全体improveへそのまま渡して障害物まで動かさないよう注意する。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct obstacle_rectangle {
     long long x; // 左上の横座標。ビン左端からの距離
@@ -1305,7 +1343,7 @@ std::optional<rectangle_pack_result> solve_fixed_bin_with_obstacles(
 gapは矩形間の共通間隔、borderは外周の共通余白。元の寸法に戻した結果を返す。返ったplacementsのwidthとheightをさらにgapだけ縮めてはいけない。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 struct spaced_piece {
     long long width; // 横方向の寸法。正の整数で、他の寸法と同じ単位
@@ -1381,7 +1419,7 @@ std::optional<rectangle_pack_result> solve_fixed_bin_with_spacing(
 external_placementsの要素はx、y、配置幅、配置高さ、bin、rotatedの順。入力寸法ではなく回転後の寸法を入れる。このwrapperは必須配置済みの外部解を受け入れる。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 // 入力: itemsと、同じindex順の外部placements
 // 出力: 外部解を保持した固定ビン再探索結果。不正入力ならnullopt
@@ -1431,7 +1469,7 @@ std::optional<rectangle_pack_result> improve_external_fixed_bin_layout(
 入力itemsは全要素required=trueにする。deadlineは外側で安全時間を差し引いた絶対時刻。同じdeadlineを複数の部分問題へ渡す。例の大きい予算は無限ループを意味せず、有限の上限である。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 // 入力:
 // items: 全矩形をrequired=trueにし、寸法・回転許可を設定する。
@@ -1481,7 +1519,7 @@ rectangle_pack_result solve_multiple_bins_before_deadline(
 new_to_oldはnew_itemsと同じ個数。-1が新規、0以上が以前のplacementsの番号。対応表にない以前の矩形は削除扱い。extra_movableは「新しい番号」で指定する。前の幾何配置が有効であることと、整数演算が安全であることは入力契約である。
 
 ```cpp
-#include "rectangle_packing_v09.hpp"
+#include "rectangle_packing_v11.hpp"
 
 // 入力:
 // new_items: 次ターンの矩形配列。寸法、profit、required、rotatableを更新済みにする。
@@ -1574,7 +1612,7 @@ rectangle_pack_result solve_updated_fixed_bin_turn(
 ZIPを相対配置を保って展開し、ヘッダーとコード例を同じディレクトリに置く。
 
 ```bash
-g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror rectangle_packing_examples_v09.cpp -o guide_examples
+g++ -std=c++20 -O2 -Wall -Wextra -Wshadow -Wconversion -Werror rectangle_packing_examples_v11.cpp -o guide_examples
 ./guide_examples
 python3 verify_guide.py --tag local_check
 ```
@@ -1609,13 +1647,13 @@ python3 verify_guide.py --tag local_check
 
 通常のMaxRects構築では、各空き矩形の左上へ置く候補を作る。回転を許し、正方形でない矩形は両方の向きを試す。入る候補について次のキーを小さい順に比べる。
 
-空き矩形の幅・高さを$F_w,F_h$、今回の配置幅・高さを$a,b$、左上を$x,y$とし、残りを$\Delta_w=F_w-a,\Delta_h=F_h-b$と定める。
+空き矩形の幅・高さを$F_ {w},F_ {h}$、今回の配置幅・高さを$a,b$、左上を$x,y$とし、残りを$\Delta_ {w}=F_ {w}-a,\Delta_ {h}=F_ {h}-b$と定める。
 
 | 評価則 | 比較する4つの値 | 意図 |
 |---|---|---|
-| BSSF：短辺残差 | $\min(\Delta_w,\Delta_h),\max(\Delta_w,\Delta_h),y+b,x$ | 少なくとも片方の辺をぴったり合わせる |
-| BAF：面積残差 | $F_wF_h-ab,\min(\Delta_w,\Delta_h),y+b,x$ | 候補元の空き矩形に対する余りを減らす |
-| Bottom-Left | $y+b,x,\min(\Delta_w,\Delta_h),\max(\Delta_w,\Delta_h)$ | 下端を低くし、同点なら左へ寄せる |
+| BSSF：短辺残差 | $\min(\Delta_ {w},\Delta_ {h}),\max(\Delta_ {w},\Delta_ {h}),y+b,x$ | 少なくとも片方の辺をぴったり合わせる |
+| BAF：面積残差 | $F_ {w}F_ {h}-ab,\min(\Delta_ {w},\Delta_ {h}),y+b,x$ | 候補元の空き矩形に対する余りを減らす |
+| Bottom-Left | $y+b,x,\min(\Delta_ {w},\Delta_ {h}),\max(\Delta_ {w},\Delta_ {h})$ | 下端を低くし、同点なら左へ寄せる |
 
 この4値が同じなら、候補のy、x、回転フラグの順で比較し、falseの通常向きを先にする。各評価則のキーと、最終結果を比較する1章の目的関数は別物である。
 
@@ -1715,20 +1753,20 @@ strip・外接の候補を、現在の外接枠内で右、下、左、上の順
 
 ### 9.13 集計・validator・期限管理
 
-集計はplacementsを1回走査し、配置済みの最大端、profit、面積、個数、必須欠落、最大ビン番号を数える。validatorはこの集計との一致と、同じビンに置かれた矩形対の交差を調べる。
+集計はplacementsを1回走査し、配置済みの最大端、profit、面積、個数、必須欠落、最大ビン番号を数える。profitは128bit整数で加算する。validatorは各入力と配置の演算が安全かを確認しながら独立に集計し、profit合計の範囲、同じビンに置かれた矩形対の交差、結果内の集計値との一致を調べる。
 
 期限管理では、設定された回数の停止確認ごとにsteady_clockを読む。一度期限切れと分かれば、そのcheckerでは期限切れを保持する。構築や隙間詰め等の処理単位ごとにcheckerが作られる箇所があるので、time_check_intervalを全solver横断の矩形操作カウンタだと解釈しない。
 
 ### 9.14 計算量の読み方
 
-ここで$N$は矩形数、$F$は構築中に保持する空き矩形数の最大、$K$は実際の構築試行数、$B$はビン数、$L$は固定矩形数、$M_c$は可動矩形数を表す。$M_c$は1章の必須欠落数$M$とは異なる。
+ここで$N$は矩形数、$F$は構築中に保持する空き矩形数の最大、$K$は実際の構築試行数、$B$はビン数、$L$は固定矩形数、$M_ {c}$は可動矩形数を表す。$M_ {c}$は1章の必須欠落数$M$とは異なる。
 
 | 処理 | 時間の目安 | 注意 |
 |---|---|---|
 | 通常MaxRectsの1構築 | $O(NF^2)$ | 位置探索より空き領域の包含除去が重くなり得る |
 | Contactの1構築 | 期待的には$O(NF^2)$、保守的には$O(N(F^2+NF))$ | 同じ辺座標に集中する区間数に依存する。ハッシュ処理を平均的に見た評価 |
 | 固定ビン・strip・外接の構築部分 | 保守的に$O(KN(F^2+NF))$ | 幅や目標高さの試行もKに含める |
-| 部分再配置の主処理 | 保守的に$O(LF^2+KM_c(F^2+NF))$ | Contactで調べる辺には固定矩形も含む。全入力の準備費用は別途必要 |
+| 部分再配置の主処理 | 保守的に$O(LF^2+KM_ {c}(F^2+NF))$ | Contactで調べる辺には固定矩形も含む。全入力の準備費用は別途必要 |
 | 複数ビンの構築部分 | 期待的に$O(KN(BF+F^2))$ | 全ビンの候補を調べる。辺の集中でさらに重くなり得る |
 | 複数ビンのpair-merge | 保守的に$O(B^2N(F^2+NF))$ | 内部再始動予算の定数上限を含む目安 |
 | 最終隙間詰め | $O(N^2+N\log N)$ | 方向・巡回の数は定数。追加領域は$O(N)$ |

@@ -1,6 +1,6 @@
-# constrained_steiner_tree v09 ステップバイステップガイド
+# constrained_steiner_tree v10 ステップバイステップガイド
 
-対象ヘッダー: `constrained_steiner_tree_v09.hpp`  
+対象ヘッダー: `constrained_steiner_tree_v10.hpp`  
 対象読者: C++の変数・関数・`vector`・繰り返しを知っている人。数学は高校数学までを想定する。
 
 このガイドは、最小コード1本と発展コード21本を順に読み、最後に実装の仕組みへ進む構成になっている。各C++コードは独立したプログラムであり、それ以前のコードを継ぎ足さなくても動く。入力ファイルも必要ない。
@@ -97,7 +97,7 @@ $$\min_ {F \subseteq E} \sum_ {e \in F} c_ {e}$$
 ### 動くコード — example01.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 
 int main() {
@@ -147,7 +147,7 @@ int main() {
 ### 動くコード — example02.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 
 int main() {
@@ -160,6 +160,8 @@ int main() {
     solver.add_edge(2, 3, 7);
 
     const auto answer = solver.solve({0, 2, 3});
+    std::cerr << answer << '\n';
+    std::cerr << solver.edge(first) << '\n';
     if (!answer.ok()) return 1;
     std::cout << "first=" << first << '\n';
     std::cout << "vertices=" << solver.vertex_count()
@@ -192,6 +194,31 @@ vertices=4 edges=6
 
 `vertex_count()` は頂点数、`edge_count()` は登録辺数。どちらも引数を取らず、選ばれた頂点・辺の数を返す関数ではない。
 
+### 結果をそのままデバッグ出力する
+
+この例の `std::cerr << answer << '\n';` は、結果構造体をそのまま標準エラー出力へ渡している。ライブラリに `operator<<` が用意されているため、利用者がフィールドを1つずつ連結する必要はない。`std::cout` や `std::ostringstream` にも同じ書き方を使える。
+
+上の例では、標準出力に加えて次の2行が標準エラー出力に出る。
+
+```text
+result{state=feasible, cost=6, edges=[0, 1, 2]}
+edge{from=0, to=1, cost=2}
+```
+
+`state=feasible` は実行可能解を持つ状態、`cost` は合計費用、`edges` は辺番号の配列である。状態の一覧は発展⑧で扱う。2行目は `edge(first)` が返す辺情報であり、`from`・`to`・`cost` は先ほど説明したフィールドに対応する。
+
+辺番号は先頭20要素まで表示する。21要素以上あれば、末尾に `... (+省略数 more)` を付ける。たとえば辺番号0から24までの25要素なら、次の表示になる。
+
+```text
+result{state=feasible, cost=25, edges=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, ... (+5 more)]}
+```
+
+これは表示だけの省略であり、`answer.edges` の内容を削除・変更するものではない。空の配列は `[]`。`const` な結果や `solver.solve(...)` の戻り値を直接渡しても出力できる。各演算子は改行を付けないので、必要なら `<< '\n'` を続ける。
+
+結果の1行には、状態・費用・辺番号を表示する。探索の詳しい統計は `std::cerr << answer.stats << '\n';` で別途出力できる。統計の意味は発展⑯で説明する。
+
+失敗した結果も表示できるが、`cost` はメンバーに入っている値の表示にすぎず、成功した解の費用として読めるのは `answer.ok()` が `true` のときだけである。
+
 ## 4. 発展②：探索の設定を指定する
 
 **変更:** 同じグラフに `options` を追加する。以後の例では長い型名を `Solver` という別名で書く。
@@ -199,7 +226,7 @@ vertices=4 edges=6
 ### 動くコード — example03.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -247,7 +274,7 @@ int main() {
 ### 動くコード — example04.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -287,7 +314,7 @@ int main() {
 ### 動くコード — example05.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -330,7 +357,7 @@ $S \cap H$ は「使用していて、かつ、そのグループに入ってい
 ### 動くコード — example06.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -365,7 +392,7 @@ int main() {
 ### 動くコード — example07.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -400,7 +427,7 @@ int main() {
 ### 動くコード — example08.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -441,44 +468,35 @@ int main() {
 ### 動くコード — example09.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
-
-const char *name(Solver::status state) {
-    switch (state) {
-    case Solver::status::feasible: return "feasible";
-    case Solver::status::proven_infeasible: return "proven_infeasible";
-    case Solver::status::not_found: return "not_found";
-    case Solver::status::invalid_candidate: return "invalid_candidate";
-    case Solver::status::invalid_input: return "invalid_input";
-    }
-    return "unknown";
-}
 
 int main() {
     Solver solver(3);
     solver.add_edge(0, 1, 1);
     solver.add_edge(1, 2, 1);
     solver.add_edge(0, 2, 5);
-    std::cout << name(solver.solve({0, 2}).state) << '\n';
+    std::cout << solver.solve({0, 2}).state << '\n';
 
     Solver::selection_rules impossible(3);
     impossible.add_conflict(0, 2);
     Solver::query_context context;
     context.rules = &impossible;
-    std::cout << name(solver.solve({0, 2}, context).state) << '\n';
+    std::cout << solver.solve({0, 2}, context).state << '\n';
 
     Solver disconnected(2);
-    std::cout << name(disconnected.solve({0, 1}).state) << '\n';
-    std::cout << name(solver.solve({3}).state) << '\n';
+    std::cout << disconnected.solve({0, 1}).state << '\n';
+    std::cout << solver.solve({3}).state << '\n';
 
     Solver::selection_rules rules(3);
     rules.add_conflict(0, 1);
     context.rules = &rules;
-    std::cout << name(solver.improve({0, 2}, {0, 1}, context).state) << '\n';
+    std::cout << solver.improve({0, 2}, {0, 1}, context).state << '\n';
 }
 ```
+
+`state` 自体にも出力演算子があり、数値ではなく状態名を表示する。利用者側で名前に変換する関数を書く必要はない。
 
 出力は順に `feasible`、`proven_infeasible`、`not_found`、`invalid_input`、`invalid_candidate`。
 
@@ -503,7 +521,7 @@ int main() {
 ### 動くコード — example10.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -541,7 +559,7 @@ int main() {
 
 「グラフには別のよい経路があるから補ってほしい」というときには向かない。候補辺だけではつながらなければ失敗する。その用途は発展⑪の `repair` で扱う。
 
-`normalize` は候補内での最適Steiner treeを厳密に求める関数ではない。制約付きの場合も制限付き探索を行うため、見つけられない場合がある。v09の公開APIは `options` を受け取らず、制約分岐の上限は内部でノード32・深さ24に設定される。`solve` 用の時間設定をそのまま渡せる関数ではない点に注意する。
+`normalize` は候補内での最適Steiner treeを厳密に求める関数ではない。制約付きの場合も制限付き探索を行うため、見つけられない場合がある。v10の公開APIは `options` を受け取らず、制約分岐の上限は内部でノード32・深さ24に設定される。`solve` 用の時間設定をそのまま渡せる関数ではない点に注意する。
 
 ## 12. 発展⑩：合法な既存解を悪くせず改善する — improve
 
@@ -550,7 +568,7 @@ int main() {
 ### 動くコード — example11.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -587,7 +605,7 @@ int main() {
 ### 動くコード — example12.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -654,7 +672,7 @@ $E$ は登録した全辺、$c_ {e}$ は辺 $e$ の登録費用。$E \setminus B
 ### 動くコード — example13.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -673,6 +691,7 @@ int main() {
     const std::vector<int> base{existing};
 
     const auto answer = solver.augment({0, 3}, base, context);
+    std::cerr << answer << '\n';
     if (!answer.ok()) return 1;
     auto network = base;
     network.insert(network.end(), answer.added_edges.begin(), answer.added_edges.end());
@@ -682,7 +701,13 @@ int main() {
 }
 ```
 
-出力は `added=5 new_edges=1 total_edges=2`。
+標準出力は `added=5 new_edges=1 total_edges=2`。標準エラー出力には次の1行も出る。
+
+```text
+augmentation_result{state=feasible, added_cost=5, added_edges=[1]}
+```
+
+`augmentation_result` も `std::cerr << answer` で直接表示できる。費用・辺番号は追加分だけで、`added_edges` も先頭20要素までの表示となる。
 
 第1引数 `{0, 3}` は接続したい端子。第2引数 `base` は撤去不能な**辺番号**の集合。第3引数は制約。設定も渡す形は `augment(terminals, base_edges, opts, context)` である。
 
@@ -705,7 +730,7 @@ int main() {
 ### 動くコード — example14.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -742,7 +767,7 @@ int main() {
 ### 動くコード — example15.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <chrono>
 #include <iostream>
 using Solver = constrained_steiner_tree;
@@ -801,7 +826,7 @@ int main() {
 ### 動くコード — example16.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -845,7 +870,7 @@ int main() {
 
 これらは制約付き経路の設定であり、制約のない通常経路の探索回数を制限するものではない。また、実際の仕事量は「制約の状態数」だけでなく、各状態内の探索量にも依存する。`restart_limit` とは別の上限である。
 
-v09の自動設定は次のとおり。有限予算とは、正の `time_limit_ms` または有限の `deadline` がある場合を指す。
+v10の自動設定は次のとおり。有限予算とは、正の `time_limit_ms` または有限の `deadline` がある場合を指す。
 
 |preset|予算なしのノード/深さ|有限予算ありのノード/深さ|
 |---|---:|---:|
@@ -862,7 +887,7 @@ v09の自動設定は次のとおり。有限予算とは、正の `time_limit_m
 ### 動くコード — example17.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -876,6 +901,7 @@ int main() {
 
     const auto first = solver.solve({0, 99}, opts);
     const auto second = solver.solve({0, 49, 99}, opts);
+    std::cerr << second.stats << '\n';
     if (!first.ok() || !second.ok()) return 1;
     std::cout << first.cost << ' ' << second.cost << '\n';
     std::cout << "cache_bytes=" << second.stats.path_memory_bytes << '\n';
@@ -921,7 +947,9 @@ $$12 N K \text{ bytes}$$
 
 ### 統計で動作を確認する
 
-`answer.stats` はその呼び出しの診断情報。`augmentation_result` にも同じ `stats` がある。
+`answer.stats` はその呼び出しの診断情報で、型は `statistics`。`augmentation_result` にも同じ `stats` がある。この例の `std::cerr << second.stats << '\n';` は、次の表の全11項目を `statistics{項目名=値, ...}` の1行で表示する。項目の省略はない。`path_mode_used` は `terminal_cache` などの列挙子名で表示し、残りは数値で表示する。回数は探索状況によって変わるため、標準エラー出力は診断用として読む。
+
+モードだけを見たい場合も、`std::cerr << second.stats.path_mode_used << '\n';` と書ける。
 
 |項目|読み方|
 |---|---|
@@ -946,7 +974,7 @@ $$12 N K \text{ bytes}$$
 ### 動くコード — example18.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -1005,7 +1033,7 @@ int main() {
 ### 動くコード — example19.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -1034,7 +1062,7 @@ int main() {
 ### 動くコード — example20.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <cstdint>
 #include <iostream>
 #include <utility>
@@ -1083,7 +1111,7 @@ int main() {
 ### 動くコード — example21.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 #include <vector>
 using Solver = constrained_steiner_tree;
@@ -1147,7 +1175,7 @@ solverには元のグラフを保持しており、頂点番号を振り直し�
 ### 動くコード — example22.cpp
 
 ```cpp
-#include "constrained_steiner_tree_v09.hpp"
+#include "constrained_steiner_tree_v10.hpp"
 #include <iostream>
 using Solver = constrained_steiner_tree;
 
@@ -1218,6 +1246,10 @@ int main() {
 |`improve(terminals, initial_edges, opts, context)`|`result`|
 |`repair(terminals, partial_edges, opts, context)`|`result`|
 |`augment(terminals, base_edges, opts, context)`|`augmentation_result`|
+|`out << answer`|`result` / `augmentation_result` の状態・費用・辺番号を表示|
+|`out << answer.stats`|全11項目の統計を表示|
+|`out << solver.edge(id)`|その辺の両端と登録費用を表示|
+|`out << answer.state` / `out << answer.stats.path_mode_used`|列挙子名を表示|
 |`solve_cost(terminals, opts, context)`|費用。失敗時は `inf()`|
 |`clear_terminal_cache()`|terminal表を解放する。返り値なし|
 |`inf()`|最短路の到達不能値。`static` なので `Solver::inf()` と呼べる|
@@ -1255,7 +1287,7 @@ int main() {
 - `not_found` は、不可能という証明ではない。
 - `quality` や大きな上限は、全入力で費用がよくなる保証ではない。
 - 同じsolverを複数スレッドから同時に呼ばない。探索APIが `const` でも内部作業領域を更新する。
-- solverはコピー用のAPIを提供しない。v09では通常のコピー構築・コピー代入もできない。別個に構築するか、所有を移すならC++のmoveを使う。
+- solverはコピー用のAPIを提供しない。v10では通常のコピー構築・コピー代入もできない。別個に構築するか、所有を移すならC++のmoveを使う。
 - contextは配列やrulesを所有しない。参照元を破棄・再配置してから呼ばない。
 - 辺番号はそのsolverの登録順に属する。別の登録順で作ったsolverへ答えの辺番号をそのまま移さない。
 
@@ -1380,11 +1412,11 @@ $d(u)$ はuの担当端子からuまでの距離、$d(v)$ はvの担当端子か
 3. その接続経路を木へ追加する。
 4. 新しく加わった頂点によって、他の端子が安く接続できないか更新する。
 
-常に最安の1候補だけを選ぶ場合もあれば、安い候補の上位数個から乱数で選ぶ場合もある。この短い候補リストがRCLである。v09の再スタートではその幅を1〜4で変え、開始端子も変えて探索の偏りを減らす。内部乱数には `std::mt19937_64` を使う。
+常に最安の1候補だけを選ぶ場合もあれば、安い候補の上位数個から乱数で選ぶ場合もある。この短い候補リストがRCLである。v10の再スタートではその幅を1〜4で変え、開始端子も変えて探索の偏りを減らす。内部乱数には `std::mt19937_64` を使う。
 
 cacheを使う経路では、各未接続端子の現在の最良接続先を記録し、木へ新しく入った頂点だけを調べて更新する。cacheなしでは、新しく木へ入った頂点を費用0の出発点として、増分Dijkstraで距離を更新する。
 
-大きすぎる端子集合でこの生成を繰り返すと重いので、逐次候補生成には端子数の内部上限がある。v09ではcacheあり192、on-demand512。これはライブラリ全体の端子数制限ではなく、この工夫を使うかどうかの条件であり、他の候補生成は残る。
+大きすぎる端子集合でこの生成を繰り返すと重いので、逐次候補生成には端子数の内部上限がある。v10ではcacheあり192、on-demand512。これはライブラリ全体の端子数制限ではなく、この工夫を使うかどうかの条件であり、他の候補生成は残る。
 
 ### B.8 距離表の保存と再利用
 
@@ -1400,7 +1432,7 @@ cacheを使う経路では、各未接続端子の現在の最良接続先を記
 
 端子を昇順にしていることが、共通行の安全な移動にも役立つ。辺追加後は古い経路が最短とは限らないため、再利用できる状態を無効にする。
 
-自動選択は、fastなら基本的にon-demandを選ぶ。それ以外は、端子数、距離表のサイズ、辺数と端子数から見積もる構築負担、残り予算を見てcacheを選ぶ。v09では自動cacheの端子数上限は32で、表は設定メモリの半分以下を目安にする。これらは内部の判断定数であり、公開機能の正しさを決める条件ではない。
+自動選択は、fastなら基本的にon-demandを選ぶ。それ以外は、端子数、距離表のサイズ、辺数と端子数から見積もる構築負担、残り予算を見てcacheを選ぶ。v10では自動cacheの端子数上限は32で、表は設定メモリの半分以下を目安にする。これらは内部の判断定数であり、公開機能の正しさを決める条件ではない。
 
 ### B.9 よい候補を残し、組み合わせる — elite
 
@@ -1408,7 +1440,7 @@ cacheを使う経路では、各未接続端子の現在の最良接続先を記
 
 2候補の辺を合わせてから正規化すると、一方のよい部分と他方のよい部分を組み合わせた候補ができることがある。単に2候補の費用を足すのではない。
 
-v09ではeliteの上限はbalancedで4、qualityで8、fastでは使わない。qualityでは途中のよい候補も種として別途記憶し、それぞれを局所改善する。現在最良の候補からしか探索しないと、同じ形の周辺だけを調べ続けやすいためである。
+v10ではeliteの上限はbalancedで4、qualityで8、fastでは使わない。qualityでは途中のよい候補も種として別途記憶し、それぞれを局所改善する。現在最良の候補からしか探索しないと、同じ形の周辺だけを調べ続けやすいためである。
 
 ### B.10 局所改善①：今使っている頂点で辺を選び直す
 
@@ -1499,7 +1531,7 @@ aとbは成分の番号、uは2成分を合流させる候補頂点、vはそこ
 
 各通常engineは、相対予算と絶対deadlineの早い方を停止目標として持つ。一定の処理の区切りでその時点を超えたか確認し、追加探索を止める。
 
-制約探索では、残り時間を残りノード数に応じて割り、1状態だけで時間を使い切りにくくする。v09では除数を1〜32の範囲へ収め、各内部engineにも共通の絶対deadlineを渡す。初期候補生成や一まとまりの最短路計算などがあるため、割り当てたミリ秒数を厳密に守るプリエンプティブな実行制御ではない。
+制約探索では、残り時間を残りノード数に応じて割り、1状態だけで時間を使い切りにくくする。v10では除数を1〜32の範囲へ収め、各内部engineにも共通の絶対deadlineを渡す。初期候補生成や一まとまりの最短路計算などがあるため、割り当てたミリ秒数を厳密に守るプリエンプティブな実行制御ではない。
 
 遠いdeadlineで「予算の4分の3」を計算するときは、巨大な時間差に先に3を掛けてoverflowしないよう、商と余りに分けて計算する。
 
@@ -1544,10 +1576,10 @@ Nを頂点数、Mを登録辺数、Kを端子数、Lを入力候補辺数、Bを
 
 ## 検証と同梱物
 
-本書の22個のC++コードは、対象のv09ヘッダーに対し、GCC 13.3.0・C++20・`-O2 -Wall -Wextra -Wshadow -Wconversion -Werror` でコンパイル・実行を確認済み。時間依存の例を除き、本文の出力と照合済みである。時間依存の例は、正常終了し、説明したいずれかの出力になることを確認した。
+本書の22個のC++コードは、対象のv10ヘッダーに対し、GCC 13.3.0・C++20・`-O2 -Wall -Wextra -Wshadow -Wconversion -Werror` でコンパイル・実行を確認済み。時間依存の例を除き、本文の標準出力と照合済みである。example02・example13ではデバッグ出力も照合し、example17では統計の11項目を確認した。時間依存の例は、正常終了し、説明したいずれかの出力になることを確認した。
 
 数式45箇所は、数式拡張なしのGFM Markdown前処理を通しても、LaTeX部分が変化しないことを確認した。表示数式7箇所はそれぞれ1行に置き、HTMLタグやHTMLアンカーは使用していない。すべてのMarkdownビューアーでの表示を保証するものではない。
 
 同梱の例集では、各例を `example01.cpp` から `example22.cpp` として個別に収録する。ヘッダー、検証スクリプト、実行結果も付属する。コードはライブラリの内部や過去の会話を参照せず、このMarkdownとヘッダーだけでも理解・実行できる構成である。
 
-参照したソースのSHA-256: `583d27cc503981a46908069f7e501f57ce531bebdf41126ba4b2301689f08c9c`。
+参照したソースのSHA-256: `1d1d7d4f29f0d62454924730b7bf6c6d87e41a5881bcc3ae6c99f2fd120d9f5c`。

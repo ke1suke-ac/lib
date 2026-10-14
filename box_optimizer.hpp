@@ -34,6 +34,31 @@ struct BoxResult {
     // 評価済み解が存在するか返す O(1)
     bool has_value() const { return std::isfinite(cost); }
 };
+// デバッグ用に1行で表示する。xは先頭20要素まで、改行は呼び出し側で指定
+inline std::ostream& operator<<(std::ostream& os, const BoxResult& result) {
+    const char* stop = "Unknown";
+    switch (result.stop) {
+        case BoxResult::Stop::TargetReached: stop = "TargetReached"; break;
+        case BoxResult::Stop::TimeLimit: stop = "TimeLimit"; break;
+        case BoxResult::Stop::EvaluationLimit: stop = "EvaluationLimit"; break;
+        case BoxResult::Stop::LocalStop: stop = "LocalStop"; break;
+        case BoxResult::Stop::AllFixed: stop = "AllFixed"; break;
+    }
+    os << "BoxResult{cost=";
+    if (result.has_value()) os << result.cost;
+    else os << "none";
+    os << ", stop=" << stop << ", evaluations=" << result.evaluations
+       << ", gradient_evaluations=" << result.gradient_evaluations
+       << ", total_evaluations=" << result.total_evaluations
+       << ", elapsed_us=" << result.elapsed_us << ", x=[";
+    const size_t shown = std::min<size_t>(result.x.size(), 20);
+    for (size_t i = 0; i < shown; ++i) {
+        if (i) os << ", ";
+        os << result.x[i];
+    }
+    if (shown < result.x.size()) os << ", ... (" << result.x.size() << " total)";
+    return os << "]}";
+}
 class BoxOptimizer {
 #if __INCLUDE_LEVEL__ == 0
     friend struct BoxOptimizerTest;

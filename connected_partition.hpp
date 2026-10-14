@@ -100,13 +100,48 @@ public:
     struct NeighborhoodStats {
         // feasible は合法と確認した候補数。目的値で早期棄却した未検査候補は数えない。
         int64_t proposed = 0, feasible = 0, accepted = 0, improved = 0, elapsed_ns = 0;
+        friend std::ostream& operator<<(std::ostream& os, const NeighborhoodStats& s) {
+            return os << "{proposed=" << s.proposed << ", feasible=" << s.feasible
+                      << ", accepted=" << s.accepted << ", improved=" << s.improved
+                      << ", elapsed_ns=" << s.elapsed_ns << '}';
+        }
     };
     struct Statistics {
         int64_t steps = 0, construction_attempts = 0, elapsed_us = 0;
         std::array<NeighborhoodStats, NeighborhoodCount> neighborhood{};
+        friend std::ostream& operator<<(std::ostream& os, const Statistics& s) {
+            os << "Statistics{steps=" << s.steps << ", construction_attempts=" << s.construction_attempts
+               << ", elapsed_us=" << s.elapsed_us << ", neighborhood={";
+            // 配列は固定の5近傍だけ。問題サイズによらず出力量を抑える。
+            constexpr const char* names[] = {"Move", "Swap", "Block", "Relabel", "Recombine"};
+            for (int i = 0; i < NeighborhoodCount; ++i) os << "\n  " << names[i] << ": " << s.neighborhood[i];
+            return os << "\n}}";
+        }
     };
-    struct Evaluation { bool feasible = false; std::optional<Cost> cost; };
-    struct Result { std::optional<Cost> best_cost; StopReason reason; Statistics statistics; };
+    struct Evaluation {
+        bool feasible = false;
+        std::optional<Cost> cost;
+        friend std::ostream& operator<<(std::ostream& os, const Evaluation& e) {
+            os << "Evaluation{feasible=" << (e.feasible ? "true" : "false") << ", cost=";
+            if (e.cost) os << *e.cost;
+            else os << "none";
+            return os << '}';
+        }
+    };
+    struct Result {
+        std::optional<Cost> best_cost;
+        StopReason reason;
+        Statistics statistics;
+        friend std::ostream& operator<<(std::ostream& os, const Result& r) {
+            constexpr const char* reasons[] = {"time_limit", "step_limit", "no_moves", "invalid_initial"};
+            int reason = static_cast<int>(r.reason);
+            assert(0 <= reason && reason < int(std::size(reasons)));
+            os << "Result{best_cost=";
+            if (r.best_cost) os << *r.best_cost;
+            else os << "none";
+            return os << ", reason=" << reasons[reason] << ", statistics=" << r.statistics << '}';
+        }
+    };
 
     // 問題を所有して索引を用意する。O(入力サイズ + M + A log A + P log P)。
     explicit ConnectedPartitionSolver(Problem problem) : p_(std::move(problem)) { prepare(false); }
@@ -1121,6 +1156,43 @@ class ConnectedPartitionSolverTests {
             full = solver.evaluate(solver.best_labels(), model); check(full.feasible && close(*full.cost, *r.best_cost), "dependent incremental");
         }
     }
+    template<class Cost> static void stream_tests() {
+        using T = ConnectedPartitionSolver<Cost>;
+        typename T::Problem p(2, 2); p.edges = {{0, 1, 0}};
+        T solver(p);
+        typename T::Options o; o.budget_us = -1; o.max_steps = 0;
+        const std::vector<int> labels{0, 1};
+        const auto evaluation = solver.evaluate(labels);
+        std::ostringstream os;
+        check(&(os << evaluation) == &os, "evaluation stream chaining");
+        check(os.str() == "Evaluation{feasible=true, cost=0}", "zero is not missing");
+        for (int kind = 0; kind < 4; ++kind) {
+            o.budget_us = kind == 0 ? 0 : -1;
+            o.max_steps = kind == 1 ? 0 : 100;
+            if (kind == 2) o.weights.fill(0);
+            if (kind == 3) { p.fixed = {1, -1}; solver.update(p); }
+            const auto result = solver.improve(labels, o);
+            check(static_cast<int>(result.reason) == kind, "streamed actual stop reason");
+            os.str({}); os.clear();
+            check(&(os << result) == &os, "result stream chaining");
+            const std::string output = os.str();
+            const char* reasons[] = {"time_limit", "step_limit", "no_moves", "invalid_initial"};
+            check(output.find(std::string("reason=") + reasons[kind]) != std::string::npos, "readable stop reason");
+            check(output.starts_with(kind == 3 ? "Result{best_cost=none," : "Result{best_cost=0,"), "result missing/zero");
+            check(std::count(output.begin(), output.end(), '\n') == 6, "fixed five neighborhood rows");
+            check(output.find("Recombine: {") != std::string::npos, "last neighborhood included");
+        }
+        os.str({}); os << solver.evaluate(labels);
+        check(os.str() == "Evaluation{feasible=false, cost=none}", "infeasible evaluation stream");
+        if constexpr (std::is_same_v<Cost, int64_t>) {
+            os.str({}); os << typename T::Evaluation{true, INT64_C(9007199254740993)};
+            check(os.str().find("9007199254740993") != std::string::npos, "integer output has no floating conversion");
+        }
+        os.str({}); os << std::fixed << std::setprecision(2);
+        const auto flags = os.flags(); const auto precision = os.precision();
+        os << evaluation << solver.improve(labels, o).statistics << typename T::NeighborhoodStats{};
+        check(os.flags() == flags && os.precision() == precision, "stream formatting preserved");
+    }
     static void api_tests() {
         O zero; zero.budget_us = -1; zero.max_steps = 0;
         P empty(0, 3); for (auto& r : empty.regions) r.required = false;
@@ -1598,6 +1670,7 @@ class ConnectedPartitionSolverTests {
     };
 public:
     static int run() {
+        stream_tests<double>(); stream_tests<int64_t>();
         api_tests(); enumeration_tests(); random_tests(); scenario_tests(); review_tests(); metamorphic_tests();
         optimized_cache_tests(); construction_candidate_tests<double>(); construction_candidate_tests<int64_t>(); construction_deadline_test();
         QualityRegressionTests::run();

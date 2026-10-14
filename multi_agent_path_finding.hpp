@@ -5,7 +5,7 @@
 #include <atcoder/mincostflow>
 
 /*
- * multi_agent_path_finding_v05: AHC向けの複数エージェント経路計画・搬送solver。
+ * multi_agent_path_finding_v06: AHC向けの複数エージェント経路計画・搬送solver。
  *
  * 同期・無向・重みなしグラフ上で、各エージェントが1頂点を占有し、1ターンに
  * 隣接頂点への移動または待機を行うモデルを扱う。同時刻の頂点衝突と、辺上の
@@ -242,6 +242,8 @@ struct mapf_options {
     const mapf_deadline* deadline = nullptr;
 };
 
+struct mapd_result;
+
 struct mapf_result {
     bool success = false;
     mapf_status status = mapf_status::invalid_input;
@@ -252,6 +254,55 @@ struct mapf_result {
     int attempts = 0;
     int lns_improvements = 0;
     mapf_strategy strategy_used = mapf_strategy::prioritized;
+
+    // 結果を上限付きで出力する。O(1 + min(A,20) min(L,20))、A=経路数、L=最大経路長
+    friend std::ostream& operator<<(std::ostream& os, const mapf_result& result) {
+        // 列挙値は名前で表示し、範囲外の値でも配列外を参照しない
+        constexpr const char* statuses[] = {"success", "invalid_input", "unreachable",
+            "horizon_too_short", "timeout", "search_failed", "memory_limit"};
+        constexpr const char* strategies[] = {"prioritized", "pibt", "automatic"};
+        const auto status = static_cast<std::size_t>(result.status);
+        const auto strategy = static_cast<std::size_t>(result.strategy_used);
+        os << "mapf_result{success=" << (result.success ? "true" : "false")
+           << ", status=" << (status < std::size(statuses) ? statuses[status] : "unknown")
+           << ", sum_of_costs=" << result.sum_of_costs << ", makespan=" << result.makespan
+           << ", expanded_states=" << result.expanded_states << ", attempts=" << result.attempts
+           << ", lns_improvements=" << result.lns_improvements
+           << ", strategy_used=" << (strategy < std::size(strategies) ? strategies[strategy] : "unknown");
+        // 経路ごとに改行し、外側・内側の両方に表示上限を設ける
+        print_paths(os, result.paths);
+        return os << "\n}";
+    }
+
+private:
+    friend std::ostream& operator<<(std::ostream&, const mapd_result&);
+
+    static void print_values(std::ostream& os, const std::vector<int>& values) {
+        // 先頭だけを走査し、省略要素数はsizeから求める
+        const std::size_t count = std::min<std::size_t>(values.size(), 20);
+        os << '[';
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) os << ", ";
+            os << values[i];
+        }
+        if (count < values.size()) os << ", ... (+" << values.size() - count << ')';
+        os << ']';
+    }
+
+    static void print_paths(std::ostream& os, const std::vector<std::vector<int>>& paths) {
+        // 件数は全体の値を示し、表示する経路だけを参照する
+        os << ",\n  paths(size=" << paths.size() << ")=[";
+        const std::size_t count = std::min<std::size_t>(paths.size(), 20);
+        for (std::size_t i = 0; i < count; ++i) {
+            if (i != 0) os << ',';
+            os << "\n    " << i << ": ";
+            print_values(os, paths[i]);
+        }
+        // 表示しない経路は残り件数だけを出す
+        if (count < paths.size()) os << ",\n    ... (+" << paths.size() - count << " paths)";
+        if (count != 0) os << "\n  ";
+        os << ']';
+    }
 };
 
 struct mapd_agent {
@@ -291,6 +342,24 @@ struct mapd_result {
     std::vector<int> task_agent;
     std::vector<int> task_pickup_time;
     std::vector<int> task_completion_time;
+
+    // 結果を上限付きで出力する。O(1 + min(A,20) min(L,20) + min(K,20))、A=経路数、L=最大経路長、K=最大タスク配列長
+    friend std::ostream& operator<<(std::ostream& os, const mapd_result& result) {
+        // 成否と集計値は省略せずに表示する
+        os << "mapd_result{valid=" << (result.valid ? "true" : "false")
+           << ", completed_tasks=" << result.completed_tasks
+           << ", sum_flow_time=" << result.sum_flow_time << ", total_moves=" << result.total_moves;
+        mapf_result::print_paths(os, result.paths);
+        // 各タスク配列を独立に出力し、未完成・失敗結果の配列長の違いも扱う
+        const auto print_tasks = [&](const char* name, const std::vector<int>& values) {
+            os << ",\n  " << name << "(size=" << values.size() << ")=";
+            mapf_result::print_values(os, values);
+        };
+        print_tasks("task_agent", result.task_agent);
+        print_tasks("task_pickup_time", result.task_pickup_time);
+        print_tasks("task_completion_time", result.task_completion_time);
+        return os << "\n}";
+    }
 };
 
 struct mapf_repair_request {
@@ -2872,14 +2941,128 @@ void test_moved_workspace_reuse() {
         assert(source.cached_target_count() == 0);
         check(source);
         check(destination);
-        source = std::move(source);
+        mapf_workspace& same_workspace = source;
+        source = std::move(same_workspace);
         check(source);
     }
+}
+
+void test_result_output() {
+    static_assert(std::is_aggregate_v<mapf_result> && std::is_aggregate_v<mapd_result>);
+    const auto text = [](const auto& result) {
+        std::ostringstream os;
+        assert(&(os << result) == &os);
+        return os.str();
+    };
+
+    // 初期値・空配列・改行・フィールド名と、ストリーム連結を確認する
+    assert(text(mapf_result{}) ==
+        "mapf_result{success=false, status=invalid_input, sum_of_costs=0, makespan=0, "
+        "expanded_states=0, attempts=0, lns_improvements=0, strategy_used=prioritized,\n"
+        "  paths(size=0)=[]\n}");
+    assert(text(mapd_result{}) ==
+        "mapd_result{valid=false, completed_tasks=0, sum_flow_time=0, total_moves=0,\n"
+        "  paths(size=0)=[],\n  task_agent(size=0)=[],\n  task_pickup_time(size=0)=[],\n"
+        "  task_completion_time(size=0)=[]\n}");
+    std::ostringstream chained;
+    chained << mapf_result{} << '|' << mapd_result{};
+    assert(chained.str() == text(mapf_result{}) + '|' + text(mapd_result{}));
+
+    // 全状態・全戦略の名前と、非既定の集計値を確認する
+    mapf_result mapf;
+    mapf.success = true;
+    mapf.sum_of_costs = 1234567890123LL;
+    mapf.makespan = 17;
+    mapf.expanded_states = 3456789012345LL;
+    mapf.attempts = 9;
+    mapf.lns_improvements = 2;
+    const auto scalar_text = text(mapf);
+    for (const std::string_view field : {"success=true", "sum_of_costs=1234567890123",
+             "makespan=17", "expanded_states=3456789012345", "attempts=9", "lns_improvements=2"}) {
+        assert(scalar_text.find(field) != std::string::npos);
+    }
+    const std::array status_names{"success", "invalid_input", "unreachable", "horizon_too_short",
+                                  "timeout", "search_failed", "memory_limit"};
+    for (std::size_t i = 0; i < status_names.size(); ++i) {
+        mapf.status = static_cast<mapf_status>(i);
+        assert(text(mapf).find(std::string("status=") + status_names[i] + ',') != std::string::npos);
+    }
+    const std::array strategy_names{"prioritized", "pibt", "automatic"};
+    for (std::size_t i = 0; i < strategy_names.size(); ++i) {
+        mapf.strategy_used = static_cast<mapf_strategy>(i);
+        assert(text(mapf).find(std::string("strategy_used=") + strategy_names[i] + ',') != std::string::npos);
+    }
+    mapf.status = static_cast<mapf_status>(-1);
+    mapf.strategy_used = static_cast<mapf_strategy>(999);
+    assert(text(mapf).find("status=unknown") != std::string::npos);
+    assert(text(mapf).find("strategy_used=unknown") != std::string::npos);
+
+    // 内外の配列について20件の境界と大きい入力を確認する
+    for (const int size : {0, 1, 19, 20, 21, 1000}) {
+        std::vector<int> values(std::size_t(size), 987654321);
+        for (int i = 0; i < std::min(size, 20); ++i) values[std::size_t(i)] = i;
+        std::string prefix = "[";
+        for (int i = 0; i < std::min(size, 20); ++i) {
+            if (i != 0) prefix += ", ";
+            prefix += std::to_string(i);
+        }
+        if (size > 20) prefix += ", ... (+" + std::to_string(size - 20) + ')';
+        prefix += ']';
+        mapf.paths.assign(std::size_t(size), values);
+        if (size > 20) mapf.paths[20] = {876543210};
+        const auto snapshot = mapf.paths;
+        const auto output = text(mapf);
+        assert(mapf.paths == snapshot);
+        assert(output.find("paths(size=" + std::to_string(size) + ")=[") != std::string::npos);
+        if (size > 0) assert(output.find("0: " + prefix) != std::string::npos);
+        if (size >= 20) assert(output.find("19: " + prefix) != std::string::npos);
+        if (size > 20) {
+            assert(output.find("... (+" + std::to_string(size - 20) + " paths)") != std::string::npos);
+        } else {
+            assert(output.find("...") == std::string::npos);
+        }
+        assert(output.find("20: ") == std::string::npos);
+        assert(output.find("987654321") == std::string::npos);
+        assert(output.find("876543210") == std::string::npos);
+        assert(output.size() < 3000);
+        mapd_result mapd;
+        mapd.paths = mapf.paths;
+        mapd.task_agent = mapd.task_pickup_time = mapd.task_completion_time = values;
+        const auto mapd_output = text(mapd);
+        for (const char* field : {"task_agent", "task_pickup_time", "task_completion_time"}) {
+            assert(mapd_output.find(std::string(field) + "(size=" + std::to_string(size) + ")=" + prefix)
+                   != std::string::npos);
+        }
+        assert(mapd_output.find("987654321") == std::string::npos);
+        assert(mapd_output.find("876543210") == std::string::npos);
+        assert(mapd_output.size() < 4000);
+    }
+
+    // 不揃いの配列長・空経路・未割当も、検証や補正をせずそのまま表示する
+    const mapd_result mapd{true, 1, 1234567890123LL, 3456789012345LL,
+                          {{}, {0, 1}}, {-1, 0}, {}, {-1}};
+    const auto mapd_text = text(mapd);
+    for (const std::string_view field : {"valid=true", "completed_tasks=1", "sum_flow_time=1234567890123",
+             "total_moves=3456789012345", "0: []", "1: [0, 1]", "task_agent(size=2)=[-1, 0]",
+             "task_pickup_time(size=0)=[]", "task_completion_time(size=1)=[-1]"}) {
+        assert(mapd_text.find(field) != std::string::npos);
+    }
+
+    // 呼出側の書式設定を変更しない。boolは設定にかかわらずtrue/falseで出す
+    std::ostringstream formatted;
+    formatted << std::hex << std::boolalpha << std::setprecision(4) << std::setfill('_');
+    const auto flags = formatted.flags();
+    const auto locale = formatted.getloc();
+    formatted << mapf << mapd;
+    assert(formatted.flags() == flags && formatted.precision() == 4);
+    assert(formatted.fill() == '_' && formatted.getloc() == locale);
+    assert(formatted.str().find("valid=true") != std::string::npos);
 }
 
 }  // namespace mapf_self_test
 
 int main() {
+    mapf_self_test::test_result_output();
     mapf_self_test::test_basic_cases();
     mapf_self_test::test_single_agent_shortest_paths();
     mapf_self_test::test_random_mapf_and_improvement();

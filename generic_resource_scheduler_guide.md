@@ -1,6 +1,6 @@
-# Generic Resource Scheduler v07 ユーザーガイド
+# Generic Resource Scheduler v09 ユーザーガイド
 
-対象ヘッダ：`generic_resource_scheduler_v07.hpp`。C++20・GCC向けの、資源制約付きスケジューリングを扱う1ヘッダライブラリである。
+対象ヘッダ：`generic_resource_scheduler_v09.hpp`。C++20・GCC向けの、資源制約付きスケジューリングを扱う1ヘッダライブラリである。
 
 第1〜4章で適用できる問題を判断し、第5章で入力を準備する。第6章の呼出し例と第8章の関数定義は、同じユースケース番号で対応している。第7章に適用限界、第9章に実装の説明をまとめる。コード例の関数は、コンテスト固有の入力をライブラリへ変換するための例であり、ヘッダに収録された公開関数とは区別する。
 
@@ -27,21 +27,21 @@
 
 ### 1.2 満たす制約
 
-タスク数を$N$、資源数を$R$とする。タスク$i$のモード集合を$M_i$、選択モードを$m_i$、開始時刻を$S_i$とする。各タスクは$M_i$からちょうど1つのモードを選ぶ。
+タスク数を$N$、資源数を$R$とする。タスク$i$のモード集合を$M_ {i}$、選択モードを$m_ {i}$、開始時刻を$S_ {i}$とする。各タスクは$M_ {i}$からちょうど1つのモードを選ぶ。
 
-$$C_i=S_i+p_{i,m_i}$$
+$$C_ {i}=S_ {i}+p_ {i,m_ {i}}$$
 
-$p_{i,m_i}$は選んだモードの処理時間、$C_i$は完了時刻である。開始可能時刻を$r_i$、先行制約の集合を$E$とすると、次を満たす。
+$p_ {i,m_ {i}}$は選んだモードの処理時間、$C_ {i}$は完了時刻である。開始可能時刻を$r_ {i}$、先行制約の集合を$E$とすると、次を満たす。
 
-$$S_i\ge r_i,\qquad C_i\le S_j\quad ((i,j)\in E)$$
+$$S_ {i}\ge r_ {i},\qquad C_ {i}\le S_ {j}\quad ((i,j)\in E)$$
 
 $E$の$(i,j)$は「タスク$i$の完了後にタスク$j$を開始できる」という意味で、閉路のない有向グラフでなければならない。
 
-資源$r$の容量を$B_r$、タスク$i$がモード$m$で実行中に使う量を$a_{i,m,r}$とすると、全ての時刻$t$について次を満たす。
+資源$r$の容量を$B_ {r}$、タスク$i$がモード$m$で実行中に使う量を$a_ {i,m,r}$とすると、全ての時刻$t$について次を満たす。
 
-$$\sum_{i:S_i\le t<C_i}a_{i,m_i,r}\le B_r\quad (0\le r<R)$$
+$$\sum_ {i:S_ {i}\le t<C_ {i}}a_ {i,m_ {i},r}\le B_ {r}\quad (0\le r<R)$$
 
-使用区間は半開区間$[S_i,C_i)$である。あるタスクが時刻5に終われば、別のタスクは時刻5から同じ資源を使える。処理時間0のタスクは資源を占有する時間がない。
+使用区間は半開区間$[S_ {i},C_ {i})$である。あるタスクが時刻5に終われば、別のタスクは時刻5から同じ資源を使える。処理時間0のタスクは資源を占有する時間がない。
 
 開始時刻・処理時間・資源量は整数で扱う。タスクごとの処理時間や開始可能時刻は入力では`int`、返却される開始時刻は`long long`である。小数時間を扱う場合は、例えば「1単位＝0.1秒」のように単位を決めて整数化する。
 
@@ -49,24 +49,24 @@ $$\sum_{i:S_i\le t<C_i}a_{i,m_i,r}\le B_r\quad (0\le r<R)$$
 
 組み込みの目的関数は、全体の終了時刻、各タスクの完了時刻、納期遅延、モード費用の重み付き和である。
 
-$$F=w_M C_{\max}+\sum_{i=0}^{N-1}w_i^C C_i+\sum_{i:d_i\ge0}w_i^T\max(0,C_i-d_i)+w_K\sum_{i=0}^{N-1}k_{i,m_i}$$
+$$F=w_ {M} C_ {\max}+\sum_ {i=0}^{N-1}w_ {i}^C C_ {i}+\sum_ {i:d_ {i}\ge0}w_ {i}^T\max(0,C_ {i}-d_ {i})+w_ {K}\sum_ {i=0}^{N-1}k_ {i,m_ {i}}$$
 
 | 記号 | 意味 | 対応するデータ |
 |---|---|---|
 | $F$ | 小さいほど良い目的値 | 返却値の`objective` |
 | $N$ | タスク数 | `problem.tasks.size()` |
 | $i$ | タスクID。0から$N-1$ | `problem.tasks[i]`の添字 |
-| $m_i$ | タスク$i$で選んだモードの添字 | `schedule.mode_of_task[i]` |
-| $S_i$ | タスク$i$の開始時刻 | `schedule.start_time[i]` |
-| $p_{i,m_i}$ | 選択モードの処理時間 | `problem.tasks[i].modes[m_i].duration` |
-| $C_i$ | タスク$i$の完了時刻 | $S_i+p_{i,m_i}$で計算 |
-| $C_{\max}$ | 全タスクの完了時刻の最大値。タスク0個なら0 | 各$C_i$の最大値 |
-| $w_M$ | 全体の終了時刻を1単位遅らせる費用 | `problem.makespan_weight` |
-| $w_i^C$ | タスク$i$の完了時刻を1単位遅らせる費用 | `problem.tasks[i].completion_weight` |
-| $d_i$ | タスク$i$の納期。負値の指定は納期なしを表す`-1`だけ | `problem.tasks[i].due_time` |
-| $w_i^T$ | タスク$i$の納期超過1単位あたりの費用 | `problem.tasks[i].tardiness_weight` |
-| $k_{i,m_i}$ | 選択モードを1回使う費用 | `problem.tasks[i].modes[m_i].fixed_cost` |
-| $w_K$ | モード費用を目的値へ換算する係数 | `problem.mode_cost_weight` |
+| $m_ {i}$ | タスク$i$で選んだモードの添字 | `schedule.mode_of_task[i]` |
+| $S_ {i}$ | タスク$i$の開始時刻 | `schedule.start_time[i]` |
+| $p_ {i,m_ {i}}$ | 選択モードの処理時間 | `problem.tasks[i].modes[m_i].duration` |
+| $C_ {i}$ | タスク$i$の完了時刻 | $S_ {i}+p_ {i,m_ {i}}$で計算 |
+| $C_ {\max}$ | 全タスクの完了時刻の最大値。タスク0個なら0 | 各$C_ {i}$の最大値 |
+| $w_ {M}$ | 全体の終了時刻を1単位遅らせる費用 | `problem.makespan_weight` |
+| $w_ {i}^C$ | タスク$i$の完了時刻を1単位遅らせる費用 | `problem.tasks[i].completion_weight` |
+| $d_ {i}$ | タスク$i$の納期。負値の指定は納期なしを表す`-1`だけ | `problem.tasks[i].due_time` |
+| $w_ {i}^T$ | タスク$i$の納期超過1単位あたりの費用 | `problem.tasks[i].tardiness_weight` |
+| $k_ {i,m_ {i}}$ | 選択モードを1回使う費用 | `problem.tasks[i].modes[m_i].fixed_cost` |
+| $w_ {K}$ | モード費用を目的値へ換算する係数 | `problem.mode_cost_weight` |
 
 第1項は「最後の仕事が終わるまでの時間」を短くする。第2項は、全体の終了時刻が同じでも重要な仕事を先に終えることを評価する。第3項は納期を超えた部分だけを評価し、納期前に終えた仕事の遅延費用は0になる。第4項は時間と実行費用の交換条件を決める。
 
@@ -90,9 +90,9 @@ $$F=w_M C_{\max}+\sum_{i=0}^{N-1}w_i^C C_i+\sum_{i:d_i\ge0}w_i^T\max(0,C_i-d_i)+
 
 全タスクのモードが決まっていて、資源を使わない、または全てを重ねても容量内であれば、残るのは開始可能時刻と先行制約だけである。先行タスクから順に、次で開始時刻を決められる。
 
-$$S_i=\max(r_i,\max_{j:(j,i)\in E}C_j)$$
+$$S_ {i}=\max(r_ {i},\max_ {j:(j,i)\in E}C_ {j})$$
 
-先行タスクがない場合は$S_i=r_i$とする。先行関係をたどる順序で計算すれば、全てのタスクをそれぞれ最も早く終えられる。組み込み目的の時間項は遅くなるほど増えるため、これが最適である。モード費用はモード固定後には定数になる。計算量はタスク数$N$と辺数$|E|$に対して$O(N+|E|)$である。
+先行タスクがない場合は$S_ {i}=r_ {i}$とする。先行関係をたどる順序で計算すれば、全てのタスクをそれぞれ最も早く終えられる。組み込み目的の時間項は遅くなるほど増えるため、これが最適である。モード費用はモード固定後には定数になる。計算量はタスク数$N$と辺数$|E|$に対して$O(N+|E|)$である。
 
 モードが複数残っている場合は、この結論だけではモードの最適選択まで決まらない。例えば「資源がないから最短モードだけを選ぶ」とすると、モード費用との交換条件を無視することになる。
 
@@ -114,7 +114,7 @@ $$S_i=\max(r_i,\max_{j:(j,i)\in E}C_j)$$
 | 完了時刻の合計 | 処理時間の短い順 | 重みが全て同じ場合 |
 | 重み付き完了時刻の合計 | 処理時間÷完了重みの小さい順 | 納期遅延項を含めない。正の重みを対象とし、重み0は後ろへ置ける |
 
-固定モードの処理時間を$p_i$と書く。最後の規則は、隣り合う仕事$i,j$を交換して確かめられる。$i$を先に置く方が良い条件は$p_i w_j^C\le p_j w_i^C$なので、この条件を満たす順に並べればよい。重みが全て1なら短い順になる。全体終了項と固定済みモードの費用は順序によらないため、併用してもこの結論は変わらない。
+固定モードの処理時間を$p_ {i}$と書く。最後の規則は、隣り合う仕事$i,j$を交換して確かめられる。$i$を先に置く方が良い条件は$p_ {i} w_ {j}^C\le p_ {j} w_ {i}^C$なので、この条件を満たす順に並べればよい。重みが全て1なら短い順になる。全体終了項と固定済みモードの費用は順序によらないため、併用してもこの結論は変わらない。
 
 開始可能時刻、先行制約、納期遅延、複数機械を加えると、この単純な並べ替えの最適性はそのまま使えない。本ライブラリ内部の初期順序規則も、この限定問題の厳密アルゴリズムを提供するAPIではない。
 
@@ -122,7 +122,7 @@ $$S_i=\max(r_i,\max_{j:(j,i)\in E}C_j)$$
 
 モード固定、全タスクの開始可能時刻0、機械1台、各タスクの機械使用量1なら、処理済みタスクの集合を状態にするDPが候補になる。先行制約がある場合も、全ての先行タスクを処理済みのタスクだけを次へ追加する。
 
-処理済み集合を$A$、その処理時間合計を$T(A)$とすると、次に置くタスク$i$の完了時刻は$T(A)+p_i$である。そのタスクの重み付き完了費用と納期遅延費用をDP値へ加えれば、組み込み目的を厳密に最小化できる。全体終了時刻とモード費用は全タスク処理後の定数として加える。開始可能時刻が全て0で時間の遅延が利益にならないので、意図的な空き時間は不要である。
+処理済み集合を$A$、その処理時間合計を$T(A)$とすると、次に置くタスク$i$の完了時刻は$T(A)+p_ {i}$である。そのタスクの重み付き完了費用と納期遅延費用をDP値へ加えれば、組み込み目的を厳密に最小化できる。全体終了時刻とモード費用は全タスク処理後の定数として加える。開始可能時刻が全て0で時間の遅延が利益にならないので、意図的な空き時間は不要である。
 
 状態数は$2^N$、素直な遷移数は$O(N2^N)$で、前提となる先行集合の検査も効率化する必要がある。大きな$N$では時間・メモリとも現実的でなくなる。開始可能時刻がばらばらの場合は、同じ集合でも経過時間が変わるため、この1値のDPでは不足する。
 
@@ -337,7 +337,7 @@ AHCなどで、今回決めるのは加工工程だけだが、その後に配�
 ヘッダを自分のソースと同じディレクトリへ置き、次のように読み込む。
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 ```
 
 GCC向けのC++20コードで、`bits/stdc++.h`、`__uint128_t`、`__INCLUDE_LEVEL__`を使う。ACLなどの外部ライブラリやリンク対象のバイナリは不要である。公開型・公開関数はグローバル名前空間にある。
@@ -479,7 +479,7 @@ options.deadline = solver_deadline;
 options.seed = 0;
 ```
 
-過ぎた期限でも初期構築を行う。SAでは8提案ごとの時刻確認で、1回の配置中には停止しないため、厳密な時刻上限ではない。また、有限の`double`ならどんな巨大値でも安全に時計へ加算できるわけではない。時計の表現範囲に十分収まる実用的なmsを指定し、無限大を時間上限として渡さない。
+過ぎた期限でも初期構築を行う。SAでは8提案ごとの時刻確認で、1回の配置中には停止しないため、厳密な時刻上限ではない。時計の表現範囲を超える有限の`time_limit_ms`は、相対終了時刻を`steady_clock::time_point::max()`に収める。`deadline`があればさらに早い方を使う。通常は実際の時間枠に合わせたmsを指定し、`NaN`や無限大は渡さない。
 
 ### 5.7 解と戻り値の全フィールド
 
@@ -504,6 +504,38 @@ options.seed = 0;
 | `accepted_moves` | `long long` | `0` | SAで受理した有効な近傍数。同値・悪化受理を含み、追加初期順序の採用は含めない |
 
 空問題では解の配列と3カウンタは空・0で、Evaluatorを1回呼んだ値を返す。非空で探索状態が一意なら、`iterations=0`、`decoded_schedules=1`、`accepted_moves=0`になる。無効な交換、移動先がない提案、別モードがない提案はdecodeされない。`improve`の元解の評価もdecode数には含めない。
+
+#### デバッグ出力
+
+`resource_scheduling_solve`と`resource_scheduling_improve`の戻り値、およびその`schedule`は、`std::cout`や`std::cerr`へ直接渡せる。組み込み評価版・独自Evaluator版のどちらでも同じ使い方になる。
+
+```cpp
+std::cerr << result << '\n';          // 目的値、探索カウンタ、解をまとめて表示
+std::cerr << result.schedule << '\n'; // 解の3配列だけを表示
+```
+
+対応する演算子は`std::ostream& operator<<(std::ostream&, const resource_scheduling_result&)`と`std::ostream& operator<<(std::ostream&, const resource_schedule&)`である。どちらも渡されたストリームを返すので、前後に文字列などを連結できる。
+
+例えば、次の値を表示すると、フィールド名付きの1行を得られる。
+
+```cpp
+const resource_scheduling_result debug_result{
+    {{2, 0, 1}, {1, 0, 2}, {12, 0, 5}}, 12.5L, 7, 6, 3
+};
+std::cout << debug_result << '\n';
+```
+
+```text
+resource_scheduling_result{objective=12.5, iterations=7, decoded_schedules=6, accepted_moves=3, schedule=resource_schedule{task_order=[2, 0, 1], mode_of_task=[1, 0, 2], start_time=[12, 0, 5]}}
+```
+
+- `task_order`・`mode_of_task`・`start_time`は、それぞれ先頭20要素まで表示する。20要素を超える場合は、末尾に`... (5 more)`のように省略数を添える。例えば25要素なら、20要素を表示して5要素を省略する。
+- 空配列は`[]`。配列の長さが互いに違う作成途中の解も表示できる。出力時に実行可能性の検証や再評価は行わない。
+- `task_order`は順序位置、ほかの2配列はタスクIDの順に出す。同じ表示位置が同じタスクを表すとは限らない。
+- 改行と明示的なflushは演算子内で行わない。必要な改行は呼出し側で`'\n'`を付ける。数値はストリームの現在の書式・精度に従い、演算子は書式フラグや精度を変更しない。
+- 解やカウンタを書き換えず、大配列をコピー・全走査しない。読み取る配列要素数は合計最大60個で、配列長に対する計算量・補助メモリは$O(1)$。出力を呼ばなければ探索処理に出力処理は入らない。
+
+これは人が確認するための表示であり、全要素の保存形式やコンテスト指定の出力形式ではない。提出用の出力とは別に確認したいときは`std::cerr`を使う。
 
 ### 5.8 Evaluatorの準備
 
@@ -532,13 +564,13 @@ Evaluatorは値渡しで受け取り、その後moveされる。move-onlyのEval
 
 ### 6.0 公開関数と共通の読戻し
 
-本体の公開関数は次の5系統・8呼出し形式である。`problem`は`const resource_scheduling_problem&`、`schedule`と`initial`は`const resource_schedule&`、`options`は`const resource_scheduling_options&`で受け取る。Evaluatorはテンプレートの値引数で受け取る。
+スケジューリング用の公開関数は次の5系統・8呼出し形式である。これに加え、第5.7節の2種類の出力演算子を利用できる。`problem`は`const resource_scheduling_problem&`、`schedule`と`initial`は`const resource_schedule&`、`options`は`const resource_scheduling_options&`で受け取る。Evaluatorはテンプレートの値引数で受け取る。
 
 | 呼出し形式 | 戻り値 | 目的・前提 |
 |---|---|---|
 | `resource_scheduling_validate_problem(problem)` | `void` | 問題だけを検証。不正なら`std::invalid_argument` |
 | `resource_scheduling_is_feasible(problem, schedule)` | `bool` | 問題を検証した上で解を検査。解だけが不正ならfalse、問題自体が不正なら例外 |
-| `resource_scheduling_evaluate(problem, schedule)` | `long double` | 問題・解を検証して組み込み式を計算 |
+| `resource_scheduling_evaluate(problem, schedule)` | `long double` | 問題・解を検証して組み込み式を計算。有限値かも検査 |
 | `resource_scheduling_evaluate(problem, schedule, evaluator)` | `long double` | 問題・解を検証して独自の式を計算。有限値かも検査 |
 | `resource_scheduling_solve(problem, options)` | `resource_scheduling_result` | 初期構築して改善。`options`は省略可能 |
 | `resource_scheduling_solve(problem, evaluator, options)` | `resource_scheduling_result` | 独自評価で初期構築・改善。末尾の`options`は省略可能 |
@@ -555,6 +587,8 @@ const auto result = resource_scheduling_solve(problem, options);
 assert(resource_scheduling_is_feasible(problem, result.schedule));
 const long double value = resource_scheduling_evaluate(problem, result.schedule);
 assert(value == result.objective);
+std::cerr << result << '\n';          // 目的値・探索カウンタ・解を確認
+std::cerr << result.schedule << '\n'; // 解だけを確認
 for (int task = 0; task < static_cast<int>(problem.tasks.size()); ++task) {
     const int mode = result.schedule.mode_of_task[task];
     const long long start = result.schedule.start_time[task];
@@ -758,9 +792,9 @@ assert(value == result.objective);
 std::cout << value << '\n';
 ```
 
-このEvaluatorの目的式は次である。$h_i$は`tail_time[i]`、$q_i$は`tie_weight[i]`、$\lambda$は`tie_scale`で、全て非負にする。空問題では最大値の項を0とする。
+このEvaluatorの目的式は次である。$h_ {i}$は`tail_time[i]`、$q_ {i}$は`tie_weight[i]`、$\lambda$は`tie_scale`で、全て非負にする。空問題では最大値の項を0とする。
 
-$$F_{\mathrm{tail}}=\max_i(C_i+h_i)+\lambda\sum_i q_i C_i+w_K\sum_i k_{i,m_i}$$
+$$F_ {\mathrm{tail}}=\max_ {i}(C_ {i}+h_ {i})+\lambda\sum_ {i} q_ {i} C_ {i}+w_ {K}\sum_ {i} k_ {i,m_ {i}}$$
 
 この例では組み込みの納期遅延項は加えない。関数内で設定するタスク重みは初期構築の目安であり、返却目的値そのものはこのEvaluatorで計算する。
 
@@ -957,8 +991,8 @@ Evaluatorの型として渡せても、必要な待機スケジュールを探�
 | 時刻加算 | 入力から作る時刻範囲と、外部解の開始時刻＋処理時間のオーバーフローを検査する |
 | 重み・固定費用 | 個々の入力は有限値。重みは非負、固定費用は負値も可。積・和など中間値も実用的な範囲に収める |
 | 独自評価の値 | solverと独自`evaluate`は有限値を要求し、非有限なら`std::invalid_argument` |
-| 組み込み`evaluate` | 問題・解は検証するが、目的値の最終有限性を別途検査する分岐はない。極端な重みの積和で溢れないようにし、必要なら利用側でも`std::isfinite`を確認する |
-| 時間オプション | `NaN`・無限大は不正。有限でも時計の変換・加算の範囲を超える巨大なmsを指定しない |
+| 組み込み`evaluate` | 問題・解・目的値の有限性を検証する。極端な重みの積和などで目的値が非有限になれば`std::invalid_argument` |
+| 時間オプション | `NaN`・無限大は不正。有限の巨大値は相対終了時刻を`steady_clock::time_point::max()`に収める。`deadline`も設定した場合は早い方を使う |
 | dense calendar | 自動選択時は最大4,000,000セル、セル配列だけで32,000,000byte。問題・解・その他配列は別に必要 |
 | interval calendar | 時刻範囲の数値そのものではなく、主に資源使用の区間境界数に依存する。非常に多いタスク・資源ではこちらも大きくなる |
 
@@ -973,9 +1007,9 @@ Evaluatorの型として渡せても、必要な待機スケジュールを探�
 付属のテストは次で実行できる。`assert`を有効にするため、検証時に`-DNDEBUG`を付けない。
 
 ```bash
-g++ -std=c++20 -O2 test_generic_resource_scheduler_v07.cpp -o test_scheduler
+g++ -std=c++20 -O2 -x c++ generic_resource_scheduler_v09.hpp -o test_scheduler
 ./test_scheduler
-g++ -std=c++20 -O2 test_generic_resource_scheduler_guide_v07.cpp -o test_guide
+g++ -std=c++20 -O2 tests/test_generic_resource_scheduler_guide_v09.cpp -o test_guide
 ./test_guide
 ```
 
@@ -990,7 +1024,7 @@ g++ -std=c++20 -O2 test_generic_resource_scheduler_guide_v07.cpp -o test_guide
 ### 8.1 1種類の累積資源を使う工程計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1040,7 +1074,7 @@ resource_scheduling_result solve_basic_rcpsp(
 ### 8.2 複数種類の資源を同時に使う計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1095,7 +1129,7 @@ resource_scheduling_result solve_cumulative_resources(
 ### 8.3 複数の実行方法を選ぶ計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1174,7 +1208,7 @@ resource_scheduling_result solve_mrcpsp(
 ### 8.4 同一並列機械
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1223,7 +1257,7 @@ resource_scheduling_result solve_identical_parallel_machines(
 ### 8.5 Job Shop
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1314,7 +1348,7 @@ job_shop_solution solve_job_shop(
 ### 8.6 Flexible Job Shop
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1420,7 +1454,7 @@ flexible_job_shop_solution solve_flexible_job_shop(
 ### 8.7 開始可能時刻・納期・重要度を考慮する計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1465,7 +1499,7 @@ resource_scheduling_result solve_with_timing_priorities(
 ### 8.8 複数プロジェクトの共有資源計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1553,7 +1587,7 @@ shared_projects_solution solve_shared_projects(
 ### 8.9 残り工程時間まで含めた部分問題
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1629,7 +1663,7 @@ resource_scheduling_result solve_tail_aware_subproblem(
 ### 8.10 外部で作った実行可能解の改善
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1668,7 +1702,7 @@ schedule_improvement improve_external_schedule(
 ### 8.11 資源競合しない部分集合の切出し
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 共通入力: time_limit_msは初期構築後の改善時間(ms)、seedはuint64_tの乱数seed。
 // 時刻・durationは同じ整数単位。要素数とIDはintで表せる範囲に収める。
@@ -1769,7 +1803,7 @@ selected_subproblem_solution solve_independent_task_subset(
 ### 8.12 共通期限内の複数試行
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 入力: problemは有効な問題。restart_countは正の最大試行数。
 // total_time_msは有限・非負の総時間の目安。時計に収まる実用的な値を使う。
@@ -1821,7 +1855,7 @@ resource_scheduling_result solve_with_multistart(
 ### 8.13 固定反復による比較・検査
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 // 入力: problemは有効な問題。max_iterationsは0以上の反復上限、seedは乱数seed。
 // 反復は追加順序評価とSA提案の合計。無効提案も数える。
@@ -1846,7 +1880,7 @@ resource_scheduling_result solve_with_fixed_iterations(
 ### 8.14 ターン間の再計画
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 struct turn_replanning_result {
     bool reused_previous = false; // trueなら、前の実行可能解からimproveした。
@@ -1888,7 +1922,7 @@ turn_replanning_result replan_turn(
 ### 8.15 資源使用が段階ごとに変わる工程
 
 ```cpp
-#include "generic_resource_scheduler_v07.hpp"
+#include "generic_resource_scheduler_v09.hpp"
 
 struct phase_input {
     int duration = 1; // この段階の処理時間。0以上、全段階で同じ時間単位。
@@ -1995,9 +2029,9 @@ phased_projects_solution solve_phased_projects(
 
 Kahn法の各段階で選べるタスクが常に1個であり、さらに各タスクのモードが1個だけなら、探索可能な順列・モードの組合せは一意と判定できる。一方、単に資源が空、全重みが0、または解の目的値が同じという理由では、探索を一律に省略しない。
 
-calendar用の時刻範囲を次で作る。$H$は時刻範囲の上端、$r_i$は開始可能時刻、$p_{i,m}$はモード$m$の処理時間、$M_i$はタスク$i$のモード集合である。空集合に対する最大値と和はここでは0とする。
+calendar用の時刻範囲を次で作る。$H$は時刻範囲の上端、$r_ {i}$は開始可能時刻、$p_ {i,m}$はモード$m$の処理時間、$M_ {i}$はタスク$i$のモード集合である。空集合に対する最大値と和はここでは0とする。
 
-$$H=\max\left(1,\max_i r_i+\sum_i\max_{m\in M_i}p_{i,m}+1\right)$$
+$$H=\max\left(1,\max_ {i} r_ {i}+\sum_ {i}\max_ {m\in M_ {i}}p_ {i,m}+1\right)$$
 
 全タスクを直列に置いても収まる範囲であり、最適完了時刻の予測値ではない。合計が`long long`を超えないことを検査する。この準備は各公開呼出しで行い、前の呼出しから差分更新する仕組みは持たない。
 
@@ -2005,15 +2039,15 @@ $$H=\max\left(1,\max_i r_i+\sum_i\max_{m\in M_i}p_{i,m}+1\right)$$
 
 `solve`は各タスクを単独に見て、処理時間、費用、資源の占有割合をまとめた代理値が小さいモードを選ぶ。これは初期値を作る判断であり、そのモードを固定する制約ではない。後の探索で他のモードへ変更できる。
 
-$N$をタスク数、$R$を資源数、$a_{i,m,r}$をモードの資源使用量、$B_r$を容量とする。登録していない資源の使用量は0である。$w_M,w_K,w_i^C,w_i^T,k_{i,m}$は第1章の目的係数と費用である。資源占有割合$P_{i,m}$、平均的な時間重み$A$、タスク別の時間重み$B_i^{\mathrm{time}}$を次で定める。
+$N$をタスク数、$R$を資源数、$a_ {i,m,r}$をモードの資源使用量、$B_ {r}$を容量とする。登録していない資源の使用量は0である。$w_ {M},w_ {K},w_ {i}^C,w_ {i}^T,k_ {i,m}$は第1章の目的係数と費用である。資源占有割合$P_ {i,m}$、平均的な時間重み$A$、タスク別の時間重み$B_ {i}^{\mathrm{time}}$を次で定める。
 
-$$P_{i,m}=\frac{1}{R}\sum_r\frac{a_{i,m,r}}{B_r}\quad(R>0),\qquad P_{i,m}=0\quad(R=0)$$
+$$P_ {i,m}=\frac{1}{R}\sum_ {r}\frac{a_ {i,m,r}}{B_ {r}}\quad(R>0),\qquad P_ {i,m}=0\quad(R=0)$$
 
-$$A=\frac{w_M+\sum_i(w_i^C+w_i^T)}{\max(1,N)},\qquad B_i^{\mathrm{time}}=\frac{w_M}{\max(1,N)}+w_i^C+w_i^T$$
+$$A=\frac{w_ {M}+\sum_ {i}(w_ {i}^C+w_ {i}^T)}{\max(1,N)},\qquad B_ {i}^{\mathrm{time}}=\frac{w_ {M}}{\max(1,N)}+w_ {i}^C+w_ {i}^T$$
 
-モードごとに次の$Q_{i,m}$を計算し、最小のものを選ぶ。同値ならモード配列で先に現れるものを使う。
+モードごとに次の$Q_ {i,m}$を計算し、最小のものを選ぶ。同値ならモード配列で先に現れるものを使う。
 
-$$Q_{i,m}=B_i^{\mathrm{time}}p_{i,m}+w_K k_{i,m}+0.15A p_{i,m}P_{i,m}$$
+$$Q_ {i,m}=B_ {i}^{\mathrm{time}}p_ {i,m}+w_ {K} k_ {i,m}+0.15A p_ {i,m}P_ {i,m}$$
 
 処理時間が短く、費用が安く、共有資源を長く占有しにくいモードを初期値にしやすい式である。納期遅延を正確に予測する式ではない。`due_time=-1`でも`w_i^T`はこの代理値へ入る。独自Evaluatorを使っても、この初期化はproblem内の重みを参照するため、独自目的の傾向を重みに反映するときは第5章の注意に従う。
 
@@ -2023,25 +2057,25 @@ $$Q_{i,m}=B_i^{\mathrm{time}}p_{i,m}+w_K k_{i,m}+0.15A p_{i,m}P_{i,m}$$
 
 先行タスクが全て取り出されたタスクだけを候補にし、優先値の大きいものを優先キューから取り出す。したがって、どの優先式でも先行制約を満たす順列になる。
 
-まず、後続の重要さを表す$W_i$を逆トポロジカル順に計算する。$\operatorname{succ}(i)$は$i$の直接の後続集合で、後続がない場合の最大値は0とする。
+まず、後続の重要さを表す$W_ {i}$を逆トポロジカル順に計算する。$\operatorname{succ}(i)$は$i$の直接の後続集合で、後続がない場合の最大値は0とする。
 
-$$W_i=w_i^C+w_i^T+\max_{j\in\operatorname{succ}(i)}W_j$$
+$$W_ {i}=w_ {i}^C+w_ {i}^T+\max_ {j\in\operatorname{succ}(i)}W_ {j}$$
 
 これは1本の後続経路に沿った重みである。全子孫の重みを合計する値でも、処理時間によるクリティカルパス長でもない。
 
-選択中のモードを$m_i$とする。納期の近さ$U_i$は、納期なしなら0、納期ありなら$1-\min(1,d_i/H)$である。基本順列の優先値$V_i$は次のとおり。
+選択中のモードを$m_ {i}$とする。納期の近さ$U_ {i}$は、納期なしなら0、納期ありなら$1-\min(1,d_ {i}/H)$である。基本順列の優先値$V_ {i}$は次のとおり。
 
-$$V_i=0.85\frac{W_i}{\max(1,\max_j W_j)}+0.30P_{i,m_i}+0.35U_i$$
+$$V_ {i}=0.85\frac{W_ {i}}{\max(1,\max_ {j} W_ {j})}+0.30P_ {i,m_ {i}}+0.35U_ {i}$$
 
 候補を優先キューへ入れるたびに、$[0,0.03)$の乱数を優先値へ加える。完全に同じキーならタスクIDが大きい方を先に取り出す。seedを変えると、こうした同程度の優先度の順序にも変化が生じる。
 
-基本初期解の構築後、改善枠内で次の3式を順番に試す。モードは共通のままで、各順列を配置・評価する。表の$p_i$は選択中モードの処理時間、$d_i$は納期である。
+基本初期解の構築後、改善枠内で次の3式を順番に試す。モードは共通のままで、各順列を配置・評価する。表の$p_ {i}$は選択中モードの処理時間、$d_ {i}$は納期である。
 
 | 順列 | 優先値の作り方 | 狙い |
 |---|---|---|
-| 後続重み／時間 | $W_i/\max(1,p_i)$を計算し、その最大値と$10^{-18}$の大きい方で正規化 | 重要な後続を短い処理で解放しやすくする |
-| 重み付き短時間 | $(1+w_i^C+w_i^T)/\max(1,p_i)$ | 短い仕事や完了の重要な仕事を前へ置く |
-| 納期順 | 納期ありは$-d_i+p_i$、納期なしは$-H$ | 納期に対して余裕が少ない仕事を前へ置く |
+| 後続重み／時間 | $W_ {i}/\max(1,p_ {i})$を計算し、その最大値と$10^{-18}$の大きい方で正規化 | 重要な後続を短い処理で解放しやすくする |
+| 重み付き短時間 | $(1+w_ {i}^C+w_ {i}^T)/\max(1,p_ {i})$ | 短い仕事や完了の重要な仕事を前へ置く |
+| 納期順 | 納期ありは$-d_ {i}+p_ {i}$、納期なしは$-H$ | 納期に対して余裕が少ない仕事を前へ置く |
 
 これらも同じ乱数幅を加えて優先キューを使う。必ず3個を評価するわけではなく、各評価前に時間と反復上限を確認する。各評価は`iterations`と`decoded_schedules`を1増やすが、`accepted_moves`には含めない。`improve`でも追加順列を試し得る。
 
@@ -2049,9 +2083,9 @@ $$V_i=0.85\frac{W_i}{\max(1,\max_j W_j)}+0.30P_{i,m_i}+0.35U_i$$
 
 Serial Schedule Generation Scheme（SSGS）は、優先順列の先頭から1タスクずつ確定する配置手続きである。タスク$i$の最初の候補時刻を、開始可能時刻と全先行タスクの完了の最大値にする。
 
-$$e_i=\max\left(r_i,\max_{j\in\operatorname{pred}(i)}C_j\right)$$
+$$e_ {i}=\max\left(r_ {i},\max_ {j\in\operatorname{pred}(i)}C_ {j}\right)$$
 
-ここで$e_i$は資源を考える前の開始下限、$\operatorname{pred}(i)$は直接の先行集合である。先行がない場合の最大値は0とする。$e_i$以降で、必要な全資源を処理時間の全区間にわたり同時に確保できる最早時刻を探し、その場所へ予約する。
+ここで$e_ {i}$は資源を考える前の開始下限、$\operatorname{pred}(i)$は直接の先行集合である。先行がない場合の最大値は0とする。$e_ {i}$以降で、必要な全資源を処理時間の全区間にわたり同時に確保できる最早時刻を探し、その場所へ予約する。
 
 先に順列へ現れたタスクの予約は、そのdecode中には動かさない。ただし、後から処理した独立タスクを、既に配置したタスクより早い空き区間へ入れることはある。このため、`task_order`と開始時刻順は一致するとは限らない。
 
@@ -2071,13 +2105,13 @@ calendarは、資源ごとに「どの時間帯へ何単位を予約済みか」
 
 ある時刻を含む区間は二分探索する。容量超過なら超過が連続する区間の先へ進み、必要資源を確認し直す。時刻値が非常に大きくても、その全時刻を配列に展開しない。一方、平衡木ではないため、境界を挿入する際の`vector`要素移動や、複数区間の走査費用は発生する。
 
-自動選択では、全タスクの**全モード**の使用一覧を集計する。$L$を資源使用要素の総個数、$u_{i,m}$をそのモードの使用一覧の長さとし、$L>0$のときの平均処理時間を次で求める。
+自動選択では、全タスクの**全モード**の使用一覧を集計する。$L$を資源使用要素の総個数、$u_ {i,m}$をそのモードの使用一覧の長さとし、$L>0$のときの平均処理時間を次で求める。
 
-$$\overline p=\frac{\sum_i\sum_{m\in M_i}p_{i,m}u_{i,m}}{L},\qquad L=\sum_i\sum_{m\in M_i}u_{i,m}$$
+$$\overline p=\frac{\sum_ {i}\sum_ {m\in M_ {i}}p_ {i,m}u_ {i,m}}{L},\qquad L=\sum_ {i}\sum_ {m\in M_ {i}}u_ {i,m}$$
 
 資源数と$L$がともに正で、次の2条件を両方満たす場合にdenseを選び、それ以外はintervalを選ぶ。
 
-$$\overline p\leq14\log_2(N+1),\qquad HR\leq4{,}000{,}000$$
+$$\overline p\leq14\log_ {2}(N+1),\qquad HR\leq4{,}000{,}000$$
 
 使用量`amount`の合計ではなく、使用一覧の要素数で重み付けする点に注意する。選択は呼出し時の問題から1回行い、探索中のモード変更ごとに方式を切り替えない。利用者が方式を強制する公開オプションはない。
 
@@ -2113,13 +2147,13 @@ $$\Pr(\mathrm{accept})=\exp(-\Delta/T)\quad(\Delta>0,\ -\Delta/T>-50)$$
 
 ### 9.9 温度・乱数・停止条件
 
-焼きなまし開始時のSSGS目的値を$f_0$とし、温度は次の値から幾何的に下げる。ここで$T_0$は開始温度、$T_1$は最終温度、$q$は進捗である。
+焼きなまし開始時のSSGS目的値を$f_ {0}$とし、温度は次の値から幾何的に下げる。ここで$T_ {0}$は開始温度、$T_ {1}$は最終温度、$q$は進捗である。
 
-$$T_0=\max(10^{-12},\lvert f_0\rvert\,0.02/N),\qquad T_1=10^{-4}T_0,\qquad T=T_0(T_1/T_0)^q$$
+$$T_ {0}=\max(10^{-12},\lvert f_ {0}\rvert\cdot 0.02/N),\qquad T_ {1}=10^{-4}T_ {0},\qquad T=T_ {0}(T_ {1}/T_ {0})^q$$
 
-進捗$q$は、改善開始からの経過時間の割合と、正の反復上限がある場合の反復進捗の大きい方を$[0,1]$に収める。時間進捗は追加順列の評価時間も含む。目的関数へ大きい定数を足すと解の優劣が同じでも$f_0$の絶対値が変わり、受理温度へ影響する。
+進捗$q$は、改善開始からの経過時間の割合と、正の反復上限がある場合の反復進捗の大きい方を$[0,1]$に収める。時間進捗は追加順列の評価時間も含む。目的関数へ大きい定数を足すと解の優劣が同じでも$f_ {0}$の絶対値が変わり、受理温度へ影響する。
 
-SAでは8提案ごとに時刻を確認し、その確認点のうち反復数が64の倍数の箇所で温度を更新する。相対終了時刻は初期構築後の時刻に`max(0,time_limit_ms)`を足したものであり、絶対`deadline`があれば早い方を使う。反復上限は追加順列の評価数とSAの提案数の合計に適用する。
+SAでは8提案ごとに時刻を確認し、その確認点のうち反復数が64の倍数の箇所で温度を更新する。相対終了時刻は初期構築後の時刻に`max(0,time_limit_ms)`を足したものを、`steady_clock::time_point::max()`以下に収める。絶対`deadline`があれば早い方を使う。反復上限は追加順列の評価数とSAの提案数の合計に適用する。
 
 乱数器は64bit状態を加算し、shift・xor・乗算で混合する方式である。整数選択は乱数と選択肢数の128bit積の上位64bitを使い、実数乱数は上位53bitから$[0,1)$を作る。初期順列用には`seed`と固定定数のxorから作った別の乱数器を使い、SA用には`seed`から作った乱数器を使う。初期化で消費する乱数とSAの乱数列を分けている。
 
@@ -2131,11 +2165,11 @@ seedと反復上限を固定しても、経過時間を冷却に使うため、�
 
 同じ時刻・同じ資源の増減をまとめてから負荷を判定するので、同時刻の終了と開始を半開区間どおりに扱える。時間0の使用はイベントを作らない。外部の不正解の検証中にも安全に集計できるよう、負荷集計は`long long`で行う。
 
-実行時間を単に「タスク数の何乗」とするのは不正確である。$E$を先行辺数、$M$を全モード数、$u_{i,m}$を各モードの使用要素数、$U$を選択モードのうち処理時間が正の使用要素数とすると、主な費用は次のように分かれる。
+実行時間を単に「タスク数の何乗」とするのは不正確である。$E$を先行辺数、$M$を全モード数、$u_ {i,m}$を各モードの使用要素数、$U$を選択モードのうち処理時間が正の使用要素数とすると、主な費用は次のように分かれる。
 
 | 処理 | 主な費用 |
 |---|---|
-| 問題検証とグラフ準備 | 概ね$O(N+E+R+M+\sum_{i,m}u_{i,m}\log(u_{i,m}+1))$。使用一覧の重複検出を含む |
+| 問題検証とグラフ準備 | 概ね$O(N+E+R+M+\sum_ {i,m}u_ {i,m}\log(u_ {i,m}+1))$。使用一覧の重複検出を含む |
 | 優先順列1個の構築 | 概ね$O(E+N\log(N+1))$に、優先度用の選択モードの使用一覧走査を加える |
 | 1候補のdecode | 順列・モードの処理、先行辺の確認、全資源の配置・予約、Evaluator。calendarの走査範囲と区間数に大きく依存する |
 | 組み込み目的値の計算 | $O(N)$ |

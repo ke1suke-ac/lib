@@ -21,6 +21,7 @@
  *   param.cycle = true;
  *   param.symmetric = true;
  *   const long long cost = tsp::solve_tsp(order, dist, param);
+ *   // 統計も出力するならTSPStatsを渡し、std::cerr << stats << '\n';で表示する。
  *
  * 既存解を改善する場合:
  *   const long long cost = tsp::improve_tsp(order, dist, param);
@@ -76,6 +77,23 @@ struct TSPStats {
     double construction_ms = 0.0;
     double search_ms = 0.0;
     double total_ms = 0.0;
+
+    // 探索回数と計測時間を名前付きで出力する。O(1)
+    friend std::ostream& operator<<(std::ostream& os, const TSPStats& stats) {
+        // 探索の進み具合を出力する
+        os << "TSPStats{move_evaluations=" << stats.move_evaluations
+           << ", accepted_moves=" << stats.accepted_moves
+           << ", local_search_runs=" << stats.local_search_runs
+           << ", kicks=" << stats.kicks
+           << ", improved_kicks=" << stats.improved_kicks
+           << ", exact_repairs=" << stats.exact_repairs
+           << ", improved_exact_repairs=" << stats.improved_exact_repairs;
+        // 時間はミリ秒単位で出力し、末尾の改行は呼び出し側に任せる
+        return os << ", candidate_build_ms=" << stats.candidate_build_ms
+                  << ", construction_ms=" << stats.construction_ms
+                  << ", search_ms=" << stats.search_ms
+                  << ", total_ms=" << stats.total_ms << '}';
+    }
 };
 
 struct TSPParam {
@@ -1036,6 +1054,35 @@ auto held_karp_tsp(std::vector<T, Allocator>& order, const F& dist,
 
 #if __INCLUDE_LEVEL__ == 0
 
+// 統計の全フィールド、連結出力、ストリーム状態を検証する
+void test_tsp_debug_output() {
+    static_assert(std::is_aggregate_v<tsp::TSPStats>);
+    const tsp::TSPStats stats{1, 2, 3, 4, 5, 6, 7, 1.25, 2.25, 3.25, 4.25};
+    const std::string expected = "TSPStats{move_evaluations=1, accepted_moves=2, local_search_runs=3, kicks=4, "
+                                 "improved_kicks=5, exact_repairs=6, improved_exact_repairs=7, candidate_build_ms=1.25, "
+                                 "construction_ms=2.25, search_ms=3.25, total_ms=4.25}";
+    std::ostringstream stream;
+    assert(&(stream << stats) == &stream);
+    assert(stream.str() == expected);
+    stream << '\n' << stats;
+    assert(stream.str() == expected + '\n' + expected);
+
+    // 表示形式の変更は呼び出し側に任せ、既存の設定を保つ
+    std::ostringstream formatted;
+    formatted << std::fixed << std::setprecision(3) << std::setfill('_');
+    const auto flags = formatted.flags();
+    const auto precision = formatted.precision();
+    const auto fill = formatted.fill();
+    formatted << stats;
+    assert(formatted.flags() == flags && formatted.precision() == precision && formatted.fill() == fill);
+    assert(formatted.str().find("total_ms=4.250}") != std::string::npos);
+    std::ostringstream empty;
+    empty << tsp::TSPStats{};
+    assert(empty.str().find("move_evaluations=0") != std::string::npos);
+    assert(empty.str().find("total_ms=0}") != std::string::npos);
+}
+
+
 // 大きな有限費用、負辺、評価回数制限を独立した全列挙・再計算で検証する
 void test_tsp_review_regressions() {
     auto check = [](bool ok) { if (!ok) std::abort(); };
@@ -1135,6 +1182,7 @@ void test_tsp_review_regressions() {
 }
 
 int main() {
+    test_tsp_debug_output();
     test_tsp_review_regressions();
     auto require_test = [&](bool condition, std::string_view message) {
         if (condition) return;
