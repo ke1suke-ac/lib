@@ -1,7 +1,7 @@
 #pragma once
 #include <bits/stdc++.h>
 
-// beam_delta_sub_v05.hpp : ターン境界で比較をそろえる sub 探索。cost は小さいほど良い。
+// beam_delta_sub_v12.hpp : ターン境界で比較をそろえる sub 探索。cost は小さいほど良い。
 // W=境界幅、U=sub幅、G=生成数、E=展開数、D=経路長。利用側の処理費用は別途加算。
 namespace bs {
 #if __INCLUDE_LEVEL__ == 0
@@ -24,19 +24,24 @@ inline std::uint64_t mix(std::uint64_t x) noexcept {
     return x ^ (x >> 31);
 }
 inline std::int64_t to_us(double ms) noexcept {
-    if (!(ms > 0)) return 0;
-    const double x = ms * 1000;
-    if (x >= static_cast<double>(INT64_MAX)) return INT64_MAX;
-    return std::max<std::int64_t>(1, static_cast<std::int64_t>(x + 0.5));
+    if (!(ms > 0.0)) return 0;
+    const long double us = static_cast<long double>(ms) * 1000.0L;
+    const auto upper = std::numeric_limits<std::int64_t>::max();
+    if (us >= static_cast<long double>(upper) - 0.5L) return upper;
+    return std::max<std::int64_t>(1, static_cast<std::int64_t>(us + 0.5L));
 }
 #if __INCLUDE_LEVEL__ == 0
 // 単体実行時だけの仮想時計。通常includeでは領域・分岐とも存在しない。
-inline bool virtual_clock = false;
-inline std::int64_t virtual_us = 0;
+struct TestClock {
+    static inline bool enabled = false;
+    static inline std::int64_t value = 0;
+    static inline std::uint64_t calls = 0;
+};
 #endif
 inline std::int64_t now_us() {
 #if __INCLUDE_LEVEL__ == 0
-    if (virtual_clock) return virtual_us;
+    ++TestClock::calls;
+    if (TestClock::enabled) return TestClock::value;
 #endif
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
@@ -58,14 +63,15 @@ private:
     template<class Value> class Engine;
 public:
     enum class Next { Sub, Turn };
-    enum class StopReason { None, Completed, Exhausted, TimeLimit, SweepLimit, NodeLimit, InvalidInitial };
+    enum class StopReason { None, Completed, Exhausted, TimeLimit, SweepLimit, InvalidInitial };
     enum class EventType { RunStart, SubStepEnd, TurnEnd, RunEnd };
     struct Param {
         int max_turn = 0;              // 完了させるターン数。負値は0。
         int beam_width = 1;            // 次ターン開始候補の幅。1以上。
-        int nodes_capacity = 0;       // 0以下は動的増設。正なら構築Node上限。回収後も不足なら停止。
         double time_limit_ms = 0;      // 探索全体のsoft limit。0以下・NaNは無制限。
         int time_check_interval = 64;  // 通常の時計確認間隔。改善時・層境界でも確認。
+        bool continue_on_timeout = true; // 時間切れで解未発見なら救済探索を続ける。
+        bool expand_answers = true; // falseなら有効解を保存のみ行い、探索候補へ登録しない。
         bool max_turn_is_answer = true;
         bool use_hash_dedup = true;    // Hashが明示された候補だけを重複排除。
 
@@ -81,6 +87,8 @@ public:
         std::uint64_t pruned_by_width = 0, pruned_by_hash = 0, replaced_by_hash = 0;
     };
     struct Runtime {
+        std::uint64_t terminal_candidates = 0; // 有効なmax_turn到着候補数。候補プールには入れない。
+        std::uint64_t answer_only_candidates = 0; // expand_answers=falseで除外したmax_turn未満の有効候補数。
         Param param;                  // 正規化した設定。幅等を別項目として重複保持しない。
         int turn = 0;
         std::int64_t sub_step = 0;
@@ -112,7 +120,9 @@ public:
         // 通知を無視する。O(1)。
         void operator()(EventType, const Runtime&) const noexcept {}
     };
+    // LOCAL定義時のみCSVを記録する。未定義時は同じ呼び出し方で使える空実装。
     struct CsvStatHook {
+#ifdef LOCAL
         struct Row { EventType event; Runtime runtime; };
         std::string filename;
         std::int64_t interval_us;
@@ -147,7 +157,6 @@ public:
             case StopReason::Exhausted: return "Exhausted";
             case StopReason::TimeLimit: return "TimeLimit";
             case StopReason::SweepLimit: return "SweepLimit";
-            case StopReason::NodeLimit: return "NodeLimit";
             case StopReason::InvalidInitial: return "InvalidInitial";
             }
             return "";
@@ -168,7 +177,7 @@ public:
             for (const char* s : {"event", "elapsed_ms", "turn", "sub_step", "expanded_nodes",
                  "sub_generated", "sub_accepted", "sub_pruned_by_width", "sub_pruned_by_hash", "sub_replaced_by_hash",
                  "turn_generated", "turn_accepted", "turn_pruned_by_width", "turn_pruned_by_hash", "turn_replaced_by_hash",
-                 "invalid_candidates", "frontier_remaining", "sub_candidate_count", "next_turn_candidate_count",
+                 "invalid_candidates", "terminal_candidates", "answer_only_candidates", "frontier_remaining", "sub_candidate_count", "next_turn_candidate_count",
                  "peak_pending_candidates", "sub_best_cost", "sub_worst_cost", "next_turn_best_cost", "next_turn_worst_cost",
                  "found", "best_cost", "best_turn", "best_sub_step", "best_depth", "best_update_count",
                  "first_solution_ms", "last_best_update_ms", "time_limit_reached",
@@ -176,7 +185,7 @@ public:
                  "expanded_after_timeout",
                  "timeout_turn_advances", "used_nodes", "reserved_nodes", "move_forward_count", "move_backward_count",
                  "stop_reason", "completed_max_turn", "max_turn", "beam_width", "sub_beam_width",
-                 "time_limit_ms", "use_turn_time_limit", "time_check_interval", "max_turn_is_answer", "use_hash_dedup", "nodes_capacity"}) cell(s);
+                 "time_limit_ms", "use_turn_time_limit", "time_check_interval", "continue_on_timeout", "expand_answers", "max_turn_is_answer", "use_hash_dedup"}) cell(s);
             end();
             for (const auto& row : rows) {
                 const auto& r = row.runtime;
@@ -186,7 +195,7 @@ public:
                     cell(s.pruned_by_hash); cell(s.replaced_by_hash);
                 };
                 cell(event_name(row.event)); cell(static_cast<double>(r.elapsed_us) / 1000.0); cell(r.turn); cell(r.sub_step);
-                cell(r.expanded_nodes); stats(r.sub_stats); stats(r.turn_stats); cell(r.invalid_candidates);
+                cell(r.expanded_nodes); stats(r.sub_stats); stats(r.turn_stats); cell(r.invalid_candidates); cell(r.terminal_candidates); cell(r.answer_only_candidates);
                 cell(r.frontier_remaining); cell(r.sub_candidate_count); cell(r.next_turn_candidate_count);
                 cell(r.peak_pending_candidates);
                 opt(r.sub_candidate_count != 0, r.sub_best_cost); opt(r.sub_candidate_count != 0, r.sub_worst_cost);
@@ -196,10 +205,11 @@ public:
                 opt(r.first_solution_us >= 0, static_cast<double>(r.first_solution_us) / 1000.0);
                 opt(r.last_best_update_us >= 0, static_cast<double>(r.last_best_update_us) / 1000.0);
                 cell(r.time_limit_reached);
-                cell(r.turn_start_us < 0 ? -1.0 : r.turn_start_us * 0.001);
-                cell(r.turn_deadline_us < 0 ? -1.0 : r.turn_deadline_us * 0.001);
-                cell(r.turn_deadline_us < 0 ? -1.0 : (r.turn_deadline_us - r.turn_start_us) * 0.001);
-                cell(r.turn_elapsed_us * 0.001); cell(r.turn_time_limit_reached);
+                auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
+                cell(r.turn_start_us < 0 ? -1.0 : ms(r.turn_start_us));
+                cell(r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us));
+                cell(r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us - r.turn_start_us));
+                cell(ms(r.turn_elapsed_us)); cell(r.turn_time_limit_reached);
                 cell(r.expanded_after_timeout); cell(r.timeout_turn_advances);
                 cell(r.used_nodes); cell(r.reserved_nodes); cell(r.move_forward_count); cell(r.move_backward_count);
                 cell(reason_name(r.stop_reason)); cell(r.completed_max_turn);
@@ -207,13 +217,16 @@ public:
                 const auto& p = r.param;
                 opt(start, p.max_turn); opt(start, p.beam_width); opt(start, p.sub_beam_width);
                 opt(start, p.time_limit_ms); opt(start, p.use_turn_time_limit); opt(start, p.time_check_interval);
-                opt(start, p.max_turn_is_answer); opt(start, p.use_hash_dedup);
-                opt(start, p.nodes_capacity);
+                opt(start, p.continue_on_timeout); opt(start, p.expand_answers); opt(start, p.max_turn_is_answer); opt(start, p.use_hash_dedup);
                 end();
             }
             out.flush();
             if (!out) throw std::runtime_error("CSV write failed: " + filename);
         }
+#else
+        explicit CsvStatHook(std::string = "beam_stat.csv", double = 50) {}
+        void operator()(EventType, const Runtime&) {}
+#endif
     };
     template<class Value> struct Result {
         bool found = false, time_limit_reached = false, completed_max_turn = false;
@@ -226,15 +239,15 @@ public:
     };
     template<class Value> class Emitter {
     public:
-        // 候補を追加する。期待償却O(log(2+幅)+保存費用)。trueは候補または最良解への一時保存。
+        // 候補を追加する。期待償却O(log(2+幅)+保存費用)。trueは探索候補への一時保存。最良解だけ保存した場合はfalse。
         template<class U> requires ActionArg<U, Value>
         bool push(U&& value, Cost cost, Next next = Next::Turn) {
             return push_value(std::forward<U>(value), cost, hash_, false, false, next);
         }
-        // 有効解の印を指定する。同じ計算量。finishedは展開停止の指定ではない。
+        // 有効解の印を指定する。同じ計算量。expand_answers=falseなら保存だけを行い、展開対象へ登録しない。
         template<class U, class B> requires ActionArg<U, Value> && BoolArg<B>
-        bool push(U&& value, Cost cost, B finished, Next next = Next::Turn) {
-            return push_value(std::forward<U>(value), cost, hash_, false, finished, next);
+        bool push(U&& value, Cost cost, B is_answer, Next next = Next::Turn) {
+            return push_value(std::forward<U>(value), cost, hash_, false, is_answer, next);
         }
         // Hashを明示する。同じ計算量。同じ保存先内だけで重複排除する。
         template<class U, class H> requires ActionArg<U, Value> && CompatibleHashArg<H, Hash>
@@ -243,8 +256,8 @@ public:
         }
         // Hashと有効解の印を指定する。同じ計算量。
         template<class U, class H, class B> requires ActionArg<U, Value> && CompatibleHashArg<H, Hash> && BoolArg<B>
-        bool push(U&& value, Cost cost, H hash, B finished, Next next = Next::Turn) {
-            return push_value(std::forward<U>(value), cost, static_cast<Hash>(hash), true, finished, next);
+        bool push(U&& value, Cost cost, H hash, B is_answer, Next next = Next::Turn) {
+            return push_value(std::forward<U>(value), cost, static_cast<Hash>(hash), true, is_answer, next);
         }
 
     private:
@@ -253,34 +266,35 @@ public:
         Hash hash_;
         Emitter(Engine<Value>& engine, Hash hash) : engine_(engine), hash_(hash) {}
         template<class U>
-        bool push_value(U&& value, Cost cost, Hash hash, bool has_hash, bool finished, Next next) {
+        bool push_value(U&& value, Cost cost, Hash hash, bool has_hash, bool is_answer, Next next) {
             auto maker = [&]() -> decltype(auto) { return std::forward<U>(value); };
-            return engine_.push_candidate(cost, hash, has_hash, finished, next, maker);
+            return engine_.push_candidate(cost, hash, has_hash, is_answer, next, maker);
         }
     };
 private:
-    // 削除のないepoch表。stale登録で満杯になった場合だけ生存候補から再構築する。
+    // 削除のないepoch表。stale登録が増えたら空きが十分あるうちに生存候補から再構築する。
     class FixedHashMap {
         std::vector<Hash> keys_;
         std::vector<int> values_;
         std::vector<std::uint32_t> epochs_;
         std::uint32_t epoch_ = 1;
-        std::size_t mask_ = 0;
+        std::size_t mask_ = 0, occupied_ = 0;
     public:
         struct Hit { bool found; std::size_t slot; };
         static constexpr std::size_t absent = std::numeric_limits<std::size_t>::max();
         void init(int width) {
             const auto n = std::bit_ceil(static_cast<std::size_t>(width) * 4 + 17);
-            mask_ = n - 1;
+            mask_ = n - 1; occupied_ = 0;
             keys_.resize(n); values_.resize(n); epochs_.assign(n, 0);
         }
         void clear() {
+            occupied_ = 0;
             if (++epoch_ == 0) { std::fill(epochs_.begin(), epochs_.end(), 0); epoch_ = 1; }
         }
         Hit lookup(Hash h) const {
             auto p = static_cast<std::size_t>(sub_detail::mix(h)) & mask_;
             for (std::size_t i = 0; i <= mask_; ++i, p = (p + 1) & mask_) {
-                if (epochs_[p] != epoch_) return {false, p};
+                if (epochs_[p] != epoch_) return {false, occupied_ >= (mask_ + 1) - (mask_ + 1) / 4 ? absent : p};
                 if (keys_[p] == h) return {true, p};
             }
             return {false, absent};
@@ -288,6 +302,7 @@ private:
         int get(std::size_t p) const { return values_[p]; }
         void set(std::size_t p, Hash h, int slot) {
             assert(p != absent);
+            occupied_ += epochs_[p] != epoch_;
             keys_[p] = h; values_[p] = slot; epochs_[p] = epoch_;
         }
     };
@@ -381,6 +396,14 @@ private:
         }
     };
     template<class Value> class Engine {
+        // 空の組み込みHookでは、通知用の集計・時計取得も行わない。
+        template<class Hook>
+        static constexpr bool has_debug_hook =
+            !std::same_as<std::remove_cvref_t<Hook>, NoOp>
+#ifndef LOCAL
+            && !std::same_as<std::remove_cvref_t<Hook>, CsvStatHook>
+#endif
+            ;
         friend class Emitter<Value>;
 #if __INCLUDE_LEVEL__ == 0
         friend struct SubTestAccess;
@@ -399,7 +422,6 @@ private:
             p.sub_beam_width = p.sub_beam_width <= 0 ? p.beam_width : p.sub_beam_width;
             p.time_check_interval = std::max(1, p.time_check_interval);
             if (!(p.time_limit_ms > 0)) p.time_limit_ms = 0;
-            p.nodes_capacity = std::max(0, p.nodes_capacity);
             return p;
         }
         void tick(bool force = false) {
@@ -452,7 +474,7 @@ private:
             }
         }
         template<class Hook> void notify(EventType event, Hook& hook) {
-            if constexpr (!std::same_as<std::remove_cvref_t<Hook>, NoOp>) {
+            if constexpr (has_debug_hook<Hook>) {
                 snapshot();
                 hook(event, static_cast<const Runtime&>(rt_));
                 tick();
@@ -466,11 +488,11 @@ private:
                 ++rt_.invalid_candidates; return false;
             }
             to.turn = from_.turn + (next == Next::Turn);
-            if (to.turn == rt_.param.max_turn) rt_.completed_max_turn = true;
+            if (to.turn == rt_.param.max_turn) { rt_.completed_max_turn = true; ++rt_.terminal_candidates; }
             return true;
         }
-        bool improves(Cost cost, bool finished, const Position& to) const {
-            return (finished || (to.turn == rt_.param.max_turn && rt_.param.max_turn_is_answer)) &&
+        bool improves(Cost cost, bool is_answer, const Position& to) const {
+            return (is_answer || (to.turn == rt_.param.max_turn && rt_.param.max_turn_is_answer)) &&
                 (!rt_.found || cost < rt_.best_cost);
         }
         void result_metadata(Result<Value>& result) {
@@ -499,6 +521,7 @@ private:
         std::optional<Item> best_tail_;
         std::vector<std::size_t> order_;
         std::size_t reclaim_at_ = 4096;
+        std::size_t ordering_root_ = 0; // 現turnの開始候補すべての共通祖先。整列の走査下限。
         // 現在地・候補・最良解から到達できる祖先だけを残す。ノード番号の順序を保つ。
         void collect_nodes() {
             const auto absent = std::numeric_limits<std::size_t>::max();
@@ -522,6 +545,7 @@ private:
                 nodes_[kept++].parent = buckets_[parent];
             }
             active_node_ = buckets_[active_node_];
+            ordering_root_ = buckets_[ordering_root_];
             for (auto* pool : {sub_.get(), next_.get()})
                 if (pool) for (auto& item : pool->items) item.parent = buckets_[item.parent];
             if (best_tail_) best_tail_->parent = buckets_[best_tail_->parent];
@@ -530,6 +554,11 @@ private:
         }
         bool sub_empty() const { return !sub_ || sub_->empty(); }
         bool next_exists() const { return rt_.completed_max_turn || (next_ && !next_->empty()); }
+        bool stop_on_timeout() {
+            if (!rt_.time_limit_reached || (rt_.param.continue_on_timeout && !rt_.found)) return false;
+            rt_.stop_reason = StopReason::TimeLimit;
+            return true;
+        }
         void peak() {
             const std::size_t n = rt_.frontier_remaining + (sub_ ? sub_->items.size() : 0) + (next_ ? next_->items.size() : 0);
             rt_.peak_pending_candidates = std::max(rt_.peak_pending_candidates, n);
@@ -542,29 +571,77 @@ private:
             rt_.used_nodes = nodes_.size(); rt_.reserved_nodes = nodes_.capacity();
         }
         template<class Maker>
-        bool push_candidate(Cost cost, Hash hash, bool has_hash, bool finished, Next next, Maker&& maker) {
+        bool push_candidate(Cost cost, Hash hash, bool has_hash, bool is_answer, Next next, Maker&& maker) {
             Position to;
             CandidateStats* stats = nullptr;
             if (!destination(next, cost, to, stats)) return false;
-            const bool best = improves(cost, finished, to);
-            if (next == Next::Sub && !sub_) sub_ = std::make_unique<Pool>(rt_.param.sub_beam_width, rt_.param.use_hash_dedup);
-            Pool* pool = next == Next::Sub ? sub_.get() : next_.get();
+            const bool best = improves(cost, is_answer, to);
+            Pool* pool = nullptr;
             typename Pool::Choice choice;
-            if (to.turn < rt_.param.max_turn) choice = pool->choose(cost, hash, has_hash, *stats);
+            if (to.turn < rt_.param.max_turn) {
+                if (!rt_.param.expand_answers && is_answer) ++rt_.answer_only_candidates;
+                else {
+                    if (next == Next::Sub && !sub_) sub_ = std::make_unique<Pool>(rt_.param.sub_beam_width, rt_.param.use_hash_dedup);
+                    pool = next == Next::Sub ? sub_.get() : next_.get();
+                    choice = pool->choose(cost, hash, has_hash, *stats);
+                }
+            }
             if (!best && choice.slot < 0) return false;
             to.sub_step = next == Next::Sub ? from_.sub_step + 1 : 0;
             to.depth = from_.depth + 1;
+            // 最良解だけならActionを直接保存し、候補用のコピーを省く
+            if (choice.slot < 0) {
+                best_tail_.emplace(Item{cost, hash, to, has_hash, active_node_, Value(std::invoke(std::forward<Maker>(maker)))});
+                best_metadata(cost, to);
+                return false;
+            }
             Value made(std::invoke(std::forward<Maker>(maker)));
             if (best) { best_tail_.emplace(Item{cost, hash, to, has_hash, active_node_, made}); best_metadata(cost, to); }
-            if (choice.slot >= 0) {
-                const bool added = choice.slot == pool->size();
-                pool->put(choice, Item{cost, hash, to, has_hash, active_node_, std::move(made)}, *stats);
-                if (added) peak();
-            }
+            const bool added = choice.slot == pool->size();
+            pool->put(choice, Item{cost, hash, to, has_hash, active_node_, std::move(made)}, *stats);
+            if (added) peak();
             return true;
         }
         const Item& item_at(std::size_t i) const { return nodes_[frontier_first_ + i]; }
-        bool materialize(Pool& pool, bool by_parent) {
+        void order_mixed_parents(const Pool& pool) {
+            // 深さが異なる親も同じ部分木ごとに並べる。親の列を比較のたびにたどらない。
+            // 全候補の共通祖先より前は順序に影響しない。長い確定prefixの再走査を避ける。
+            const auto first = ordering_root_;
+            const auto count = nodes_.size() - first + 1, absent = std::numeric_limits<std::size_t>::max();
+            auto parent_of = [&](std::size_t i) {
+                const auto v = first + i - 1, parent = nodes_[v].parent;
+                return parent < v && parent >= first ? parent - first + 1 : std::size_t{0};
+            };
+            // 0は複数の根を束ねる仮想根。実ノードは1以降へ対応させる。
+            buckets_.assign(count * 2, absent);
+            for (auto i = count; --i > 0;) {
+                const auto parent = parent_of(i);
+                buckets_[count + i] = buckets_[parent];
+                buckets_[parent] = i;
+            }
+            std::size_t rank = 0, node = 0;
+            for (;;) {
+                const auto child = buckets_[node];
+                buckets_[node] = rank++;
+                if (child != absent) node = child;
+                else {
+                    while (node != 0 && buckets_[count + node] == absent) node = parent_of(node);
+                    if (node == 0) break;
+                    node = buckets_[count + node];
+                }
+            }
+            std::iota(order_.begin(), order_.end(), std::size_t{0});
+            std::stable_sort(order_.begin(), order_.end(), [&](auto a, auto b) {
+                return buckets_[pool.items[a].parent - first + 1] < buckets_[pool.items[b].parent - first + 1];
+            });
+            // DFS順で最初と最後の親のLCAは、全親のLCAと一致する。
+            auto a = pool.items[order_.front()].parent, b = pool.items[order_.back()].parent;
+            while (nodes_[a].pos.depth > nodes_[b].pos.depth) a = nodes_[a].parent;
+            while (nodes_[b].pos.depth > nodes_[a].pos.depth) b = nodes_[b].parent;
+            while (a != b) { a = nodes_[a].parent; b = nodes_[b].parent; }
+            ordering_root_ = a;
+        }
+        void materialize(Pool& pool, bool by_parent) {
             const std::size_t n = pool.items.size();
             order_.resize(n);
             if (by_parent || std::all_of(pool.items.begin(), pool.items.end(),
@@ -575,44 +652,16 @@ private:
                 std::partial_sum(buckets_.begin(), buckets_.end(), buckets_.begin());
                 for (std::size_t i = 0; i < n; ++i) order_[buckets_[pool.items[i].parent - frontier_first_]++] = i;
             }
-            else {
-                // 深さが異なる親も同じ部分木ごとに並べる。親の列を比較のたびにたどらない。
-                const auto count = nodes_.size(), absent = std::numeric_limits<std::size_t>::max();
-                buckets_.assign(count * 2, absent);
-                for (auto i = count; --i > 0;) {
-                    const auto parent = nodes_[i].parent;
-                    buckets_[count + i] = buckets_[parent];
-                    buckets_[parent] = i;
-                }
-                std::size_t rank = 0, node = 0;
-                for (;;) {
-                    const auto child = buckets_[node];
-                    buckets_[node] = rank++;
-                    if (child != absent) node = child;
-                    else {
-                        while (node != 0 && buckets_[count + node] == absent) node = nodes_[node].parent;
-                        if (node == 0) break;
-                        node = buckets_[count + node];
-                    }
-                }
-                std::iota(order_.begin(), order_.end(), std::size_t{0});
-                std::stable_sort(order_.begin(), order_.end(), [&](auto a, auto b) {
-                    return buckets_[pool.items[a].parent] < buckets_[pool.items[b].parent];
-                });
-            }
-            if (nodes_.size() >= reclaim_at_ || (rt_.param.nodes_capacity > 0 &&
-                    n > static_cast<std::size_t>(rt_.param.nodes_capacity) - nodes_.size())) collect_nodes();
+            else order_mixed_parents(pool);
+            if (nodes_.size() >= reclaim_at_) collect_nodes();
             frontier_size_ = 0; frontier_first_ = nodes_.size();
             for (auto i : order_) {
-                if (rt_.param.nodes_capacity > 0 && nodes_.size() >= static_cast<std::size_t>(rt_.param.nodes_capacity)) {
-                    rt_.stop_reason = StopReason::NodeLimit; pool.clear();
-                    rt_.frontier_remaining = frontier_size_; peak(); return false;
-                }
                 nodes_.push_back(std::move(pool.items[i])); ++frontier_size_;
             }
+            if (!by_parent && n == 1) ordering_root_ = frontier_first_;
             pool.clear(); rt_.frontier_remaining = frontier_size_;
             rt_.turn = item_at(0).pos.turn; rt_.sub_step = item_at(0).pos.sub_step;
-            peak(); return true;
+            peak();
         }
         template<class Forward, class Backward>
         void move_to(std::size_t target, Forward& forward, Backward& backward) {
@@ -646,11 +695,11 @@ private:
             append(*best_tail_);
         }
     public:
-        Engine(const Param& param, Cost cost, Hash hash) {
+        Engine(const Param& param, Cost cost, Hash hash, bool has_hash) {
             static_assert(std::default_initializable<Value>, "Action must have a default constructor for the root");
             rt_.param = normalize(param); limit_us_ = sub_detail::to_us(rt_.param.time_limit_ms);
             if (!sub_detail::valid(cost)) { rt_.stop_reason = StopReason::InvalidInitial; return; }
-            nodes_.push_back({cost, hash, {}, true, 0, Value{}});
+            nodes_.push_back({cost, hash, {}, has_hash, 0, Value{}});
             if (rt_.param.max_turn == 0) {
                 rt_.completed_max_turn = true; rt_.stop_reason = StopReason::Completed;
                 if (rt_.param.max_turn_is_answer) best_metadata(cost, {});
@@ -661,7 +710,7 @@ private:
         }
         template<class Expand, class Forward, class Backward, class Hook>
         Result<Value> run(Expand&& expand, Forward&& forward, Backward&& backward, Hook&& hook) {
-            observe_time_ = !std::same_as<std::remove_cvref_t<Hook>, NoOp> ||
+            observe_time_ = has_debug_hook<Hook> ||
                 std::is_invocable_v<Expand&, const NodeView&, const Runtime&, Emitter<Value>&>;
             tick(true);
             if (rt_.found) stamp_best();
@@ -670,11 +719,13 @@ private:
                 begin_turn_time();
                 for (;;) {
                     tick();
+                    if (stop_on_timeout()) break;
                     const std::size_t n = frontier_size_;
                     rt_.frontier_remaining = n;
                     bool ordered = false;
                     std::size_t i = 0;
                     for (; i < n; ++i) {
+                        if (stop_on_timeout()) break;
                         if ((rt_.time_limit_reached || rt_.turn_time_limit_reached) && next_exists()) break;
                         if (rt_.time_limit_reached && !ordered) {
                             order_.resize(n);
@@ -696,25 +747,23 @@ private:
                         after_expand(old_best, was_expired);
                     }
                     tick();
+                    if (stop_on_timeout()) break;
                     if (i == n) notify(EventType::SubStepEnd, hook);
                     if ((rt_.time_limit_reached || rt_.turn_time_limit_reached) && next_exists()) {
                         if (rt_.time_limit_reached && (rt_.frontier_remaining != 0 || !sub_empty())) ++rt_.timeout_turn_advances;
                         break;
                     }
                     if (sub_empty()) break;
-                    if (!materialize(*sub_, true)) break;
-                }
-                if (rt_.stop_reason != StopReason::None) {
-                    tick(); turn_timing_active_ = false;
-                    break;
+                    materialize(*sub_, true);
                 }
                 turn_timing_active_ = false;
+                if (rt_.stop_reason != StopReason::None) break;
                 notify(EventType::TurnEnd, hook);
                 if (rt_.completed_max_turn) rt_.stop_reason = StopReason::Completed;
                 else if (next_->empty()) rt_.stop_reason = StopReason::Exhausted;
                 else {
                     if (sub_) sub_->clear();
-                    if (!materialize(*next_, false)) break;
+                    materialize(*next_, false);
                 }
             }
             Result<Value> result;
@@ -734,10 +783,21 @@ public:
     static Result<Action> run(const Param& param, Cost initial_cost, H initial_hash, Expand&& expand,
                               MoveForward&& move_forward, MoveBackward&& move_backward,
                               DebugHook&& debug_hook = DebugHook{}) {
-        Engine<Action> engine(param, initial_cost, static_cast<Hash>(initial_hash));
+        Engine<Action> engine(param, initial_cost, static_cast<Hash>(initial_hash), true);
         return engine.run(std::forward<Expand>(expand), std::forward<MoveForward>(move_forward),
                           std::forward<MoveBackward>(move_backward), std::forward<DebugHook>(debug_hook));
     }
+    // 初期Hashの省略形。生成候補の重複排除はHash付きpushで指定する。
+    template<class Action, class Expand, class MoveForward, class MoveBackward, class DebugHook = NoOp>
+    requires (!CompatibleHashArg<Expand, Hash>)
+    static Result<Action> run(const Param& param, Cost initial_cost, Expand&& expand,
+                              MoveForward&& move_forward, MoveBackward&& move_backward,
+                              DebugHook&& debug_hook = DebugHook{}) {
+        Engine<Action> engine(param, initial_cost, Hash{}, false);
+        return engine.run(std::forward<Expand>(expand), std::forward<MoveForward>(move_forward),
+                          std::forward<MoveBackward>(move_backward), std::forward<DebugHook>(debug_hook));
+    }
+
 };
 } // namespace bs
 
@@ -758,7 +818,7 @@ struct Rng {
     int pick(int n) { return static_cast<int>(next() % static_cast<unsigned>(n)); }
 };
 struct Edge {
-    int to; long long cost; bool turn = false, finished = false, hashed = true;
+    int to; long long cost; bool turn = false, is_answer = false, hashed = true;
     std::uint64_t hash = 0;
     std::int64_t maker_us = 0;
 };
@@ -767,8 +827,8 @@ struct Graph {
     std::vector<std::int64_t> expand_us;
     std::int64_t hook_start_us = 0, hook_step_us = 0, hook_end_us = 0;
     explicit Graph(int n) : edges(static_cast<std::size_t>(n)), expand_us(static_cast<std::size_t>(n)) {}
-    void add(int from, int to, long long cost, bool turn = false, bool finished = false, bool hashed = true, std::uint64_t hash = UINT64_MAX) {
-        edges[from].push_back({to, cost, turn, finished, hashed, hash == UINT64_MAX ? static_cast<std::uint64_t>(to) : hash, 0});
+    void add(int from, int to, long long cost, bool turn = false, bool is_answer = false, bool hashed = true, std::uint64_t hash = UINT64_MAX) {
+        edges[from].push_back({to, cost, turn, is_answer, hashed, hash == UINT64_MAX ? static_cast<std::uint64_t>(to) : hash, 0});
     }
 };
 struct State { int id = 0; std::vector<int> path; };
@@ -904,12 +964,14 @@ struct Reference {
             child.cost=e.cost;child.hash=e.hashed?e.hash:parent.hash;child.hashed=e.hashed;
             child.turn+=e.turn;child.sub=e.turn?0:parent.sub+1;++child.depth;
             const bool end=child.turn==p.max_turn;
-            if(end){terminal=true;out.rt.completed_max_turn=true;}
-            const bool best=(e.finished||(end&&p.max_turn_is_answer))&&(!out.rt.found||child.cost<out.rt.best_cost);
+            if(end){terminal=true;out.rt.completed_max_turn=true;++out.rt.terminal_candidates;}
+            const bool best=(e.is_answer||(end&&p.max_turn_is_answer))&&(!out.rt.found||child.cost<out.rt.best_cost);
             auto& pool=e.turn?target:sub;
-            auto choice=end?std::pair{-1,false}:pool.choose(child,s);
+            const bool answer_only=e.is_answer&&!p.expand_answers&&!end;
+            if(answer_only)++out.rt.answer_only_candidates;
+            auto choice=(end||answer_only)?std::pair{-1,false}:pool.choose(child,s);
             const bool accepted=best||choice.first>=0;
-            out.pushes.push_back(accepted);
+            out.pushes.push_back(choice.first>=0);
             if(!accepted)continue;
             ++out.makers; clock+=e.maker_us;
             if(best)save(child);
@@ -929,7 +991,7 @@ struct Reference {
             std::stable_sort(frontier.begin(),frontier.end(),[&](const auto&a,const auto&b){
                 return recent?a.node_path.back()<b.node_path.back():a.node_path<b.node_path;
             });
-            if(nodes>=reclaim_at || (p.nodes_capacity>0 && frontier.size()>static_cast<std::size_t>(p.nodes_capacity)-nodes)) {
+            if(nodes>=reclaim_at) {
                 std::set<std::size_t> live(previous_nodes.begin(),previous_nodes.end());
                 live.insert(best_nodes.begin(),best_nodes.end());
                 for(const auto& n:frontier)live.insert(n.node_path.begin(),n.node_path.end());
@@ -938,28 +1000,28 @@ struct Reference {
                 nodes=live.size();reclaim_at=std::max<std::size_t>(4096,nodes*2);
             }
             for(std::size_t i=0;i<frontier.size();++i){
-                if(p.nodes_capacity>0&&nodes>=static_cast<std::size_t>(p.nodes_capacity)){out.rt.stop_reason=Reason::NodeLimit;return false;}
                 ++nodes;frontier[i].node_path.push_back(node_serial++);
             }
         }
         out.rt.turn=frontier[0].turn;out.rt.sub_step=frontier[0].sub;return true;
     }
     bool stop_timed() {
-        if(out.rt.time_limit_reached&&out.rt.found){out.rt.stop_reason=Reason::TimeLimit;return true;}return false;
+        if(out.rt.time_limit_reached&&(!p.continue_on_timeout||out.rt.found)){out.rt.stop_reason=Reason::TimeLimit;return true;}return false;
     }
     void beam() {
         while(out.rt.stop_reason==Reason::None){
             terminal=false;
             for(;;){
-                tick();
+                tick();if(stop_timed())return;
                 std::vector<std::size_t> indices(frontier.size());std::iota(indices.begin(),indices.end(),std::size_t{0});
                 bool sorted=false;std::size_t i=0;
                 for(;i<indices.size();++i){
+                    if(stop_timed())return;
                     if(out.rt.time_limit_reached&&(next.count||terminal))break;
                     if(out.rt.time_limit_reached&&!sorted){std::stable_sort(indices.begin()+static_cast<std::ptrdiff_t>(i),indices.end(),[&](auto a,auto b){return frontier[a].cost<frontier[b].cost;});sorted=true;}
                     expand(frontier[indices[i]],indices[i],next);
                 }
-                tick();if(i==indices.size())event(Event::SubStepEnd);
+                tick();if(stop_timed())return;if(i==indices.size())event(Event::SubStepEnd);
                 if(out.rt.time_limit_reached&&(next.count||terminal)){
                     if(i<indices.size()||sub.count)++out.rt.timeout_turn_advances;
                     break;
@@ -988,7 +1050,7 @@ struct Reference {
 };
 
 Outcome actual(const B::Param& p,const Graph& graph) {
-    bs::sub_detail::virtual_clock=true;bs::sub_detail::virtual_us=0;
+    bs::sub_detail::TestClock::enabled=true;bs::sub_detail::TestClock::value=0;
     Outcome out;
     State world;
     std::vector<int> payload{17,31,43};
@@ -1013,9 +1075,9 @@ Outcome actual(const B::Param& p,const Graph& graph) {
         require(r.next_turn_candidate_count<=static_cast<std::size_t>(r.param.beam_width),"Turn width");
         if(r.sub_candidate_count)require(r.sub_best_cost<=r.sub_worst_cost,"Sub cost range");
         if(r.next_turn_candidate_count)require(r.next_turn_best_cost<=r.next_turn_worst_cost,"Turn cost range");
-        if(e==Event::RunStart)bs::sub_detail::virtual_us+=graph.hook_start_us;
-        if(e==Event::SubStepEnd)bs::sub_detail::virtual_us+=graph.hook_step_us;
-        if(e==Event::RunEnd)bs::sub_detail::virtual_us+=graph.hook_end_us;
+        if(e==Event::RunStart)bs::sub_detail::TestClock::value+=graph.hook_start_us;
+        if(e==Event::SubStepEnd)bs::sub_detail::TestClock::value+=graph.hook_step_us;
+        if(e==Event::RunEnd)bs::sub_detail::TestClock::value+=graph.hook_end_us;
     };
     auto expand=[&](const auto& now,const B::Runtime& rt,auto& emit){
         const State& state=[&]() -> const State& {
@@ -1029,13 +1091,14 @@ Outcome actual(const B::Param& p,const Graph& graph) {
         for(int j=0;j<static_cast<int>(edges.size());++j){
             const auto& e=edges[j];const auto next=e.turn?Next::Turn:Next::Sub;
             bool accepted=false;
+            const auto before_updates=rt.best_update_count;
             Action a{state.id,e.to,state.id*1000+j,e.turn};
-            if(e.hashed)accepted=emit.push(a,e.cost,e.hash,e.finished,next);
-            else accepted=emit.push(a,e.cost,e.finished,next);
-            if(accepted){++out.makers;bs::sub_detail::virtual_us+=e.maker_us;}
+            if(e.hashed)accepted=emit.push(a,e.cost,e.hash,e.is_answer,next);
+            else accepted=emit.push(a,e.cost,e.is_answer,next);
+            if(accepted||rt.best_update_count!=before_updates){++out.makers;bs::sub_detail::TestClock::value+=e.maker_us;}
             out.pushes.push_back(accepted);
         }
-        bs::sub_detail::virtual_us+=graph.expand_us[state.id];
+        bs::sub_detail::TestClock::value+=graph.expand_us[state.id];
     };
     auto result=B::run<Action>(p,0,0ULL,expand,forward,backward,hook);
     require(world.id==0&&world.path.empty()&&undo.empty()&&payload==std::vector<int>({17,31,43})&&checksum==19,"root restore");
@@ -1048,7 +1111,7 @@ Outcome actual(const B::Param& p,const Graph& graph) {
     require(out.forward==result.runtime.move_forward_count&&out.backward==result.runtime.move_backward_count,"move counters");
     out.rt=result.runtime;
     require(result.found==out.rt.found&&result.time_limit_reached==out.rt.time_limit_reached,"result snapshot");
-    bs::sub_detail::virtual_clock=false;
+    bs::sub_detail::TestClock::enabled=false;
     return out;
 }
 inline bool stats_equal(const B::CandidateStats&a,const B::CandidateStats&b){
@@ -1067,6 +1130,7 @@ Outcome check(const B::Param& p,const Graph& graph,const std::string& name){
         require(a.expanded_nodes==b.expanded_nodes&&a.expanded_after_timeout==b.expanded_after_timeout&&a.timeout_turn_advances==b.timeout_turn_advances,"expansion counters");
         require(a.best_update_count==b.best_update_count&&(!a.found||std::tie(a.best_cost,a.best_turn,a.best_sub_step,a.best_depth)==std::tie(b.best_cost,b.best_turn,b.best_sub_step,b.best_depth)),"best metadata");
         require(a.first_solution_us==b.first_solution_us&&a.last_best_update_us==b.last_best_update_us,"solution timestamps");
+        require(a.answer_only_candidates==b.answer_only_candidates,"answer-only counter");
         require(stats_equal(a.sub_stats,b.sub_stats)&&stats_equal(a.turn_stats,b.turn_stats),"selection counters");
         require(got.events==expected.events,"event sequence");
         require(got.forward==expected.forward&&got.backward==expected.backward,"LCA move distance");
@@ -1088,7 +1152,7 @@ Graph random_graph(std::uint64_t seed,int turns,int states=5,int levels=4){
     }
     return g;
 }
-template<class P>void choku_settings(P&p,int width,std::int64_t sweeps){if constexpr(requires{p.chokudai_width;p.max_sweeps;}){p.chokudai_width=width;p.max_sweeps=sweeps;}}
+template<class P>void choku_settings(P&p,int width,std::int64_t sweeps){if constexpr(requires{p.sweep_width;p.max_sweeps;}){p.sweep_width=width;p.max_sweeps=sweeps;}}
 
 void basic_cases(){
     B::Param p;p.max_turn=2;p.beam_width=2;p.sub_beam_width=2;
@@ -1118,16 +1182,15 @@ void basic_cases(){
     r=check(p,none,"F20 terminal is not answer");require(r.rt.completed_max_turn&&!r.rt.found,"no fabricated answer");
     none.hook_end_us=1000;p.time_limit_ms=0.01;check(p,none,"T15 RunEnd excluded");
     p.max_turn=2;p.max_turn_is_answer=true;p.time_limit_ms=0;
-    for(int cap:{1,2,3,4,7,100}){p.nodes_capacity=cap;check(p,g,"D06 node budget");}
 }
 void random_cases(int count){
     for(int seed=0;seed<count;++seed){
         Rng rng{static_cast<std::uint64_t>(seed)+101};B::Param p;
         p.max_turn=rng.pick(7);p.beam_width=1+rng.pick(12);p.sub_beam_width=1+rng.pick(12);
         p.max_turn_is_answer=rng.pick(4)!=0;p.use_hash_dedup=rng.pick(5)!=0;
+        p.continue_on_timeout=seed%4!=0;p.expand_answers=seed%5!=0;
         p.time_check_interval=1+rng.pick(8);choku_settings(p,1+rng.pick(6),rng.pick(4));
         if(seed%3==0)p.time_limit_ms=(1+rng.pick(150))/1000.0;
-        if(seed%7==0)p.nodes_capacity=1+rng.pick(160);
         auto g=random_graph(static_cast<std::uint64_t>(seed)+7000,p.max_turn);
         if(seed%11==0)g.hook_start_us=200;
         if(seed%13==0)g.hook_step_us=3;
@@ -1147,7 +1210,7 @@ void exhaustive_cases(int count) {
         auto dfs=[&](auto&& self,int id,int t)->void {
             for(const auto&e:g.edges[id]) {
                 const int nt=t+e.turn;
-                if(e.finished||(nt==p.max_turn&&p.max_turn_is_answer)) {
+                if(e.is_answer||(nt==p.max_turn&&p.max_turn_is_answer)) {
                     if(!found||e.cost<best){found=true;best=e.cost;}
                 }
                 if(nt<p.max_turn)self(self,e.to,nt);
@@ -1184,17 +1247,17 @@ struct NonDefault {
 };
 
 void api_cases() {
-    B::Param p;p.max_turn=1;p.beam_width=32;p.sub_beam_width=32;
+    B::Param p;p.max_turn=2;p.beam_width=32;p.sub_beam_width=32;
     auto calls=[&](const auto& now, B::Emitter<int>& emit) {
-        if(now.sub_step>0)return;
+        if(now.turn!=0||now.sub_step>0)return;
         // 既存4形式、Nextを末尾に付けた4形式、非const/const/rvalueを使う。
         int a=1;const int b=2;
         require(emit.push(a,1),"push plain");
-        require(emit.push(b,0,true),"push finished");
+        require(emit.push(b,0,true),"push is_answer");
         require(emit.push(3,-1,3U),"push hash");
         require(emit.push(4,-2,4ULL,true),"push both");
         require(emit.push(5,5,Next::Sub),"push Sub plain");
-        require(emit.push(6,6,false,Next::Sub),"push Sub finished");
+        require(emit.push(6,6,false,Next::Sub),"push Sub is_answer");
         require(emit.push(7,7,7U,Next::Sub),"push Sub hash");
         require(emit.push(8,8,8ULL,false,Next::Sub),"push Sub both");
         require(!emit.push(9,0,static_cast<Next>(37)),"invalid Next");
@@ -1209,7 +1272,8 @@ void api_cases() {
             e.push(Counted{1},-100,Next::Sub);
             const int old=Counted::copies;Counted rejected{2};
             require(!e.push(rejected,100,Next::Sub)&&Counted::copies==old,"reject without internal copy");
-            require(e.push(Counted{4},200,true,Next::Sub),"archive despite width");
+            require(!e.push(Counted{4},200,true,Next::Sub),"archive despite width");
+            require(Counted::copies==old,"best-only Action is not copied");
         };
         auto r=B::run<Counted>(p,0,0ULL,expand,[](const Counted&){},[](const Counted&){});
         require(r.path.size()==1&&r.path[0].value==4,"archive Action lifetime");
@@ -1288,27 +1352,28 @@ void compound_cases() {
         p.time_limit_ms=limit;p.time_check_interval=8;
         check(p,g,"compound long Sub/merge/early goal/old ancestor/deadline/sweeps");
     }
-    bs::sub_detail::virtual_clock=true;bs::sub_detail::virtual_us=0;
+    bs::sub_detail::TestClock::enabled=true;bs::sub_detail::TestClock::value=0;
     p.max_turn=2;p.time_limit_ms=0.001;p.beam_width=p.sub_beam_width=1;
     int world=0;
-    auto r=B::run<int>(p,0,0U,[](const auto&,auto&e){e.push(1,0);},[&](int x){world+=x;},[&](int x){world-=x;bs::sub_detail::virtual_us+=5;});
+    auto r=B::run<int>(p,0,0U,[](const auto&,auto&e){e.push(1,0);},[&](int x){world+=x;},[&](int x){world-=x;bs::sub_detail::TestClock::value+=5;});
     require(world==0&&r.runtime.stop_reason==Reason::Completed&&r.time_limit_reached,"T15 restoration crosses deadline");
-    bs::sub_detail::virtual_clock=false;
+    bs::sub_detail::TestClock::enabled=false;
 }
 
-void csv_cases(const std::string& prefix) {
+void csv_cases([[maybe_unused]] const std::string& prefix) {
+#ifdef LOCAL
     std::filesystem::create_directories(std::filesystem::path(prefix).parent_path());
     B::Param p;p.max_turn=2;p.beam_width=2;p.sub_beam_width=3;
     auto run=[&](B::CsvStatHook& hook,bool answer) {
-        bs::sub_detail::virtual_clock=true;bs::sub_detail::virtual_us=0;
+        bs::sub_detail::TestClock::enabled=true;bs::sub_detail::TestClock::value=0;
         p.max_turn_is_answer=answer;
         auto expand=[](const auto&now,auto&e){
             const auto to=now.sub_step==2?Next::Turn:Next::Sub;
             e.push(1,-now.depth-1,to);
-            bs::sub_detail::virtual_us+=20000;
+            bs::sub_detail::TestClock::value+=20000;
         };
         auto r=B::run<int>(p,0,0U,expand,[](int){},[](int){},hook);
-        bs::sub_detail::virtual_clock=false;
+        bs::sub_detail::TestClock::enabled=false;
         require(hook.rows.front().event==Event::RunStart&&hook.rows.back().event==Event::RunEnd,"CSV start/end");
         require(r.found==answer&&r.runtime.elapsed_us==120000,"CSV timings");
         return r.runtime;
@@ -1330,6 +1395,7 @@ void csv_cases(const std::string& prefix) {
     rt.found=true;rt.best_cost=-7;rt.elapsed_us=1234;
     small(Small::EventType::RunEnd,rt);
     std::locale::global(old);
+#endif
 }
 } // namespace sub_test
 
@@ -1339,7 +1405,7 @@ struct SubTestAccess {
     static void clock_counter() {
         using namespace sub_test;
         B::Param p; p.max_turn = 1;
-        using E = B::Engine<int>; E engine(p, 0, 0ULL);
+        using E = B::Engine<int>; E engine(p, 0, 0ULL, true);
         engine.unchecked_ = std::numeric_limits<int>::max() - 1;
         engine.after_expand(0, false); engine.after_expand(0, false);
         sub_test::require(engine.unchecked_ >= 0 && engine.unchecked_ < std::numeric_limits<int>::max(), "unobserved clock counter does not overflow");
@@ -1379,7 +1445,149 @@ struct SubTestAccess {
 };
 } // namespace bs
 
+// 共通方針の境界テスト。実時間のsleepに依存せず、仮想時計で再現する。
+namespace policy_test {
+using Lib = bs::Beam<>;
+using Clock = bs::sub_detail::TestClock;
+struct State { int id = 0; };
+struct Action { int from = 0, to = 0; };
+struct Edge {
+    int to; long long cost; bool answer = false;
+    int step = 1; bool sub = false; std::uint64_t hash = 7;
+};
+using Graph = std::vector<std::vector<Edge>>;
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(std::string("policy: ")+message);
+}
+struct Options {
+    int slow_node = -1;
+    bool expire_at_start = false, eager = false;
+};
+struct Outcome {
+    bool found = false, completed = false;
+    long long cost = 0;
+    int id = -1, turn = 0;
+    std::uint64_t makers = 0;
+    std::vector<int> visited, path;
+    std::vector<bool> accepted;
+    std::vector<std::size_t> offsets;
+    Lib::Runtime rt;
+};
+template<bool History>
+Outcome run(Lib::Param p, const Graph& graph, Options options = {}) {
+    Clock::enabled = true; Clock::value = 0;
+    Outcome out;
+    int world=0;
+    auto expand = [&](const auto& now, auto& emit) {
+        (void)now;
+        const int from = world;
+        out.visited.push_back(from);
+        
+        for (const auto& edge : graph.at(static_cast<std::size_t>(from))) {
+            const Action action{from,edge.to};
+            bool accepted;
+            accepted=emit.push(action,edge.cost,edge.hash, edge.answer, edge.sub ? Lib::Next::Sub : Lib::Next::Turn);
+            out.accepted.push_back(accepted);
+        }
+        if (from == options.slow_node) Clock::value += 1000;
+    };
+    auto hook = [&](Lib::EventType event, const Lib::Runtime&) {
+        if (event == Lib::EventType::RunStart && options.expire_at_start) Clock::value += 1000;
+    };
+            auto forward=[&](const auto& edge){const auto& a=edge;require(world==a.from,"forward state");world=a.to;};
+        auto backward=[&](const auto& edge){const auto& a=edge;require(world==a.to,"backward state");world=a.from;};
+        auto result=Lib::run<Action>(p,0LL,std::uint64_t{0},expand,forward,backward,hook);
+        require(world==0,"external state restored");
+    out.found = result.found; out.completed = result.completed_max_turn;
+    out.cost = result.best_cost; out.turn = result.best_turn; out.rt = result.runtime;
+    int id=0;
+        for(const auto& item:result.path){const auto& a=item;require(a.from==id,"path continuity");id=a.to;out.path.push_back(id);}
+        out.offsets.assign(result.turn_offsets.begin(),result.turn_offsets.end());
+    if(result.found) out.id=out.path.empty()?0:out.path.back();
+    return out;
+}
+template<bool History>
+void cases() {
+    Lib::Param p;
+    require(p.continue_on_timeout && p.expand_answers, "common defaults");
+    p.max_turn = 5; p.max_turn_is_answer = false; p.beam_width = 1;
+    p.expand_answers = false; p.time_check_interval = 1;
+    Graph graph(8);
+    graph[0] = {{1,-10,true},{2,5,true},{3,0,false}};
+    graph[1] = {{5,-100,true}};
+    graph[3] = {{4,-20,true}};
+    for (bool eager : {false,true}) {
+        auto r = run<History>(p,graph,{-1,false,eager});
+        require(r.found && r.cost == -20 && r.id == 4, "answer retained outside beam/hash selection");
+        require(r.visited == std::vector<int>({0,3}), "answers do not consume width or expand");
+        require(r.accepted == std::vector<bool>({false,false,true,false}), "push bool means search acceptance");
+        require(r.rt.answer_only_candidates == 3 && r.rt.terminal_candidates == 0, "separate answer-only counter");
+        
+        require(r.path==std::vector<int>({3,4}), "saved action path survives queue removal");
+    }
+    p.expand_answers = true;
+    auto continued = run<History>(p,graph);
+    require(continued.found && continued.cost == -100 && continued.id == 5, "answers may remain expandable");
+    require(continued.rt.answer_only_candidates == 0, "no answer exclusions when enabled");
+    // An expired search with no solution must either stop or complete the remaining path.
+    graph = Graph(8); graph[0]={{1,0}}; graph[1]={{2,0}}; graph[2]={{3,-4,true}};
+    graph[3]={{4,-100,true}};
+    for (bool allow : {false,true}) for (bool expand_answers : {false,true}) {
+        p.continue_on_timeout=allow; p.expand_answers=expand_answers; p.time_limit_ms=1;
+        auto r=run<History>(p,graph,{0});
+        require(r.rt.time_limit_reached && r.found==allow, "timeout without answer");
+        require(r.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>({0})), "stop immediately after answer/callback");
+        if (allow) require(r.cost==-4 && r.id==3, "rescue preserves the first available answer");
+        auto at_start=run<History>(p,graph,{-1,true});
+        require(at_start.found==allow, "initialization/hook timeout policy");
+        require(at_start.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>{}), "RunStart deadline detected before expansion");
+        // Save all improving answers in the current callback, even when none can enter the beam.
+        Graph goals(8);goals[0]={{1,-100},{2,20,true},{3,10,true}};goals[1]={{4,-200,true}};
+        auto saved=run<History>(p,goals,{0});
+        require(saved.found && saved.cost==10 && saved.id==3 && saved.visited==std::vector<int>({0}), "saved answer ends overtime regardless of continuation flag");
+        // The best solution may predate the callback that reaches the time limit.
+        goals=Graph(8);goals[0]={{1,-100},{2,20,true}};goals[1]={{3,-200},{4,10,true}};
+        auto later=run<History>(p,goals,{1});
+        require(later.found && later.cost==10 && later.visited==std::vector<int>({0,1}), "existing answer stops after a later deadline");
+        // The continuation policy is inactive without an overall time limit.
+        p.time_limit_ms=0;
+        auto unlimited=run<History>(p,graph,{0});
+        require(unlimited.found && unlimited.cost==(expand_answers?-100:-4), "no limit means no early timeout stop");
+    }
+    p.continue_on_timeout=true;p.expand_answers=false;p.time_limit_ms=1;
+    Graph dead(2);dead[0]={{1,0}};
+    auto exhausted=run<History>(p,dead,{0});
+    require(!exhausted.found && exhausted.visited==std::vector<int>({0,1}), "finite dead-end rescue");
+    // Final-turn states stay terminal even when they are not answers.
+    p.time_limit_ms=0;p.max_turn=1;p.expand_answers=true;
+    Graph end(3);end[0]={{1,4,true},{2,0,false}};
+    auto terminal=run<History>(p,end);
+    require(terminal.found && terminal.cost==4 && terminal.completed, "explicit final-turn answer");
+    require(terminal.rt.terminal_candidates==2 && terminal.rt.answer_only_candidates==0 && terminal.visited.size()==1, "final-turn counters and no expansion");
+    p.max_turn_is_answer=true;
+    auto automatic=run<History>(p,end);
+    require(automatic.found && automatic.cost==0 && automatic.id==2, "implicit final-turn answer");
+    p.max_turn=0;
+    auto root=run<History>(p,end);
+    require(root.found && root.completed && root.visited.empty(), "zero-turn solution");
+    p={};p.max_turn=3;p.beam_width=2;p.max_turn_is_answer=false;p.expand_answers=false;
+    Graph mixed(5);mixed[0]={{1,2,false,1,true}};mixed[1]={{2,3}};mixed[2]={{3,1,true,1,true}};
+    auto middle=run<History>(p,mixed);
+    require(middle.found && middle.id==3 && middle.turn==1 && middle.rt.best_sub_step==1 && middle.rt.best_depth==3,"mid-sub answer position");
+    require(middle.offsets==std::vector<std::size_t>({0,2}),"partial turn action suffix");
+
+}
+void all() {
+    const bool enabled=Clock::enabled;
+    const auto value=Clock::value;
+    cases<false>();
+    
+    Clock::enabled=enabled;Clock::value=value;
+}
+} // namespace policy_test
+
 int main(int argc,char**argv) {
+    policy_test::all();
     try {
         int count=argc>1?std::stoi(argv[1]):10000;
         sub_test::basic_cases();sub_test::api_cases();sub_test::floating_cases();

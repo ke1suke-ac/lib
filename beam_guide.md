@@ -1,18 +1,20 @@
 # ビームサーチ9種類の利用ガイド
 
-このガイドは、次の9ファイルを対象にします。各コード例は標準入力を使わず、対応するヘッダを用意すれば、そのままコンパイル・実行できます。小さな問題を使い、探索結果と復元した行動の整合性を`assert`でも確認します。
+このガイドは、次の9ファイルを対象にします。まず方式の違いと共通の使い方を説明し、その後に各ライブラリの実用的な利用パターンを紹介します。コード例は標準入力を使わず、対応するヘッダを用意すれば、そのままコンパイル・実行できます。
+
+例は、割当表を返す、操作列を返す、所要時間の異なる行動を選ぶ、turn内の複数操作をまとめる、といった本番での組み込み方に沿って構成しています。データは処理を追いやすい小規模なものとし、同じ題材を異なるライブラリでも扱うことで、使い方を比較できるようにしています。
 
 | ライブラリファイル | 型 | 状態の保持方法 | 1回の遷移 |
 | --- | --- | --- | --- |
-| `beam_copy_single_v30.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
-| `beam_delta_single_v36.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
-| `beam_copy_multi_v34.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
-| `beam_delta_multi_v59.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
-| `chokudai_copy_single_v06.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
-| `chokudai_copy_multi_v07.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
-| `beam_copy_sub_v04.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
-| `beam_delta_sub_v05.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
-| `chokudai_copy_sub_v03.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
+| `beam_copy_single_v40.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
+| `beam_delta_single_v46.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
+| `beam_copy_multi_v44.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
+| `beam_delta_multi_v69.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
+| `chokudai_copy_single_v13.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
+| `chokudai_copy_multi_v15.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
+| `beam_copy_sub_v12.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
+| `beam_delta_sub_v12.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
+| `chokudai_copy_sub_v11.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
 
 以下では、`beam_`で始まる6種類を「通常ビーム」、`chokudai_`で始まる3種類を「chokudai」と呼びます。`Cost`の既定型は`long long`、`Hash`の既定型は`std::uint64_t`です。
 
@@ -45,9 +47,13 @@ Subの連鎖が有限になることは利用側の前提です。回数上限�
 
 ### 1.2 copy・deltaの違い
 
-`copy`では、盤面や履歴を含む`State`を候補ごとに保存します。`expand`は`now.state`を読んで子を作ります。まず実装を簡潔にしたい場合や、状態が小さい場合に適します。結果の`best_state`は`std::optional<State>`で、履歴は必要なら利用側がStateに持たせます。
+`copy`では盤面などの`State`を候補ごとに保存し、`expand`は`now.state`から子状態を作ります。状態が小さい場合や、取り消し処理を実装せず使いたい場合に適します。結果の`best_state`は`std::optional<State>`です。
+
+操作列も必要なら`run<State, Action>`を使います。ライブラリがActionを共有木で保持し、最良解の操作列を`result.path`へ返します。共通の祖先は共有し、不要になった枝は再利用します。祖先のStateは保持しません。操作列が不要なら`run<State>`を使い、履歴木の確保・参照カウント・操作列の復元を省きます。
 
 `delta`では、小さな`Action`と探索木を保存し、盤面などの外部状態を`move_forward`と`move_backward`で移動させます。盤面コピーが重く、変更と取り消しが軽い場合に適します。変更前の値がなければ戻せない操作は、その値をActionへ保存します。`expand`の終了時には、外部状態を呼び出し時と同じ状態に保ってください。試しに手を適用して評価する場合も、その場で戻してから次の候補を扱います。
+
+deltaの処理時間は、候補生成数だけでなく、枝を移るためのActionの戻し・再適用回数にも依存します。共通祖先が浅い多数の枝を長く残す場合は、幅が同じでも移動量が大きくなります。Stateのコピーが軽い問題ではcopy版とも比較してください。`Action`が小さいだけでは、deltaが常に速いとは限りません。
 
 delta版の正常な`run`返却時には、外部状態は初期状態へ戻ります。最良解の盤面になっているわけではありません。必要なら、返された`path`を改めて再生します。callbackからの例外による中断まで自動復元されることは前提にしないでください。
 
@@ -57,11 +63,13 @@ delta版の正常な`run`返却時には、外部状態は初期状態へ戻り�
 | multi | `const BS::Edge<Action>&`、または`const Action&` | `BS::Edge<Action>` | `edge.turn`、`edge.step`、`edge.next_turn()` |
 | sub | `const Action&` | `Action` | `result.turn_offsets` |
 
+copyの履歴ありモードの`path`も、上表と同じ要素型とturn境界情報を返します。copyには状態更新のcallbackは不要です。
+
 ### 1.3 通常ビーム・chokudaiの違い
 
 通常ビームは、ある層の候補を展開し、次へ進める候補を幅で絞ります。過去の層へ戻って未展開候補を再開する方式ではありません。
 
-chokudaiは、turnごとに未展開候補を保存します。浅いturnから深いturnまで巡回する1回を「スイープ」と呼び、各turnから最大`chokudai_width`件を取り出します。同じスイープで作った未来のturnの候補も、そのスイープ内で展開できます。最終turnへ到達した後も、時間・回数の余裕と未展開候補があれば、次スイープで別の経路を探索します。
+chokudaiは、turnごとに未展開候補を保存します。浅いturnから深いturnまで巡回する1回を「スイープ」と呼び、各turnから最大`sweep_width`件を取り出します。同じスイープで作った未来のturnの候補も、そのスイープ内で展開できます。最終turnへ到達した後も、時間・回数の余裕と未展開候補があれば、次スイープで別の経路を探索します。
 
 `chokudai_copy_sub`でスイープをまたいで残すのは、各turnの開始候補です。取り出した開始候補からのturn内探索は、`sub_beam_width`の通常ビームとして処理します。時間切れの処理を除けば、選択した開始候補群から生じたsub層を処理してから次turnへ移ります。turn内のsub層そのものを、次スイープへ持ち越して再開する方式ではありません。
 
@@ -75,6 +83,26 @@ chokudaiは、turnごとに未展開候補を保存します。浅いturnから�
 
 chokudaiは、より多くのturnに候補を残すため、一般に状態保存量が増えます。通常copy singleの保持状態数は主にビーム幅に、copy multiは主に`max_step × beam_width`に、chokudai copyは主に`max_turn × beam_width`に依存します。sub copyではturn境界幅とsub幅の両方が効きます。delta subは、現在地・候補・最良解に必要な祖先を残し、不要ノードをまとめて回収してスロットを再利用します。長い経路自体は保持するため、長いsub探索では`used_nodes`と`reserved_nodes`も確認してください。State内部のvectorや履歴の長さもメモリ使用量に影響します。
 
+chokudaiは最良候補の取り出しと保持幅による選別の両方を行うため、同じ候補数でも通常ビームと処理費用が異なります。空になったturnキューの領域は再利用しますが、未展開候補の残るキューは次スイープのために保持します。再探索を使わない問題では、通常ビームも比較対象にしてください。
+
+### 1.4 利用ケースからコード例を選ぶ
+
+各ライブラリに、使うインターフェースや解の受け取り方が異なる2例を掲載しています。必要な出力が最終的な配置・集合・計画表であればcopyの`run<State>`、操作の実行順も必要なら`run<State, Action>`を選びます。deltaはAction列を保持し、状態の変更と取消を利用側で実装します。
+
+| ライブラリ | 利用ケースA | 利用ケースB |
+| --- | --- | --- |
+| `beam_copy_single` | 例01：仕事の割当表を最終Stateから取得 | 例02：目標地点への移動コマンド列を取得 |
+| `beam_delta_single` | 例03：割当を差分適用しAction列を取得 | 例04：移動を巻き戻し、途中のゴールを取得 |
+| `beam_copy_multi` | 例05：時間内の作業集合を取得 | 例06：道路の順番と出発・到着時刻を取得 |
+| `beam_delta_multi` | 例07：時刻依存の状態更新にEdgeを使用 | 例08：時刻を外部状態へ持たずActionで更新 |
+| `chokudai_copy_single` | 例09：割当の未展開候補も後から探索 | 例10：未展開経路を残し、移動コマンド列を取得 |
+| `chokudai_copy_multi` | 例11：作業集合を複数スイープで改善 | 例12：所要時間の違う経路のEdge列を取得 |
+| `beam_copy_sub` | 例13：各期の前処理回数を計画表で取得 | 例14：日内の配達と日終了を分け、操作列を取得 |
+| `beam_delta_sub` | 例15：期内操作を差分適用し、期別の区間を取得 | 例16：途中で完成した日の末尾まで操作列を再生 |
+| `chokudai_copy_sub` | 例17：期の開始候補を残し、期内を探索 | 例18：日単位で別経路も探索し、途中完成の操作列を取得 |
+
+Hash、遅延コピー、時間配分、CSVは、それらが役立つケースの中で説明します。各例は独立して実行できるように、データ構造・設定・候補生成・結果の出力を省略せず記述しています。
+
 ## 2. 共通の使い方と注意点
 
 ### 2.1 ヘッダと実行方法
@@ -82,9 +110,11 @@ chokudaiは、より多くのturnに候補を残すため、一般に状態保�
 ダウンロードした名前に`(1)`や`(2)`などの接尾辞が付いている場合は、冒頭の表の名前へそろえるか、コードの`#include`を実際のファイル名に合わせてください。各コード例は、個別の`.cpp`ファイルとして保存します。
 
 ```sh
-g++ -std=c++20 -O2 -Wall -Wextra example.cpp -I ./headers -o example
+g++ -std=c++20 -O2 -Wall -Wextra -DLOCAL example.cpp -I ./headers -o example
 ./example
 ```
+
+`-DLOCAL`はCSV記録を有効にする指定です。省略しても同じコードを実行できますが、`CsvStatHook`は記録・出力を行いません。
 
 ヘッダを`.cpp`と同じフォルダへ置く場合、`-I ./headers`は不要です。C++23でも利用できます。サンプルはGCC向けです。これらのヘッダの利用に、AtCoder Libraryや追加のHashMapライブラリは不要です。
 
@@ -96,9 +126,9 @@ g++ -std=c++20 -O2 -Wall -Wextra example.cpp -I ./headers -o example
 
 costは累積費用でも、状態全体に対する評価値でも構いません。ただし、同じ保存先に入る候補同士で比較できる尺度にしてください。また、有効解に渡すcostは最終的に比較したい目的値と整合させます。途中の期待値と完成時の実得点を混ぜる場合は、その切り替えを利用側で設計します。
 
-`Cost`はboolを除く符号付き整数、または浮動小数点型です。NaNの候補は棄却されます。演算時の整数オーバーフローは利用側で防いでください。サンプルは`long long`を使います。
+`Cost`はboolを除く符号付き整数、または浮動小数点型です。NaNの候補は棄却されます。初期コストがNaNなら、全種類でexpandを呼ばず、`found=false`・`completed_max_turn=false`を返します。正負の無限大はCostとして使用できます。演算時の整数オーバーフローは利用側で防いでください。サンプルは`long long`を使います。
 
-ビーム幅で候補を捨てるため、一般に最適解の保証はありません。コード例の最適値の`assert`は、その小問題と設定で検証した値です。実問題で幅を増やした場合の速度やスコアは、問題の評価関数と分岐に依存します。
+ビーム幅で候補を捨てるため、一般に最適解の保証はありません。各例の実行例は、掲載データと設定で得られた結果です。実問題での速度や解品質は、評価関数・分岐数・幅・時間予算に依存します。割当や単純な経路探索など専用の厳密解法が使える場合もありますが、ここでは追加の状態や制約を持つ問題へ組み替えやすい形で、ライブラリの利用方法を示します。
 
 ### 2.3 Paramの読み方
 
@@ -111,33 +141,30 @@ costは累積費用でも、状態全体に対する評価値でも構いませ�
 | `time_limit_ms` | 全種類 | 探索全体の時間制限。既定0.0で無制限。soft limit |
 | `use_turn_time_limit` | 通常ビーム6種類 | 残り時間を残りturn数へ配分する。既定false。全体の時間制限が有効な場合だけ動作 |
 | `time_check_interval` | 全種類 | 通常の時間確認間隔。既定64。1なら各展開終了後に確認する。境界などでも確認される |
+| `continue_on_timeout` | 全種類 | 時間切れで解未発見なら救済探索を続ける。既定true。有効解保存済みならどちらでも終了 |
+| `expand_answers` | 全種類 | 有効解も探索候補へ登録する。既定true。falseなら最良解の比較・保存だけを行う |
 | `max_turn_is_answer` | 全種類 | 最大turnに到達した状態を有効解にする。既定true |
 | `use_hash_dedup` | 全種類 | Hashを明示した候補を重複排除する。既定true |
 | `max_step` | multiの3種類 | 1遷移で進めるturn数の上限。既定1 |
 | `sub_beam_width` | subの3種類 | 同turnの次sub層の幅。既定0で`beam_width`を使用 |
-| `chokudai_width` | chokudaiの3種類 | 1turn・1スイープで取り出す候補数。既定1。sub版では開始候補数 |
-| `max_sweeps` | chokudaiの3種類 | スイープ数上限。既定0で無制限。sub版は通常スイープへの上限 |
-| `finish_on_timeout` | chokudai single・multi | 解なしの時間切れに、幅1の追加スイープを高々1回行う。既定false |
+| `sweep_width` | chokudaiの3種類 | 1turn・1スイープで取り出す候補数。既定1、`1..beam_width`へ丸める。sub版では開始候補数 |
+| `max_sweeps` | chokudaiの3種類 | 通常スイープ数の上限。既定0で無制限。時間超過後の救済には適用しない |
 | `hash_capacity` | single・multiの6種類 | Hash表の容量指定。既定0で自動。幅を基準に調整されるため、通常は0のままでよい |
-| `nodes_capacity` | deltaの3種類 | 探索木のノード容量。種類による違いは次の表を参照 |
-| `capacity_policy` | delta multi | 自動ノード容量の方針。既定`BS::CapacityPolicy::Safe` |
-| `print_warnings` | beam delta single・multi、beam copy multi | 容量不足などの警告を標準エラーへ出す。既定true |
+| `print_warnings` | beam delta single・multi、beam copy multi | 内部Hash表などの異常を標準エラーへ出す。既定true |
 
 `beam_copy_single`、chokudai single・multi、subの3種類には`print_warnings`はありません。subの3種類には`hash_capacity`もありません。対応していない項目をそのままコピーしないでください。
 
-delta single・multi は内部の整数添字を安全に扱うため、`max_turn == INT_MAX` または `beam_width > 268435451` を `std::length_error` で拒否します。これは表現上の上限であり、その範囲内のメモリ確保を保証するものではありません。
+通常ビームのsingle・multi 4種類は内部の整数添字を安全に扱うため、`max_turn == INT_MAX` または `beam_width > 268435451` を `std::length_error` で拒否します。これは表現上の上限であり、その範囲内のメモリ確保を保証するものではありません。
 
 delta single・multi の `Runtime::best_update_count` とCSV行の `period_best_updates`、delta multi の `Runtime::width_pruned_cost_count` は `long long` です。大量の候補を生成する場合も、利用側で `int` に狭めず扱ってください。
 
-| delta版の容量設定 | `nodes_capacity=0`の意味 | 正の上限に達した場合 |
-| --- | --- | --- |
-| single | `max_turn`と`beam_width`からノード数の上限を自動設定。格納領域は必要に応じて増設・再利用 | 不要ノードを回収しても不足する場合に`result.node_pool_exhausted`となる |
-| multi | `capacity_policy`に従い自動設定 | `result.node_pool_exhausted`を確認 |
-| sub | 回収・再利用しながら必要に応じて動的に増設 | 不要ノードを回収しても不足する場合に`result.runtime.stop_reason == BS::StopReason::NodeLimit`となる |
+delta3種類は、必要に応じてノード格納領域を自動拡張します。利用側でノード容量を設定する必要はありません。single・subは不要ノードをまとめて回収し、multiは空きスロットの再利用と根の圧縮を行います。最良有効解の復元に必要な経路は保護します。
 
-delta multiの`Safe`はturn数を考慮する安全側の自動容量です。`Compact`は`max_step`を重視して容量を抑えますが、探索形状によっては容量不足で途中終了し得ます。容量不足でも見つかった解が返ることはありますが、予定した探索を完走したとは扱わないでください。
+`runtime.used_nodes`は構築済みスロット数で、回収待ち・再利用待ちのスロットを含みます。`runtime.reserved_nodes`は配列に確保済みのスロット数です。multiの`live_nodes`は生存ノード数なので、`used_nodes`とは別の意味です。delta multiでは、正常終了時に復元用ルート1個が`live_nodes`に残りますが、展開候補は残りません（`runtime.live_costs.count == 0`）。Action内部の可変長データや補助配列のメモリは、これらのスロット数に含まれません。
 
-全種類で`max_turn`の状態は展開されません。`max_turn=0`なら`expand`は呼ばれず、`max_turn_is_answer=true`なら有効な初期costの初期状態が解になります。正の`max_turn`で初期状態自体を有効解として残したい場合、初期状態に`finished`を指定する引数はありません。必要なら利用側で初期解を保持し、探索結果と比較します。
+自動拡張時には配列の再確保と要素移動が起こり得ます。整数添字の表現限界は`std::length_error`、通常のメモリ確保失敗は`std::bad_alloc`などの標準例外になります。これらは正常な「解なし」の結果ではありません。deltaの外部State復元は正常な返却時の保証であり、例外が出た場合の復元は保証しません。
+
+全種類で`max_turn`の状態は展開されません。`max_turn=0`なら`expand`は呼ばれず、`max_turn_is_answer=true`なら有効な初期costの初期状態が解になります。正の`max_turn`で初期状態自体を有効解として残したい場合、初期状態に`is_answer`を指定する引数はありません。必要なら利用側で初期解を保持し、探索結果と比較します。
 
 ### 2.4 expandとrun
 
@@ -165,42 +192,60 @@ auto result = BS::run<State>(param, initial_state, initial_cost, initial_hash, e
 auto result_without_hash = BS::run<State>(param, initial_state, initial_cost, expand);
 ```
 
-delta型は初期Hashが必須です。重複排除を使わない場合も、たとえば`Hash{0}`を渡します。
+delta型も初期Hashとdebug hookを省略できます。省略時の初期Hashは`Hash{0}`です。現在のHashから差分で次のHashを計算する場合は、初期状態に対応する値を指定してください。候補を追加するときのHash指定とは独立しています。`has_hash`を持つViewでは、初期Hashを省略した初期状態の`has_hash`はfalseです。
 
 ```cpp
 auto result = BS::run<Action>(param, initial_cost, initial_hash,
                               expand, move_forward, move_backward, hook);
+auto result_without_hash = BS::run<Action>(param, initial_cost,
+                                           expand, move_forward, move_backward);
 ```
 
 `run`を呼ぶたびに新しい探索を開始します。前回の未展開候補を引き継ぐ再開APIではありません。`StateView`や`Emitter`への参照を外へ保存して後で使わず、callbackの実行中だけ扱ってください。
 
+copyで操作列を分離して保持する呼び出しは次の形です。`expand`の引数型も`Emitter<State, Action>`にします。Runtimeの有無、初期Hash・hookの省略は同じです。
+
+```cpp
+auto result = BS::run<State, Action>(param, initial_state, initial_cost, initial_hash, expand, hook);
+```
+
 ### 2.5 pushとpush_lazyの引数
 
-`value`はcopy型では`State`、delta型では`Action`です。`hash`と`finished`は任意ですが、multiの`step`は必須です。次の表は全項目を指定する形です。
+`value`はcopy型では`State`、delta型では`Action`です。`hash`と`is_answer`は任意ですが、multiの`step`は必須です。次の表は全項目を指定する形です。
 
 | 系統 | `push`の最大引数形 | copy型の`push_lazy`の最大引数形 |
 | --- | --- | --- |
-| single | `push(value, cost, hash, finished)` | `push_lazy(cost, hash, finished, maker)` |
-| multi | `push(value, cost, hash, step, finished)` | `push_lazy(cost, hash, step, finished, maker)` |
-| sub | `push(value, cost, hash, finished, next)` | `push_lazy(cost, hash, finished, maker, next)` |
+| single | `push(value, cost, hash, is_answer)` | `push_lazy(cost, hash, is_answer, maker)` |
+| multi | `push(value, cost, hash, step, is_answer)` | `push_lazy(cost, hash, step, is_answer, maker)` |
+| sub | `push(value, cost, hash, is_answer, next)` | `push_lazy(cost, hash, is_answer, maker, next)` |
 
 subの`next`は省略すると`BS::Next::Turn`です。`push_lazy`では`maker`の後に置きます。delta型には`push_lazy`はありません。
 
 `step`は`int`型で、1以上かつ`max_step`以下です。到着turnが`max_turn`を超える候補は受理されません。multiの`step=0`を、subの代わりに使うことはできません。
 
-Hash引数はbool以外の符号なし整数で、`Hash`型以下の幅が必要です。たとえば`Hash{123}`を使います。`finished`には`true`または`false`などのboolを渡し、整数の0や1で代用しないでください。StateやActionは指定した型そのものを渡します。
+Hash引数はbool以外の符号なし整数で、`Hash`型以下の幅が必要です。たとえば`Hash{123}`を使います。`is_answer`には`true`または`false`などのboolを渡し、整数の0や1で代用しないでください。StateやActionは指定した型そのものを渡します。
 
 `push_lazy`は、保存する必要があると判断されたときにだけ、引数なしの`maker()`からStateを作ります。makerは同期的に呼ばれ、後で実行するために保存されません。このためサンプルの`[&now, ...]`は有効です。候補を棄却するために必要なcostやHashはmakerより前に計算する必要があります。makerの中だけで計算して外部へ渡す設計にはできません。
 
 Stateコピーを遅らせたい場合、先に巨大な`State next`を作ってそれをラムダへコピーすると利点を失います。小さな変更情報をキャプチャし、maker内で親Stateをコピーして変更します。
 
-`push`や`push_lazy`の戻り値がtrueでも、その候補が最後まで探索候補群に残る保証はありません。後の候補に置換される可能性があります。通常ビームとchokudaiのsingle・multi計6種類では、このboolは「呼び出し時点で探索候補へ入ったか」です。falseでも最良有効解を保存する場合があり、解の有無は`found`で確認します。sub版のtrueは、次候補としての保存に加えて、最良有効解としての保存だけでも返ります。
+全9種類で、`push`と`push_lazy`の戻り値は「その呼び出し時点で継続探索用の候補群へ入ったか」です。trueでも後の候補に置換される可能性があります。最良有効解だけを保存する場合はfalseです。最大turnに到達した候補は展開しないので、候補群へ入れずfalseを返し、必要なら最良解として保存します。解の有無は`result.found`で確認します。
 
-通常ビームとchokudaiのcopy single・multiの`push_lazy`は、探索候補への保存、または最良有効解の更新に必要な場合にmakerを呼びます。両方に使う場合でも1回だけです。幅・Hashで棄却され、かつ最良解を更新しない場合や、NaN・到着turn超過などの不正候補では呼びません。makerの呼び出し回数を、探索候補の採用数と同一視しないでください。
+copy6種類の`push_lazy`は、探索候補への保存、または最良有効解の更新に必要な場合にmakerを呼びます。両方に使う場合でも1回だけです。幅・Hashで棄却され、かつ最良解を更新しない場合や、NaN・到着turn超過などの不正候補では呼びません。makerの呼び出し回数を、探索候補の採用数と同一視しないでください。
+
+copyで操作履歴も保持する場合は、`Emitter<State, Action>`を使い、`push`のStateの直後、`push_lazy`の先頭へActionを追加します。Hashと`is_answer`の省略規則は同じです。
+
+| 系統 | 履歴あり`push` | 履歴あり`push_lazy` |
+| --- | --- | --- |
+| single | `push(state, action, cost, hash, is_answer)` | `push_lazy(action, cost, hash, is_answer, maker)` |
+| multi | `push(state, action, cost, hash, step, is_answer)` | `push_lazy(action, cost, hash, step, is_answer, maker)` |
+| sub | `push(state, action, cost, hash, is_answer, next)` | `push_lazy(action, cost, hash, is_answer, maker, next)` |
+
+Actionはコピー構築可能にしてください。デフォルト構築・代入は不要です。Actionはmakerの外で指定しますが、保存が必要な場合だけ履歴ノードへコピーまたはムーブされます。Stateには評価・遷移に必要な情報を残し、出力だけの履歴を分離するとコピーを軽くできます。
 
 ### 2.6 Hashによる重複排除
 
-Hashを明示した候補だけが重複排除に参加します。初期Hashを渡しただけでは、その後のHashなし`push`が自動的に重複排除対象になるわけではありません。逆に、copy型の初期Hashを省略しても、Hash付き`push`を使えば、その候補は重複排除対象になります。
+Hashを明示した候補だけが重複排除に参加します。初期Hashを渡しただけでは、その後のHashなし`push`が自動的に重複排除対象になるわけではありません。逆に、初期Hashを省略しても、Hash付き`push`を使えば、その候補は重複排除対象になります。
 
 同じHashは「将来の選択肢と目的値への影響が同じ」とみなされます。ライブラリはStateの等値比較で衝突を確認しません。小さな状態は使用集合のビットマスクなど、衝突のない整数へ変換すると理解しやすくなります。一般の大きな状態に64bit Hashを使う場合は、衝突の可能性を利用側で受け入れる必要があります。
 
@@ -208,13 +253,22 @@ Hashを明示した候補だけが重複排除に参加します。初期Hashを
 
 重複排除の範囲は、その時点で同じ保存先に残っている候補です。chokudaiは展開済みHashの永久的な訪問済み集合を持ちません。subでは次sub層と次turn候補を別々に扱います。次turnへ進んだ後にも経路全体の操作回数などで制約が変わる問題では、異なるdepthを同じHashで誤って統合しないようにします。
 
-同じHashで同じcostなら、後から来た候補が必ず優先されるわけではありません。`finished`の有無が解の可否を変える状態や、終端・非終端の違う状態を安易に同一Hashへまとめないでください。
+同じHashで同じcostなら、後から来た候補が必ず優先されるわけではありません。`is_answer`の有無が解の可否を変える状態や、終端・非終端の違う状態を安易に同一Hashへまとめないでください。
 
-### 2.7 finishedと解の保存
+### 2.7 is_answerと解の保存
 
-`finished=true`は「この生成状態を有効解として比較できる」という印です。探索全体の停止命令でも、その状態の自動的な展開停止命令でもありません。終端状態をさらに展開したくない場合は、`expand`の先頭などで判定してreturnします。
+`is_answer=true`は「この生成状態を有効解として比較できる」という印です。探索全体を直ちに終了する命令ではありません。有効解からさらに探索するかは、全種類共通の`expand_answers`で指定します。
 
-`max_turn_is_answer=true`なら、最大turnに到達した状態も有効解です。最大turn到達だけでは目的を達成しない問題ではfalseにし、目的条件を満たす候補へ`finished=true`を渡します。
+| 設定 | 向いている使い方 | 動作 |
+| --- | --- | --- |
+| `expand_answers=true`（既定） | 途中の計画も回答に使え、さらに作業を追加して改善したい | 最良解として比較・保存し、探索候補としても通常の選別に参加させる |
+| `expand_answers=false` | ゴール到達・全必須作業完了など、有効解になった時点でその経路を終える | 最良解として比較・保存し、探索候補へは登録しない |
+
+falseにすると有効解は幅・Hashの選別に参加せず、ビーム幅を消費しません。subの`Next::Sub`と`Next::Turn`の両方、chokudaiの未展開キューにも同じ方針を適用します。探索候補へ登録しなくても、最良解のState・Action列は返ります。`push`／`push_lazy`の戻り値は探索候補への採用を表すため、解を保存した場合でもfalseです。非改善の有効解しか生成せず、登録も不要なら、`push_lazy`のmakerは呼びません。
+
+時間内は残りの非有効解を探索し、別経路のより良い有効解を比較し続けます。有効解の一部だけを終端にしたい場合はtrueにし、終端状態だけ利用側の`expand`でreturnします。最大turnの状態は、この設定によらず展開しません。
+
+`max_turn_is_answer=true`なら、最大turnに到達した状態も有効解です。最大turn到達だけでは目的を達成しない問題ではfalseにし、目的条件を満たす候補へ`is_answer=true`を渡します。
 
 | 系統 | 有効解として保存されるタイミングと注意 |
 | --- | --- |
@@ -222,11 +276,11 @@ Hashを明示した候補だけが重複排除に参加します。初期Hashを
 | chokudai single・multi | 正常な候補の生成時に、幅・Hashによる探索候補の受理可否と独立して最良解を保存する。棄却された有効解も比較対象になる |
 | subの3種類 | 最良有効解の更新を、探索候補群の幅・Hash選別と独立して扱う。探索候補として残せなくても、改善する有効解なら保存する |
 
-通常ビームとchokudaiのsingle・multiでは、候補のcost・step・到着turnが許容範囲であることを確認し、探索候補として残るかどうかにかかわらず有効解を比較します。保存するのは最良の1件で、ビーム幅を消費しません。有効解同士ではcostが小さい方を残し、同costなら先に生成した方を残します。multiでは未来の到着turnの候補も生成時に保存し、`best_turn`にはその到着先を記録します。保存済みの解は、その後の候補置換、時間超過時の候補削減、探索木のノード解放で失われません。生成していない候補まで含めた最適解の保証ではありません。
+通常ビームとchokudaiのsingle・multiでは、候補のcost・step・到着turnが許容範囲であることを確認し、探索候補として残るかどうかにかかわらず有効解を比較します。解として保存するのは最良の1件で、この保存用領域はビーム幅を消費しません。`expand_answers=true`で別途探索候補にも登録する場合、その探索候補は幅に含まれます。有効解同士ではcostが小さい方を残し、同costなら先に生成した方を残します。multiでは未来の到着turnの候補も生成時に保存し、`best_turn`にはその到着先を記録します。保存済みの解は、その後の候補置換、時間超過時の候補削減、探索木のノード解放で失われません。生成していない候補まで含めた最適解の保証ではありません。
 
 copy single・multiの結果は`best_state`です。delta singleの`path`はAction列、delta multiの`path`は`action`・`turn`・`step`を持つEdge列です。delta singleは親ノード番号と末尾Actionで解を保持し、返却時に経路を復元します。delta multiはノードが再利用される前に、経路を独立した配列へ保存します。
 
-`found`は有効解の有無です。`completed_max_turn`は最大turnへの到達を示すもので、最適性や全候補展開の保証ではありません。通常ビームsingle・multiでは「最大turnの探索候補を実体化したか」を表し、解の生成時保存とは別です。容量不足などで探索を終了した場合、最大turnの有効解を保存できていても、このフラグはfalseの場合があります。chokudai single・multiの`completed_max_turn`は、最大turnの候補をキューへ受理したかを示します。こちらも、最良解の保存や全候補の展開とは別です。`max_turn_is_answer=false`なら、最大turnへ達しても`found=false`になり得ます。`best_cost`や`best_state`、`path`を解として使う前に、`found`を確認してください。
+`found`は有効解の有無です。全9種類で`completed_max_turn`は、不正でない最大turn到着候補を生成できたかを表します。最適性や全候補展開の保証ではありません。有効な初期costで初期状態だけを扱う`max_turn=0`も最大turn到達です。`max_turn_is_answer=false`なら、最大turnへ達しても`found=false`になり得ます。`best_cost`や`best_state`、`path`を解として使う前に、`found`を確認してください。
 
 sub版では、有効解がturn途中でも返ります。`best_turn`、`best_sub_step`、`best_depth`で位置を確認できます。delta subの`turn_offsets`は、found=falseなら空、found=trueなら先頭0を持ちます。完了したturn tのAction区間は`[turn_offsets[t], turn_offsets[t + 1])`です。`turn_offsets.back()`から`path.size()`までが残っていれば、そこは未完了turn内の末尾です。
 
@@ -234,14 +288,20 @@ sub版では、有効解がturn途中でも返ります。`best_turn`、`best_su
 
 `time_limit_ms`は1turnごとの時間ではなく、1回の探索全体の時間です。全種類とも`expand`を途中で中断しません。長いcallback、返り値の復元、CSV書き出しなども考慮し、提出全体の厳密な締切と同一視しないでください。
 
-| 系統 | 全体の時間制限到達を検出した後の主な動作 |
-| --- | --- |
-| 通常ビームsingle・multi | 最良1本を中心とする縮退探索へ移り、各turnを先へ進める。時間到達で直ちにreturnする方式ではない |
-| chokudai single・multi | 通常探索を終了する。`finish_on_timeout=true`かつ解未発見なら、残った候補から幅1の追加スイープを高々1回行う。解発見後はその救済を終える |
-| 通常ビームsub | 次turn候補があればturn内探索を切り上げて進む。次turn候補がなければ、残ったsub候補から先へ進める候補を探す。有効解を持っているだけで即時終了する仕様ではない |
-| chokudai sub | 有効解があれば終了する。なければ次turn候補を優先して進み、必要なら残った候補を時間超過後も探索する。次turn候補も有効解もない間は、可能なSub探索を続ける |
+全9種類で`continue_on_timeout`の意味は共通です。全体の時間切れを検出した時に有効解があれば、設定によらず保存済みの最良解を返します。解未発見の場合、falseなら探索を終了し、true（既定）なら時間超過を許容して救済探索を行います。
 
-chokudai single・multiの追加スイープは1回までで、有効解の発見保証ではありません。幅・Hashで棄却された有効解を保存済みなら、追加スイープは開始しません。追加スイープ中にそのような解を見つけた場合も、実行中の`expand`が返ったところで救済を終えます。chokudai subには`finish_on_timeout`はなく、未発見時の救済は組み込み動作です。subの`max_sweeps`は時間超過後の未発見救済には適用しません。一方、時間制限に達する前に通常スイープ上限へ達すれば、解なしでも回数上限で終了します。
+| 系統 | 解未発見・`continue_on_timeout=true`の救済方法 |
+| --- | --- |
+| 通常ビームsingle・multi | 最良1本を中心とする縮退探索で、先のturnへの到達を試みる |
+| 通常ビームsub | 次turn候補があればturn内探索を切り上げて進む。なければ、残ったsub候補から生成を試みる |
+| chokudai single・multi | 各turnの取り出し幅1で救済スイープを繰り返し、残った別経路も試す |
+| chokudai sub | 各turnの開始候補の取り出し幅を1にし、次turnへ進める候補を優先する。必要なら残った開始候補から救済スイープを繰り返す |
+
+救済中に有効解を見つけたら、現在の`expand`が返ったところで終了します。同じ`expand`内で複数の有効解を生成した場合は、その中で最良のものも比較・保存します。幅・Hashで探索候補として棄却された解や、`expand_answers=false`で登録しなかった解も、終了判定に含めます。
+
+救済中も候補の選別を行うため、有効解の発見保証はありません。探索可能な候補が尽きれば解なしで終了します。時間超過の長さには上限を設けないため、追加探索を許容しない用途では`continue_on_timeout=false`を指定します。falseでも時計確認の間隔があり、実行中のcallbackを中断しないため、厳密な時刻での強制停止にはなりません。
+
+chokudaiの`max_sweeps`は通常スイープの上限で、救済スイープには適用しません。時間切れ前に通常スイープ上限へ達した場合は、解未発見でも回数上限で終了し、救済を開始しません。時間制限が無効なら`continue_on_timeout`によって探索を打ち切ることはありません。
 
 通常ビーム6種類では、`use_turn_time_limit=true`でturnごとの時間配分を使えます。`run`、`expand`、`push`の形は同じです。chokudaiの3種類には、この設定はありません。
 
@@ -259,32 +319,44 @@ param.time_check_interval = 1;     // 各expand終了後に時間を確認しま
 
 turn期限到達後は、singleでは次turn候補、multiでは現在より先のいずれかの到着turnの候補、subでは次turnの開始候補があれば、そのturnの残りの展開を切り上げます。最終turnへの到達が確定した場合も切り上げられます。未来候補がなければ、探索可能な候補から未来候補を生成できるか、候補が尽きるまで継続します。multiでは直後のturnが空でも、その先の到着候補を維持します。
 
-turn期限だけでは保持幅を1に縮めず、生成済み候補から通常の選抜で最大`beam_width`件を引き継ぎます。次turnでは期限到達フラグを解除して通常探索へ戻ります。全体の期限にも達した場合は、上表の全体時間超過処理が優先します。`finished=true`を指定しても、探索全体を自動で終了することはありません。
+turn期限だけでは保持幅を1に縮めず、生成済み候補から通常の選抜で最大`beam_width`件を引き継ぎます。次turnでは期限到達フラグを解除して通常探索へ戻ります。全体の期限にも達した場合は、上記の`continue_on_timeout`による終了・救済処理が優先します。全体時間制限に達していない間は、`is_answer=true`を指定しても探索全体を自動で終了することはありません。
 
 配分を有効にしても、実行中のexpand・遅延生成・状態の移動や復元を強制中断することはありません。初期化やturn間の候補実体化に費やした時間も、次回の残り時間に反映されます。ビーム幅を自動的に増やす機能ではなく、turnごとの探索時間の偏りを抑えるための機能です。重要な探索が特定turnへ集中する問題や、上限より早く探索が終わる問題では、無効時との比較も行ってください。
 
-例02・05・08・11・20・22では全体1,000msとturn別配分を指定しています。小さい例なので余裕を持って探索できる設定ですが、厳密な実行時間保証ではありません。時間切れの動作自体を再現するのは例24です。他の例は時間制限0です。実問題に合わせて予算を変更すると、例中の固定スコアのassertも見直す必要があります。`time_check_interval`を大きくすると時計確認の頻度は減りますが、時間超過の検出が遅くなり得ます。
+掲載例は探索全体の予算を1,000ms、通常の時計確認間隔を64展開にしています。通常ビームで全turnの完了を目指す例01・03・07・13・15は、turn別配分も有効にしています。途中のゴールや任意の停止時点を比較する例では配分を有効にせず、問題に合わせて利用側が選べる形にしています。これらの値は小さい掲載データ向けで、一般の問題に対する推奨幅・予算ではありません。`time_check_interval`を大きくすると時計確認の頻度は減りますが、時間超過の検出が遅くなり得ます。
 
 ### 2.9 Runtime・CSV・独自hook
 
-通常ビームsingle・multiでは、`Runtime::found`、`best_cost`、`best_turn`、`best_update_count`は、解を生成した`push`／`push_lazy`の中で更新されます。`BestUpdate` hookは1回の`expand`内の改善をまとめ、`expand`が返った後に1回通知します。`best_update_count`は実際の改善回数なので、hookの通知回数とは一致しない場合があります。初期状態自体が解になる0turn探索では、RunStart後に通知します。delta multiの経路は、解の改善時に保存します。
+設定値は全9種類で`runtime.param`から参照します。例えば、現在処理中のターンは`runtime.turn`、最大ターンの設定は`runtime.param.max_turn`です。chokudai single・multiのRuntimeは現在ターンの代わりにスイープの進捗を持ちます。設定を変更して次の探索を行う場合は、runへ渡す`Param`を変更します。callbackが受け取るRuntimeは読み取り専用です。
 
-chokudai single・multiでも、解を保存した`push`／`push_lazy`が返る前に、`Runtime::found`、`best_cost`、`best_turn`、`best_update_count`と`last_best_update_sweep`を更新します。探索候補へは棄却された有効解の改善も含みます。`BestUpdate`イベントはなく、CSVではSweepEndやRunEndで確認します。
+通常copy single・multiとdelta multiのコスト分布は、`CostStats`型の`runtime.live_costs`と`runtime.selected_costs`で参照します。`live_costs`は保持中の候補群、`selected_costs`は直近の選抜候補群です。`best`が最小cost、`worst`が最大cost、`average()`が平均、`count`が集計件数です。`sum`は平均計算用のdouble型の合計です。集計対象が空なら`count=0`で、best・worst・average()は0です。解として保存した最良値は`runtime.best_cost`で別に扱います。
 
-`BestUpdate`では最良解のメタ情報は最新ですが、frontier由来の集計値は直前の値の場合があります。またmultiでは、現在の探索turnより`best_turn`の方が先になる場合があります。これは未来の到着候補を生成時に解として保存したためです。 `turns_since_best_update`は、最良解を生成した探索turnから数えます。到着先の`best_turn`からは数えません。
+CSVではこれらを`live_best_cost`・`live_worst_cost`・`live_avg_cost`、`selected_best_cost`・`selected_worst_cost`・`selected_avg_cost`の列へ出力します。分布はHookのスナップショット更新時点の値です。delta multiの選抜分布はHook利用時に集計し、Hookを省略した最終結果でも保持中分布は確認できます。
 
-`run`の最後の引数へ`BS::CsvStatHook("filename.csv", interval_ms)`を渡すと、進捗を記録できます。既定の記録間隔は50ms、0なら対象イベントを全て記録します。CSVはメモリに蓄積してRunEndで書き出すため、細かい記録には時間・メモリの費用があります。同名ファイルは上書きされるので、用途ごとに名前を変えてください。
+通常ビームsingle・multiでは、`Runtime::found`、`best_cost`、`best_turn`、`best_update_count`は、解を生成した`push`／`push_lazy`の中で更新されます。`best_update_count`は実際の改善回数です。進捗はTurnEnd、最終値はRunEndまたはResultで確認できます。初期状態自体が解になる0turn探索でも、RunEndとResultで確認できます。delta multiの経路は、解の改善時に保存します。
 
-delta single・multi の記録間隔は、負値・NaNも0と同じ扱いです。正の無限大・表現範囲を超える間隔は内部の最大値へ丸めます。CSVの小数点はロケールに依存せず `.`、`signed char` のCostも文字ではなく数値で出力します。
+chokudai single・multiでも、解を保存した`push`／`push_lazy`が返る前に、`Runtime::found`、`best_cost`、`best_turn`、`best_update_count`と`last_best_update_sweep`を更新します。探索候補へは棄却された有効解の改善も含みます。CSVではSweepEndやRunEndで確認します。
+
+copy single・multiの`active_width`は、そのturnで`expand`を呼び出した件数です。`max_active_width`はそこまでの最大値を示します。
+
+multiでは、現在の探索turnより`best_turn`の方が先になる場合があります。これは未来の到着候補を生成時に解として保存したためです。 `turns_since_best_update`は、最良解を生成した探索turnから数えます。到着先の`best_turn`からは数えません。
+
+`LOCAL`を定義してコンパイルし、`run`の最後の引数へ`BS::CsvStatHook("filename.csv", interval_ms)`を渡すと、進捗を記録できます。既定の記録間隔は50ms、0なら対象イベントを全て記録します。CSVはメモリに蓄積してRunEndで書き出すため、細かい記録には時間・メモリの費用があります。同名ファイルは上書きされるので、用途ごとに名前を変えてください。
+
+全9種類とも、`LOCAL`未定義時の`CsvStatHook`はコンストラクタと呼び出し演算子だけを持つ空実装です。`LOCAL`の有無で、コンストラクタの引数・既定値と`run`への渡し方は変わりません。未定義時はCSV用データの保持・ファイル出力を行わず、エンジン側もhook省略時と同じ扱いになります。`rows`などのCSV用メンバを直接参照するデバッグコードも、`#ifdef LOCAL`で囲んでください。独自hookと`Runtime`は`LOCAL`の有無にかかわらず利用できます。
+
+全9種類で、`CsvStatHook::rows`にはRuntimeとイベントのスナップショットを保存します。期間差分や比率を出すsingle・multiでは、これらをCSVへ書き出す際に計算します。探索中に独自の解析を行う場合は、独自hookから`Runtime`を参照してください。
+
+全9種類のCSV記録間隔は、負値・NaNも0と同じ扱いです。正の無限大・表現範囲を超える間隔は内部の最大値へ丸めます。CSVの小数点はロケールに依存せず `.`、`signed char` のCostも文字ではなく数値で出力します。浮動小数点のCostは再読込時に値を復元できる精度で書き、`found=false`の行の`best_cost`・`best_turn`は空欄にします。
 
 | 系統 | 独自hookが受け取れる主なイベント | CsvStatHookが記録するイベント |
 | --- | --- | --- |
-| 通常ビームsingle・multi | RunStart、TurnStart、TurnEnd、BestUpdate、RunEnd。delta multiはRootCompressもある | RunStart、TurnEnd、RunEnd |
+| 通常ビームsingle・multi | RunStart、TurnEnd、RunEnd | RunStart、TurnEnd、RunEnd |
 | chokudai single・multi | RunStart、SweepStart、SweepEnd、RunEnd | RunStart、SweepEnd、RunEnd |
 | 通常ビームsub | RunStart、SubStepEnd、TurnEnd、RunEnd | 同左。間隔に従って記録 |
 | chokudai sub | RunStart、SubStepEnd、TurnEnd、SweepEnd、RunEnd | 同左。間隔に従って記録 |
 
-subのSubStepEndは、その層を処理し終えた通知です。通常ビームsubが時間超過で層の途中から次turnへ進む場合、その層のSubStepEndは出ませんが、TurnEndは出ます。chokudai subが即時終了する場合などは、TurnEndも出ないことがあります。RunEndの停止理由と併せて読みます。chokudai single・multiの`sweep_completed`はスイープを完走したかを表しますが、chokudai subにはこの項目やSweepStartはありません。
+subのSubStepEndは、その層を処理し終えた通知です。通常ビームsubが時間超過で層の途中から次turnへ進む場合、その層のSubStepEndは出ませんが、TurnEndは出ます。全体の時間切れで探索自体を終了する場合は、通常ビームもchokudaiもTurnEndが出ないことがあります。RunEndの停止理由と併せて読みます。chokudai single・multiの`sweep_completed`はスイープを完走したかを表しますが、chokudai subにはこの項目やSweepStartはありません。
 
 通常ビーム6種類のRuntimeには、turn別配分を観測する次の項目があります。これらは時計を最後に確認した時点の値で、expand中に時刻が進んでも自動更新されません。
 
@@ -298,7 +370,11 @@ subのSubStepEndは、その層を処理し終えた通知です。通常ビー�
 
 配分無効・turn未開始のstart/deadline/budgetは-1、経過時間は0です。CSVの時刻はミリ秒へ変換します。`time_limit_reached`は全体の期限のフラグで、turn期限とは独立です。期限到達フラグは、未展開候補を実際に打ち切ったことを意味しません。全候補を処理した直後に期限到達を検出する場合もあります。返却時の`result.runtime`に残るturn別情報は最後に処理したturnのもので、過去のturnの超過履歴はCSVなどで確認します。
 
-`turn_elapsed_us`はTurnEnd通知前に固定し、その通知のcallback、返却時の最終復元、RunEndの処理時間は加算しません。sub版ではTurnEndの後に行う次turn候補の実体化も、各turnの計測区間の外です。これらの探索中の費用は全体の経過時間に含まれ、次turnの予算に反映されます。全体の経過時間とturn別実測時間の合計が一致するとは限りません。
+`turn_elapsed_us`はTurnEnd通知前、または全体時間切れで探索を打ち切った時に固定し、その通知のcallback、返却時の最終復元、RunEndの処理時間は加算しません。sub版ではTurnEndの後に行う次turn候補の実体化も、各turnの計測区間の外です。これらの探索中の費用は全体の経過時間に含まれ、次turnの予算に反映されます。全体の経過時間とturn別実測時間の合計が一致するとは限りません。
+
+全9種類のCSVには`continue_on_timeout`と`expand_answers`も記録します。single・multiでは各行、subではRunStart行の設定欄に出します。Runtimeでは全9種類とも`runtime.param.continue_on_timeout`、`runtime.param.expand_answers`から参照できます。
+
+`answer_only_candidates`は、`expand_answers=false`により探索候補へ登録しなかった、最大turn未満の有効候補数です。最良解を更新したかどうかにかかわらず数え、幅・Hashによる棄却数には加えません。最大turn到着候補は`terminal_candidates`だけに数えます。どちらも生成候補数に含まれますが、探索候補の採用数には含まれません。
 
 全turnの予算・実測時間・展開数を解析するときは、`CsvStatHook("beam_stat.csv", 0)`で各TurnEndを記録してください。single・multiのCSVは`use_turn_time_limit`を各行に出し、subのCSVは他の設定と同じくRunStart行へ出します。
 
@@ -312,12 +388,12 @@ auto hook = [](BS::EventType event, const BS::Runtime& runtime) {
 };
 ```
 
-既定の`BS::NoOp`は通知を無視します。何もしないラムダと比べても、ライブラリが観測用処理を省略できる場合があります。本番で統計が不要ならhookを省略してください。Runtimeの詳細項目は方式ごとに異なります。sub版の正規化後設定は`runtime.param`にまとまっています。
+既定の`BS::NoOp`は通知を無視します。何もしないラムダと比べても、ライブラリが観測用処理を省略できる場合があります。本番で統計が不要ならhookを省略してください。Runtimeの詳細項目は方式ごとに異なります。全9種類で設定は`runtime.param`にまとまっています。`max_turn`や`beam_width`などは探索に使用する範囲へ正規化した値です。chokudai single・multiの`hash_capacity`は指定値を保持し、実際のHash表サイズは幅に応じて調整されます。
 
 | 調べたいこと | 主に見る情報 |
 | --- | --- |
 | 探索がどこまで進んだか | turn、sub_step、sweep、completed_max_turn。single・multi通常ビームのcopyではmaterialized_turnも参考になる |
-| 生成量と展開量 | expanded_nodes、generated_candidates。subではsub_generatedとturn_generatedを分けて読む |
+| 生成量と展開量 | expanded_nodes、generated_candidates、terminal_candidates。subではsub_generatedとturn_generatedを分けて読む |
 | 幅が足りないか | pruned_by_width、候補数、selected_widthなど。subではsub側とturn側を分ける |
 | 重複が多いか | pruned_by_hash、replaced_by_hashなど、存在する方式の項目 |
 | 解がいつ改善したか | best_cost、best_update_count。subではfirst_solution_ms、last_best_update_ms |
@@ -329,792 +405,694 @@ auto hook = [](BS::EventType event, const BS::Runtime& runtime) {
 
 通常ビームとchokudaiのsingle・multiの採用数・幅棄却数・Hash棄却数は、探索候補の選別についての統計です。選別で落ちた候補でも、`best_update_count`を増やす場合があります。有効解の確保は`found`と`best_cost`、改善の回数は`best_update_count`で確認します。
 
-sub版のCSVでは、候補cost欄は対応する候補数が0なら空欄です。subの`sub_stats.accepted`と`turn_stats.accepted`は探索候補群への保存回数で、有効解だけを保存した回数とは一致しません。したがって、`push`のtrue数、accepted数、最終的に残った候補数を同じものとして集計しないでください。棄却率が高いだけで、その設定が悪いとも断定できません。解の改善量、展開数、実時間を一緒に比較します。
+全9種類で`terminal_candidates`は、不正でない最大turn到着候補の生成数です。最大turn候補も生成数に含みますが、accepted数・幅棄却数・Hash棄却数には含めません。最大turnを解と見なさない設定でも数えます。初期状態だけで終わる`max_turn=0`では候補を生成しないため0です。`completed_max_turn`は最大turnの候補を生成できたことを示し、解の存在は`found`で確認します。copy single・multiの`materialized_turn`は到着候補の確定処理が済んだturnで、最大turnでStateを候補群へ保存したことを意味しません。
 
-## 3. beam_copy_single_v30.hpp
+sub版のCSVでは、候補cost欄は対応する候補数が0なら空欄です。subの`sub_stats.accepted`と`turn_stats.accepted`は探索候補群への保存回数で、有効解だけを保存した回数とは一致しません。`push`のtrue数はaccepted数に対応しますが、後の置換があるため最終的に残った候補数とは一致しません。棄却率が高いだけで、その設定が悪いとも断定できません。解の改善量、展開数、実時間を一緒に比較します。
 
-### 例01：固定手数で目標の値へ近づける
+### 2.10 copyの操作履歴を参照する
 
-0から始め、4回の操作で毎回1か2を加え、7に近づけます。1操作が必ず1turnなのでsingle版が適します。`push(state, cost)`、初期Hashなしの`run`、`best_state`による結果取得を使います。`beam_width=16`はこの小問題を確認するための幅で、一般の問題に対する推奨値ではありません。
-
-途中costは目標との差です。これは累積移動量ではなく、状態の評価値です。実問題では途中の距離だけで良い経路を残せるとは限らないため、評価関数を問題に合わせて設計します。
+履歴ありモードでは`emit.history()`が、現在展開している状態へ到達するまでの操作列を指す軽量な`HistoryView<Action>`を返します。Viewはノード番号を持つ参照用オブジェクトで、操作列を複製しません。次に生成する子の履歴ではなく、`now.state`の履歴です。
 
 ```cpp
-#include <cassert>
-#include <cstdint>
-#include <cstdlib>
-#include <iostream>
-#include <vector>
-#include "beam_copy_single_v30.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long, std::uint64_t>;
-
-// copy型では、将来の遷移に必要な情報と、出力したい履歴をStateに入れます。
-// Stateはコピー・代入できる型にします。vectorも使えますが、コピー費用がかかります。
-struct State {
-    int position = 0;
-    std::vector<int> moves;
-};
-
-int main() {
-    constexpr int target = 7;
-    BS::Param param{};
-    param.max_turn = 4;            // ちょうど4手を評価します。初期状態はturn=0です。
-    param.beam_width = 16;         // 次のturnに最大16状態を残します。
-    param.time_limit_ms = 0.0;     // この小さな例は時間無制限で再現可能にします。
-    param.max_turn_is_answer = true; // 4手後の状態を、自動的に解候補にします。
-    param.use_hash_dedup = false;  // 基本例なので、Hashによる重複排除は使いません。
-
-    // now.stateは読み取り専用です。子状態を作ってemitへ渡します。
-    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        for (int step : {1, 2}) {
-            State next = now.state;
-            next.position += step;
-            next.moves.push_back(step);
-            // costは小さいほど良い値。累積値に限定されず、状態の評価値でも構いません。
-            const long long cost = std::abs(target - next.position);
-            // single版のpushは1回につき必ずturnを1進めます。
-            emit.push(next, cost);
-        }
-    };
-
-    // 初期Hashを省略したrunです。初期costも同じ評価尺度に合わせます。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 7LL, expand);
-    if (!result.found) {
-        std::cout << "solution not found\n";
-        return 1;
-    }
-    // copy型の結果はoptional<State>です。foundを確認してから取り出します。
-    const State& answer = *result.best_state;
-    int replay = 0;
-    for (int step : answer.moves) replay += step;
-    assert(answer.moves.size() == 4 && replay == answer.position);
-    assert(answer.position == 7 && result.best_cost == 0);
-    std::cout << "position=" << answer.position
-              << " cost=" << result.best_cost << '\n';
+auto history = emit.history();
+if (!history.empty()) {
+    const Action& last = history.action(); // 直前の操作をconst参照で読む。
+    auto parent = history.parent();       // その操作より前の経路を指す。
+    // lastを使った判定はpush / push_lazyより前に済ませる。
 }
 ```
 
-確認する結果は`position=7 cost=0`です。
+`empty()`がtrueのViewでは`action()`・`parent()`を呼ばないでください。初期状態の履歴は空です。`parent()`を繰り返すと直前から初期方向へたどれます。結果の`result.path`は逆に、初期状態から解へ向かう実行順です。
 
-### 例02：仕事の割当をHashと遅延コピーで探索する
+Viewは当該`expand`内だけ有効です。View自体は`push`・`push_lazy`後も同じ祖先を指しますが、取得した`const Action&`やその内部への参照・ポインタは履歴配列の拡張で無効になり得ます。追加後に必要ならViewから再取得してください。参照をStateやActionへ保存して次のexpandへ持ち越さないでください。祖先Stateの参照APIはありません。
 
-4人へ4仕事を重複なく割り当て、合計費用を最小にします。`turn`が担当者番号、`State.used`が使用済み仕事集合です。同じ担当者まで割り当て、同じ集合を使っている経路は、安い方だけを残してよいので、ビットマスクをHashにします。
+履歴参照を呼ばなければ、参照用の走査や配列生成は行いません。`empty()`・`action()`・`parent()`はそれぞれ定数時間です。全履歴を毎回たどると経路長に比例するため、頻繁に必要な集計値はStateへ持たせる方が適します。履歴保持自体の費用は`run<State, Action>`にだけ発生します。
 
-`push_lazy`で、探索候補または最良有効解の保存に必要な場合だけ履歴vectorを生成します。`hash_capacity=0`は自動容量、`CsvStatHook`の0ms指定は全TurnEndの記録です。一般の問題で、将来条件が異なる状態まで同じHashへまとめないことが重要です。
+履歴で次の操作を制限する場合、その違いは将来の探索に影響します。Hashで重複排除するなら、必要な履歴の要約をState・Hashへ含めてください。操作列が異なるだけで将来の選択肢が同じなら、全履歴をHashに含める必要はありません。
 
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
+singleの`path`はAction列、multiは`Edge<Action>`列です。multiのAction参照では時刻情報は自動で付かないため、expand内の判断に必要ならActionへ必要な値を含めてください。subの`turn_offsets[0]`は0で、各Turn遷移の直後の位置が追加されます。途中Sub状態が最良解なら最後の区間は未完了turnで、`path.size()`が最後のoffsetより大きくなる場合があります。
+
+## 3. beam_copy_single_v40.hpp
+
+### 例01：仕事の割当表を最終Stateから受け取る
+
+仕事を1人ずつ割り当て、最後に「各担当者へ何の仕事を割り当てたか」の表を出力します。配置や割当そのものが回答になる問題では、`run<State>`で最終状態を受け取る形が簡単です。操作列は保存しません。
+
+`max_turn`は担当者数、`beam_width`は同じ割当済み人数の候補数です。使用済み仕事集合をHashにし、同じ集合なら累積費用が小さい割当を残します。最終割当表のコピーは`push_lazy`のmaker内で行います。`max_turn_is_answer=true`により全員への割当が完成解になり、`best_state`から表を取り出せます。
+
+`use_turn_time_limit=true`で全体1,000msを残り担当者数へ配分します。CSVは通常の探索へ付ける補助機能として併用し、`LOCAL`定義時だけ記録します。費用は加算型なので、同じ使用集合に対する安い部分解が将来も有利になることが、Hashによる統合の前提です。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <vector>
-#include "beam_copy_single_v30.hpp"
+#include "beam_copy_single_v40.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// usedが将来の選択肢を決めます。assignmentは答えの復元用の履歴です。
-// コピーした子のvectorが親と独立する、通常の値型として定義します。
+// 最終的な割当表そのものが回答なので、操作履歴を別に持つ必要はありません。
+// Stateはコピー可能な値型にし、探索中に共有の配列を書き換えないようにします。
 struct State {
     unsigned used = 0;
-    std::vector<int> assignment;
+    std::array<int, 4> job_for_worker{{-1, -1, -1, -1}};
 };
 
 int main() {
+    // fee[担当者][仕事]。標準入力なしで動く、小さな割当問題です。
     const std::array<std::array<int, 4>, 4> fee{{
-        {{9, 2, 7, 8}}, {{6, 4, 3, 7}}, {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
+        {{9, 2, 7, 8}}, {{6, 4, 3, 7}},
+        {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
     }};
     BS::Param param{};
-    param.max_turn = 4;             // turnが担当者番号です。各人へ仕事を1つ割り当てます。
-    param.beam_width = 16;          // 小さな例の全使用集合を保持できる幅です。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
-    param.max_turn_is_answer = true; // 全員への割当完了を有効解にします。
-    param.use_hash_dedup = true;    // 同turn・同usedなら、小さいcostの候補を優先します。
-    param.hash_capacity = 0;       // Hash表の容量はbeam_widthに合わせて自動設定します。
+    param.max_turn = 4; // 1人への割当が1turn。初期turn=0、4人で完成です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.use_turn_time_limit = true; // 残り時間を残りturn数に配分します。
 
     auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         for (int job = 0; job < 4; ++job) {
             if (now.state.used & (1U << job)) continue;
             const unsigned used = now.state.used | (1U << job);
             const long long cost = now.cost + fee[now.turn][job];
-            // 同じturnとusedなら今後の費用条件も同じなので、履歴をHashに含めません。
-            const Hash hash = static_cast<Hash>(used);
-            // 探索候補または最良有効解の保存に必要な場合だけ、Stateをコピーします。
-            // makerはこの呼び出し中に実行され、後のturnまで保存されません。
-            emit.push_lazy(cost, hash, [&now, used, job]() {
+            // 同turn・同使用集合なら、安い方を残してよい問題です。
+            // 割当表が大きくなる場合に備え、必要な候補だけStateをコピーします。
+            // makerはこのpush_lazy中に高々1回呼ばれ、後で呼ばれることはありません。
+            emit.push_lazy(cost, static_cast<Hash>(used), [&now, job, used] {
                 State next = now.state;
                 next.used = used;
-                next.assignment.push_back(job);
+                next.job_for_worker[now.turn] = job;
                 return next;
             });
         }
     };
 
-    // 第2引数0.0で全TurnEndを記録します。CSVはrun終了時に書き出されます。
-    BS::CsvStatHook csv("copy_single_assignment.csv", 0.0);
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("copy_single_assignment.csv", 50.0);
+    // run<State>はStateだけを保存します。初期costは0、初期使用集合も0です。
     const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
-    const auto& answer = *result.best_state;
-    unsigned used = 0;
-    long long actual_cost = 0;
-    assert(answer.assignment.size() == 4);
-    for (int person = 0; person < 4; ++person) {
-        const int job = answer.assignment[person];
-        assert((used & (1U << job)) == 0);
-        used |= 1U << job;
-        actual_cost += fee[person][job];
+    if (!result.found) { // best_stateを参照する前に、有効解の有無を確認します。
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(used == 15U && actual_cost == result.best_cost && actual_cost == 13);
     std::cout << "cost=" << result.best_cost << " jobs=";
-    for (int job : answer.assignment) std::cout << job << ' ';
+    for (int job : result.best_state->job_for_worker) std::cout << job << ' ';
     std::cout << '\n';
 }
 ```
 
-合計費用は13です。`copy_single_assignment.csv`も生成します。
+実行例：
 
-### 例03：探索候補から落ちた途中の有効解を受け取る
-
-ゴールに到達する経路を探します。低costの行き止まりと、costは高いが有効なゴールを同じ到着turnへ生成します。`beam_width=1`なので探索候補には行き止まりだけが残りますが、ゴールは解として独立に保存されます。`max_turn_is_answer=false`で、ゴールへ渡す`finished=true`だけを解の条件にします。
-
-ゴールは`push_lazy`で生成します。戻り値がfalseでも、最良解の保存に必要なのでmakerは1回呼ばれます。`result.found`を確認し、`best_state`から解を取得します。この例のStateは小さな値だけですが、操作列が必要ならStateにその履歴も持たせます。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "beam_copy_single_v30.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-struct State {
-    int node = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int maker_calls = 0;
-
-    auto expand = [&](const BS::StateView<State>& now, auto& emit) {
-        if (now.state.node == 2) ++goal_expansions;
-        if (now.state.node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(State{1}, 0LL, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push_lazy(10LL, true, [&] {
-            ++maker_calls;
-            return State{2}; // makerは解の保存のために1回だけ呼ばれます。
-        });
-    };
-
-    // 初期State、初期cost、候補生成処理を渡します。Hashは使っていません。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run(param, State{}, 0LL, expand);
-    assert(!selected); // push_lazyのboolは、探索候補としての採用結果です。
-    assert(maker_calls == 1);
-    assert(result.found && result.best_state->node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 1);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+cost=13 jobs=1 0 2 3
 ```
 
-出力は`found=1 best_cost=10 best_turn=1 selected=0`です。
+仕事番号は0始まりです。出力の並びは担当者0・1・2・3への割当を表します。
 
-## 4. beam_delta_single_v36.hpp
+### 例02：目標地点への移動コマンド列を受け取る
 
-### 例04：同じ固定手数の問題をAction列で解く
+壁のある盤面で目的地へ移動し、`U/R/D/L`の操作列を出力します。最終位置だけでは回答できないため、`run<State, Action>`を使い、Stateには現在位置、Actionには1回の移動を分けて持たせます。`max_turn`は手数上限であり、上限より前のゴールも解です。
 
-例01と同じ問題を、外部の`position`と`Action{delta}`で表します。盤面を丸ごと保存せず、加算と減算のcallbackで移動する基本形です。`push`を呼んだ時点で外部状態が子へ進むわけではありません。
+`max_turn_is_answer=false`とし、目的地へ着く候補へだけ`is_answer=true`を渡します。途中の評価は「使用手数＋マンハッタン距離」、ゴールでは実際の使用手数です。`result.path`は初期状態からのAction列で、そのまま出力できます。
 
-この版の`nodes_capacity=0`は、turn数と幅に基づくノード数上限の自動設定です。ノード用の格納領域は必要に応じて増やします。不要ノードはまとめて回収し、空いた領域を再利用します。現在の外部状態、次turnの候補、保存済み最良解に必要な祖先は回収から保護されます。正の上限を指定した場合も、回収してなお不足するときに`result.node_pool_exhausted`が真になります。
+`emit.history()`で直前のActionを参照し、この静的な迷路では不要な直後の往復を省きます。生成可能な手が直前方向に依存するので、Hashにも直前方向を含めます。Actionへの参照は`push`で無効になり得るため、必要な方向だけを先に読み取ります。履歴を使わない問題に、この枝刈りをそのまま持ち込む必要はありません。
 
-`runtime.used_nodes`には次の回収まで残る不要ノードも含まれ、回収時に減ることがあります。`runtime.max_used_nodes`はその最大値です。`runtime.nodes_capacity`はノード数の上限であり、実際に確保したスロット数やメモリ量のバイト上限ではありません。Action内部の可変長データや一時配列のメモリも別に必要です。
-
-正常終了後の初期状態への復元を確認し、`result.path`を再生して最良解へ移動します。
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
-#include <cassert>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "beam_delta_single_v36.hpp"
+#include <string_view>
+#include "beam_copy_single_v40.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// delta型は子状態全体でなくActionを保存します。
-// root用にデフォルト構築でき、コピー・代入できる型にします。
-struct Action {
-    int delta = 0;
+constexpr int HEIGHT = 4, WIDTH = 5;
+constexpr int GOAL_ROW = 3, GOAL_COL = 4;
+const std::array<std::string_view, HEIGHT> board{
+    "S..#.", ".#...", "...#.", "#...G"
 };
+constexpr std::array<int, 4> dr{-1, 0, 1, 0}, dc{0, 1, 0, -1};
+constexpr std::array<char, 4> command{'U', 'R', 'D', 'L'};
 
-int main() {
-    int position = 0; // expandが読む外部状態。ライブラリがcallbackで位置を合わせます。
-    BS::Param param{};
-    param.max_turn = 4;            // 各Actionが1turnなので、ちょうど4手です。
-    param.beam_width = 16;         // 各turnに残す候補の上限です。
-    param.nodes_capacity = 0;      // max_turnとbeam_widthから上限を自動設定し、必要な領域を確保・再利用します。
-    param.time_limit_ms = 0.0;     // 例の結果を再現するため時間無制限にします。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = false;  // この例ではHashによる枝の統合を行いません。
-
-    auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
-        (void)now;
-        for (int delta : {1, 2}) {
-            const long long cost = std::abs(7 - (position + delta));
-            // pushは外部状態を進めません。現在のpositionは変更せず候補だけを登録します。
-            emit.push(Action{delta}, cost);
-        }
-    };
-    // forwardとbackwardは完全な逆操作にします。別の探索枝への移動でも呼ばれます。
-    auto forward = [&](const Action& action) { position += action.delta; };
-    auto backward = [&](const Action& action) { position -= action.delta; };
-
-    // delta型では、重複排除を使わなくてもinitial_hash引数が必要です。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 7LL, Hash{0}, expand, forward, backward);
-    assert(position == 0); // 正常終了時には外部状態が初期状態へ戻ります。
-    if (!result.found || result.node_pool_exhausted) return 1;
-    // 解を盤面に適用したい場合は、返されたAction列を自分で再生します。
-    for (const Action& action : result.path) forward(action);
-    assert(result.path.size() == 4 && position == 7 && result.best_cost == 0);
-    std::cout << "position=" << position << " cost=" << result.best_cost << '\n';
+// 探索中は残距離も評価に使います。ゴールで0になるので、解のcostは実手数です。
+int distance_to_goal(int row, int col) {
+    return std::abs(row - GOAL_ROW) + std::abs(col - GOAL_COL);
 }
-```
+Hash state_hash(int row, int col, int previous) {
+    // 直前の逆操作を省くため、位置だけでなく直前方向もHashに含めます。
+    // previous=-1は初期状態。小さい状態なので、この整数化には衝突がありません。
+    return static_cast<Hash>((row * WIDTH + col) * 5 + previous + 1);
+}
 
-確認する結果は`position=7 cost=0`です。
-
-### 例05：外部の使用集合を更新しながら割当を探索する
-
-例02と同じ割当問題をdelta型で解きます。外部状態は使用集合だけで、履歴はAction列としてライブラリへ任せます。Runtime付き`expand`、Hash付き`push`、CSV、結果の行動再生を使います。
-
-仕事の使用開始・取り消しが完全な逆操作であることを確認します。`node_pool_exhausted`と`hash_table_full`が真なら予定どおりの探索とは限らないため、この例はエラーとして扱います。
-
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
-
-```cpp
-#include <array>
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "beam_delta_single_v36.hpp"
-
-using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long, Hash>;
-
-// Actionには、undoに必要な情報を残します。この問題では仕事番号だけで逆操作できます。
-// デフォルト値はroot用です。rootのダミーActionをユーザーが適用する必要はありません。
-struct Action {
-    int job = -1;
-};
+// Stateは現在位置だけ。出力用の文字列を毎回コピーしません。
+struct State { int row = 0, col = 0; };
+// Actionは1回分の操作です。ライブラリが共有木で履歴を保存します。
+struct Action { int direction = 0; };
 
 int main() {
-    const std::array<std::array<int, 4>, 4> fee{{
-        {{9, 2, 7, 8}}, {{6, 4, 3, 7}}, {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
-    }};
-    unsigned used = 0; // 現在の探索状態。履歴はライブラリのAction列が保持します。
     BS::Param param{};
-    param.max_turn = 4; // 初期turn=0から到達できる最大turnです。
-    param.beam_width = 16;         // 各使用集合を残せる幅を指定します。
-    param.nodes_capacity = 0;      // 自動容量。小さく固定すると解の探索途中で容量切れになり得ます。
-    param.hash_capacity = 0;       // 重複排除用の表は自動設定にします。
-    param.use_hash_dedup = true;   // 同turnの同使用集合を統合します。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
+    param.max_turn = 12; // 最大12手。ゴールなら12手より前でも完成です。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
 
-    auto expand = [&](const BS::NodeView& now, const BS::Runtime& runtime,
-                      BS::Emitter<Action>& emit) {
-        (void)runtime; // Runtimeは読み取り専用で、統計や時間制限検出状況を参照できます。
-        for (int job = 0; job < 4; ++job) {
-            if (used & (1U << job)) continue;
-            const Hash next_hash = static_cast<Hash>(used | (1U << job));
-            emit.push(Action{job}, now.cost + fee[now.turn][job], next_hash);
+    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        // 1手前のActionを参照します。履歴全体のコピーや走査は不要です。
+        const auto history = emit.history();
+        int previous = -1;
+        if (!history.empty()) {
+            const Action& last = history.action();
+            previous = last.direction; // 参照が無効化され得るpushより前に読み取ります。
+        }
+        for (int dir = 0; dir < 4; ++dir) {
+            // この静的な迷路では、直後の往復は最短路に不要です。
+            if (previous >= 0 && dir == (previous + 2) % 4) continue;
+            const int row = now.state.row + dr[dir], col = now.state.col + dc[dir];
+            if (row < 0 || row >= HEIGHT || col < 0 || col >= WIDTH) continue;
+            if (board[row][col] == '#') continue;
+            const bool goal = row == GOAL_ROW && col == GOAL_COL;
+            const long long cost = now.turn + 1LL + distance_to_goal(row, col);
+            // 履歴ありpushはStateの直後にActionを渡します。
+            emit.push(State{row, col}, Action{dir}, cost, state_hash(row, col, dir), goal);
         }
     };
-    auto forward = [&](const Action& action) {
-        assert((used & (1U << action.job)) == 0);
-        used |= 1U << action.job;
-    };
-    auto backward = [&](const Action& action) {
-        assert(used & (1U << action.job));
-        used &= ~(1U << action.job);
-    };
-
-    BS::CsvStatHook csv("delta_single_assignment.csv", 0.0); // 全TurnEndを記録します。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(
-        param, 0LL, Hash{0}, expand, forward, backward, csv
+    // 第2テンプレート引数Actionを指定すると、最終Stateと操作列を両方受け取れます。
+    const auto result = BS::run<State, Action>(
+        param, State{}, static_cast<long long>(distance_to_goal(0, 0)),
+        state_hash(0, 0, -1), expand
     );
-    assert(used == 0); // 状態が戻ることも検査します。
-    if (!result.found || result.node_pool_exhausted || result.hash_table_full) return 1;
-    assert(result.path.size() == 4);
-    long long actual_cost = 0;
-    for (int person = 0; person < 4; ++person) {
-        forward(result.path[person]);
-        actual_cost += fee[person][result.path[person].job];
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(used == 15U && actual_cost == result.best_cost && actual_cost == 13);
-    std::cout << "cost=" << result.best_cost << " jobs=";
-    for (const Action& action : result.path) std::cout << action.job << ' ';
+    // pathは初期状態から解へ向かう実行順です。pushの受理可否で解を判定しません。
+    std::cout << "steps=" << result.best_turn << " cost=" << result.best_cost << " moves=";
+    for (const Action& action : result.path) std::cout << command[action.direction];
     std::cout << '\n';
 }
 ```
 
-合計費用は13です。`delta_single_assignment.csv`も生成します。
+実行例：
 
-### 例06：探索候補から落ちた途中の有効解を受け取る
-
-ゴールに到達する経路を探します。低costの行き止まりと、costは高いが有効なゴールを同じ到着turnへ生成します。`beam_width=1`なので探索候補には行き止まりだけが残りますが、ゴールは解として独立に保存されます。`max_turn_is_answer=false`で、ゴールへ渡す`finished=true`だけを解の条件にします。
-
-Actionは親と遷移先を持ち、前進・巻き戻しで外部状態を復元します。`push`の戻り値はfalseでも、`result.found`はtrueです。返却されたpathを初期状態から再生すると、探索候補に残らなかったゴールを取り出せます。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "beam_delta_single_v36.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-// Actionには前進と巻き戻しに必要な情報を持たせます。
-// コピー可能な型とし、探索中に消えるオブジェクトへの参照は入れません。
-struct Action {
-    int from = 0;
-    int to = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-    param.nodes_capacity = 0; // 探索木の容量はライブラリの自動設定を使います。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int current_node = 0; // ライブラリの状態移動に合わせて更新する外部状態です。
-
-    auto expand = [&](const BS::NodeView& now, auto& emit) {
-        assert(now.turn == 0 || now.turn == 1);
-        if (current_node == 2) ++goal_expansions;
-        if (current_node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(Action{0, 1}, 0LL, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push(Action{0, 2}, 10LL, true);
-    };
-
-    // 前進・巻き戻しは互いに逆の操作にします。
-    auto forward = [&](const Action& action) {
-        assert(current_node == action.from);
-        current_node = action.to;
-    };
-    auto backward = [&](const Action& action) {
-        assert(current_node == action.to);
-        current_node = action.from;
-    };
-
-    // deltaのrunでは初期Hashも渡します。Hashなしpushは重複排除の対象外です。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, std::uint64_t{0}, expand, forward, backward);
-    assert(current_node == 0); // run終了時には外部状態が初期状態へ戻ります。
-    assert(!selected); // pushのboolは、探索候補としての採用結果です。
-    assert(result.found && result.path.size() == 1);
-
-    // 保存された操作列を、初期状態から再生して解を取り出します。
-    for (const auto& action : result.path) forward(action);
-    assert(current_node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 1);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+steps=7 cost=7 moves=RRDRRDD
 ```
 
-出力は`found=1 best_cost=10 best_turn=1 selected=0`です。
+同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 5. beam_copy_multi_v34.hpp
+## 4. beam_delta_single_v46.hpp
 
-### 例07：所要時間の違う作業を組み合わせる
+### 例03：割当を外部状態へ差分適用し、Action列を返す
 
-1時間で利益1、2時間で利益5、3時間で利益8を得る作業を何度でも選べるとし、合計6時間の利益を最大にします。作業回数ではなく、経過時間が`turn`です。同じ6時間の候補同士で比較するため、multi版を使います。
+担当者へ仕事を1つずつ割り当てる問題です。制約の管理表や盤面が大きくなる場合を想定し、使用集合を外部状態へ置き、Actionには選んだ仕事番号だけを保存します。`run<Action>`の結果は操作列なので、Stateを候補ごとに持たなくても割当表を出力できます。
 
-`max_step=3`と、`push`の`int duration`が重要です。最大時間を超える候補はライブラリ側も棄却しますが、サンプルではState作成前に省きます。
+`expand`は現在の使用集合を読むだけで、`push`の時点では変更しません。`forward`が仕事を追加し、`backward`が同じ仕事を取り消します。`max_turn`は担当者数、`max_turn_is_answer=true`は全員の割当を完成解とする設定です。Hashは使用集合、costは累積費用にします。
+
+正常な`run`返却時、外部状態は初期状態へ戻っています。割当表は`path`の順番から直接出力できます。外部状態を最良解へ移したい場合には、その後でpathを再適用します。この例の状態は小さいため、実際にdeltaを選ぶ基準は、実問題でのコピー費用と取り消し費用です。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <vector>
-#include "beam_copy_multi_v34.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long, std::uint64_t>;
-
-// copy型なので、利益と、出力に必要な作業時間の履歴をStateに入れます。
-// 独立してコピー・代入できる値型にします。
-struct State {
-    long long profit = 0;
-    std::vector<int> durations;
-};
-
-int main() {
-    // 1時間・2時間・3時間の作業は何度でも選べます。合計6時間で利益を最大化します。
-    const std::array<int, 4> reward{0, 1, 5, 8};
-    BS::Param param{};
-    param.max_turn = 6;            // turnは作業数でなく、経過時間です。
-    param.max_step = 3;            // 1作業で最大3時間進みます。0時間の遷移は使えません。
-    param.beam_width = 16;         // 同じ到着時刻の候補を比較し、最大16状態を残します。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-    param.max_turn_is_answer = true; // ちょうど6時間に到着した状態を有効解にします。
-    param.use_hash_dedup = false;  // この基本例では履歴ごとに候補を保持します。
-
-    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        for (int duration = 1; duration <= 3; ++duration) {
-            if (duration > param.max_turn - now.turn) continue;
-            State next = now.state;
-            next.profit += reward[duration];
-            next.durations.push_back(duration);
-            // 最大化なのでcost=-profit。multi版では末尾にint型のstepを渡します。
-            emit.push(next, -next.profit, duration);
-        }
-    };
-
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, expand);
-    if (!result.found) return 1;
-    const State& answer = *result.best_state;
-    int elapsed = 0;
-    long long profit = 0;
-    for (int duration : answer.durations) {
-        elapsed += duration;
-        profit += reward[duration];
-    }
-    assert(elapsed == 6 && result.best_turn == 6);
-    assert(profit == 16 && profit == answer.profit && result.best_cost == -profit);
-    std::cout << "hours=" << elapsed << " profit=" << profit << '\n';
-}
-```
-
-3時間の作業を2回行い、`hours=6 profit=16`になります。
-
-### 例08：時間を使い切らなくてもよい作業選択
-
-各作業を高々1回選び、5時間以内の利益を最大にします。各作業終了時に停止してよいので、毎回`finished=true`を渡します。それでも、次の作業を追加する探索は続きます。
-
-`max_turn_is_answer=false`で有効解条件を明示し、Hashには使用集合を使います。`push_lazy`の引数は`cost, hash, step, finished, maker`です。初期の空集合も解候補にしたい一般形では、利用側で初期解を保持して比較します。この例は全利益が正で、実際に作業を選んだ最良解を確認します。
-
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
-
-```cpp
-#include <array>
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include <vector>
-#include "beam_copy_multi_v34.hpp"
+#include "beam_delta_single_v46.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// 同じusedなら作業済み集合が同じで、次に選べる作業も同じです。
-// jobsは答えを出力するための履歴です。コピー可能な型にします。
-struct State {
-    unsigned used = 0;
-    long long profit = 0;
-    std::vector<int> jobs;
+// 1人分の割当です。Actionはコピー可能にし、undoに必要な情報を持たせます。
+// この問題では、未使用の仕事を追加するので仕事番号だけで取り消せます。
+struct Action { int job = -1; };
+
+int main() {
+    // fee[担当者][仕事]。標準入力なしで動く、小さな割当問題です。
+    const std::array<std::array<int, 4>, 4> fee{{
+        {{9, 2, 7, 8}}, {{6, 4, 3, 7}},
+        {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
+    }};
+    BS::Param param{};
+    param.max_turn = 4; // 1人への割当が1turn。初期turn=0、4人で完成です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.use_turn_time_limit = true; // 残り時間を残りturn数に配分します。
+
+    unsigned used = 0; // ライブラリがcallbackを通して探索位置に合わせる外部状態です。
+    auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
+        for (int job = 0; job < 4; ++job) {
+            if (used & (1U << job)) continue;
+            const Hash hash = static_cast<Hash>(used | (1U << job));
+            // 同turn・同使用集合なら将来条件は同じ。安い割当だけを残せます。
+            // pushは候補を登録するだけで、ここでusedを子状態に変えません。
+            emit.push(Action{job}, now.cost + fee[now.turn][job], hash);
+        }
+    };
+    auto forward = [&](const Action& action) {
+        used |= 1U << action.job;
+    };
+    auto backward = [&](const Action& action) {
+        used &= ~(1U << action.job); // forwardの更新を完全に取り消します。
+    };
+
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("delta_single_assignment.csv", 50.0);
+    // 初期Hashは省略でき、0になります。Action列はライブラリが保持・復元します。
+    const auto result = BS::run<Action>(
+        param, 0LL, expand, forward, backward, csv
+    );
+    // 正常なrun返却時、usedは初期値0へ戻っています。
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    std::cout << "cost=" << result.best_cost << " jobs=";
+    for (const Action& action : result.path) {
+        // path[0]は担当者0への割当です。Stateの復元なしでも回答を出せます。
+        std::cout << action.job << ' ';
+    }
+    std::cout << '\n';
+}
+```
+
+実行例：
+
+```text
+cost=13 jobs=1 0 2 3
+```
+
+仕事番号は0始まりです。出力の並びは担当者0・1・2・3への割当を表します。
+
+### 例04：移動と巻き戻しを実装し、途中のゴールを返す
+
+盤面を共有しながら目的地へ移動する問題です。最大手数まで歩くこと自体は完成条件ではないため、`max_turn_is_answer=false`にして、ゴールへの遷移だけへ`is_answer=true`を渡します。正常終了後に返るAction列を移動コマンドへ変換します。
+
+現在位置と直前方向を外部状態へ持ちます。座標は逆向きに移動すれば戻せますが、直前方向の上書きは逆算できないので、変更前の方向をActionへ保存します。これは、盤面のセルや資源量を上書きする問題でも同じ考え方です。
+
+途中costは使用手数と残距離の和、ゴールのcostは実手数です。Hashには直前方向も含めます。`is_answer=true`は自動的な展開停止ではないため、ゴール状態からは利用側の`expand`で候補を出さないようにします。
+
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <string_view>
+#include "beam_delta_single_v46.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = bs::Beam<long long, Hash>;
+
+constexpr int HEIGHT = 4, WIDTH = 5;
+constexpr int GOAL_ROW = 3, GOAL_COL = 4;
+const std::array<std::string_view, HEIGHT> board{
+    "S..#.", ".#...", "...#.", "#...G"
 };
+constexpr std::array<int, 4> dr{-1, 0, 1, 0}, dc{0, 1, 0, -1};
+constexpr std::array<char, 4> command{'U', 'R', 'D', 'L'};
+
+// 探索中は残距離も評価に使います。ゴールで0になるので、解のcostは実手数です。
+int distance_to_goal(int row, int col) {
+    return std::abs(row - GOAL_ROW) + std::abs(col - GOAL_COL);
+}
+Hash state_hash(int row, int col, int previous) {
+    // 直前の逆操作を省くため、位置だけでなく直前方向もHashに含めます。
+    // previous=-1は初期状態。小さい状態なので、この整数化には衝突がありません。
+    return static_cast<Hash>((row * WIDTH + col) * 5 + previous + 1);
+}
+
+// 大きい盤面を扱う場合も、移動で変わる情報だけを外部状態へ持たせます。
+struct World { int row = 0, col = 0, previous = -1; };
+// 上書きする直前方向を戻すため、変更前の値もActionへ保存します。
+struct Action { int direction = 0, old_previous = -1; };
+
+int main() {
+    BS::Param param{};
+    param.max_turn = 12; // 最大12手。ゴールなら12手より前でも完成です。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+
+    World world;
+    auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
+        for (int dir = 0; dir < 4; ++dir) {
+            if (world.previous >= 0 && dir == (world.previous + 2) % 4) continue;
+            const int row = world.row + dr[dir], col = world.col + dc[dir];
+            if (row < 0 || row >= HEIGHT || col < 0 || col >= WIDTH) continue;
+            if (board[row][col] == '#') continue;
+            const bool goal = row == GOAL_ROW && col == GOAL_COL;
+            const long long cost = now.turn + 1LL + distance_to_goal(row, col);
+            // is_answer=trueで解として保存し、expand_answers=falseにより次のビームへは登録しません。
+            emit.push(Action{dir, world.previous}, cost, state_hash(row, col, dir), goal);
+        }
+    };
+    auto forward = [&](const Action& action) {
+        world.row += dr[action.direction];
+        world.col += dc[action.direction];
+        world.previous = action.direction;
+    };
+    auto backward = [&](const Action& action) {
+        world.row -= dr[action.direction];
+        world.col -= dc[action.direction];
+        world.previous = action.old_previous; // 上書き前の値へ戻します。
+    };
+    const auto result = BS::run<Action>(
+        param, static_cast<long long>(distance_to_goal(0, 0)), state_hash(0, 0, -1),
+        expand, forward, backward
+    );
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    // pathは初期状態から解へ向かう実行順です。pushの受理可否で解を判定しません。
+    std::cout << "steps=" << result.best_turn << " cost=" << result.best_cost << " moves=";
+    for (const Action& action : result.path) std::cout << command[action.direction];
+    std::cout << '\n';
+}
+```
+
+実行例：
+
+```text
+steps=7 cost=7 moves=RRDRRDD
+```
+
+同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
+
+## 5. beam_copy_multi_v44.hpp
+
+### 例05：時間内に行う作業の集合を選ぶ
+
+所要時間と利益が異なる仕事から、5時間以内に行うものを選びます。各仕事は高々1回で、実行順には意味がありません。作業数ではなく経過時間をturnにし、各遷移の`step`へ所要時間を渡します。回答は使用集合なので`run<State>`で十分です。
+
+`max_step`は1作業の最大所要時間です。時間を使い切らない計画も有効なので`max_turn_is_answer=false`にし、各作業の終了状態へ`is_answer=true`を渡します。それでも、その計画へ仕事を追加する探索は続けられます。costは利益の負値です。
+
+何もしない空集合も有効解ですが、正の`max_turn`の初期状態へ解の印を付ける引数はありません。そこで利用側で利益0の初期解を保持し、探索結果と比較します。Stateは小さいので`push`で直接渡し、同じ到着時間の同じ使用集合をHashで統合します。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include "beam_copy_multi_v44.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = bs::Beam<long long, Hash>;
+
+// 作業順に意味がなく、選んだ集合が回答です。Stateだけを返す形を使います。
+struct State { unsigned used = 0; long long profit = 0; };
 
 int main() {
     const std::array<int, 4> duration{2, 3, 1, 2};
     const std::array<int, 4> reward{6, 8, 2, 5};
     BS::Param param{};
-    param.max_turn = 5;             // 使える時間の上限です。5時間未満の解も認めます。
-    param.max_step = 3;             // 最も長い作業の所要時間です。
-    param.beam_width = 16;          // この例では全使用集合を扱える幅です。
-    param.max_turn_is_answer = false; // 有効解判定はfinishedで明示します。
-    param.use_hash_dedup = true; // Hashを明示した候補の重複を、同じ保存先内で除きます。
-    param.hash_capacity = 0;        // Hash表容量は自動設定にします。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
+    param.max_turn = 5; // turnは作業数ではなく、消費した時間です。
+    param.max_step = 3; // 1作業にかかる時間の最大値です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
 
     auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         for (int job = 0; job < 4; ++job) {
             if (now.state.used & (1U << job)) continue;
-            const int step = duration[job]; // stepは必ずint型にします。
+            const int step = duration[job]; // stepは1..max_stepのintです。
             if (step > param.max_turn - now.turn) continue;
-            const unsigned used = now.state.used | (1U << job);
-            const long long profit = now.state.profit + reward[job];
-            // 各作業終了時点で停止してよいためfinished=trueです。
-            // それでも探索は続きます。さらに作業を追加した解も比較します。
-            emit.push_lazy(-profit, static_cast<Hash>(used), step, true,
-                           [&now, used, profit, job]() {
-                State next = now.state;
-                next.used = used;
-                next.profit = profit;
-                next.jobs.push_back(job);
-                return next;
-            }); // makerは探索候補か最良有効解の保存に必要な場合だけ、同期的に1回実行されます。
+            State next = now.state; // このStateは小さいので、通常のpushを使います。
+            next.used |= 1U << job;
+            next.profit += reward[job];
+            // 同じ到着turn・使用集合なら将来の選択肢も利益も同じです。
+            // 途中で停止してもよいので、各作業の終了状態を有効解にします。
+            emit.push(next, -next.profit, static_cast<Hash>(next.used), step, true);
         }
     };
-
-    BS::CsvStatHook csv("copy_multi_jobs.csv", 0.0); // 全TurnEndを記録します。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
+    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand);
+    // 正のmax_turnでは初期状態にis_answerを渡せないので、空集合は自分で比較します。
+    State answer;
     int hours = 0;
-    long long profit = 0;
-    unsigned used = 0;
-    for (int job : result.best_state->jobs) {
-        assert((used & (1U << job)) == 0);
-        used |= 1U << job;
-        hours += duration[job];
-        profit += reward[job];
+    if (result.found && result.best_cost < 0) {
+        answer = *result.best_state;
+        hours = result.best_turn;
     }
-    assert(hours <= 5 && hours == result.best_turn);
-    assert(profit == 14 && result.best_cost == -profit);
-    std::cout << "hours=" << hours << " profit=" << profit << '\n';
+    std::cout << "profit=" << answer.profit << " hours=" << hours << " jobs=";
+    for (int job = 0; job < 4; ++job) if (answer.used & (1U << job)) std::cout << job << ' ';
+    std::cout << '\n';
 }
 ```
 
-最良利益は14です。`copy_multi_jobs.csv`も生成します。
+実行例：
 
-### 例09：探索候補から落ちた途中の有効解を受け取る
-
-ゴールに到達する経路を探します。低costの行き止まりと、costは高いが有効なゴールを同じ到着turnへ生成します。`beam_width=1`なので探索候補には行き止まりだけが残りますが、ゴールは解として独立に保存されます。`max_turn_is_answer=false`で、ゴールへ渡す`finished=true`だけを解の条件にします。
-
-ゴールは`push_lazy`で生成します。戻り値がfalseでも、最良解の保存に必要なのでmakerは1回呼ばれます。`result.found`を確認し、`best_state`から解を取得します。この例のStateは小さな値だけですが、操作列が必要ならStateにその履歴も持たせます。
-
-`step=2`は消費turn数です。到着待ちの間も解は保存され、`best_turn`は2になります。`max_step=2`と、到着先が`max_turn`以内であることを守ります。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "beam_copy_multi_v34.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-struct State {
-    int node = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-    param.max_step = 2; // 1操作で最大2turn進めます。この例は2turnの遷移を使います。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int maker_calls = 0;
-
-    auto expand = [&](const BS::StateView<State>& now, auto& emit) {
-        if (now.state.node == 2) ++goal_expansions;
-        if (now.state.node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(State{1}, 0LL, 2, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push_lazy(10LL, 2, true, [&] {
-            ++maker_calls;
-            return State{2}; // makerは解の保存のために1回だけ呼ばれます。
-        });
-    };
-
-    // 初期State、初期cost、候補生成処理を渡します。Hashは使っていません。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run(param, State{}, 0LL, expand);
-    assert(!selected); // push_lazyのboolは、探索候補としての採用結果です。
-    assert(maker_calls == 1);
-    assert(result.found && result.best_state->node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 2);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+profit=14 hours=5 jobs=0 1
 ```
 
-出力は`found=1 best_cost=10 best_turn=2 selected=0`です。
+出力は選んだ仕事の集合です。実行順による段取り費用がないため、仕事番号順に表示しています。
 
-## 6. beam_delta_multi_v59.hpp
+### 例06：所要時間の異なる道路を選び、経路と時刻を返す
 
-### 例10：Edgeの時刻情報を使って外部状態を戻す
+6分以内に目的地へ到達する道路の組合せを、通行料が小さくなるように選びます。`step`は移動時間、costは通行料であり、別の量です。回答に道路の順番が必要なので、`run<State, Action>`で現在都市と道路番号の履歴を分離します。
 
-例07の作業選択をdelta型で解きます。`Edge`にはActionに加えて出発turnとstepがあるため、時間を含む外部状態の整合性を確認できます。`edge.next_turn()`で到着時刻を求めます。
+`max_turn_is_answer=false`とし、目的地へ到着する候補を有効解にします。同じ到着時刻・都市なら以降の選択肢が同じなので、都市番号をHashとして通行料の小さい経路を残します。時間に加えて燃料などが制約になる場合は、その情報もStateとHashへ加えます。
 
-`CapacityPolicy::Safe`と自動容量を使います。`result.path.size()`は作業数で、6時間という`best_turn`とは別の量です。返されたEdge列を再生して、利益と時間を検算します。
+multiの`path`の要素は`Edge<Action>`です。`edge.action`が選んだ道路、`edge.turn`が出発時刻、`edge.next_turn()`が到着時刻です。経路の要素数を経過時間と取り違えないようにします。
+
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v59.hpp"
+#include "beam_copy_multi_v44.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// Actionは作業による利益増加を保持します。所要時間はEdge.stepに保存されます。
-// root用のデフォルト構築と、コピー・代入が可能な型にします。
-struct Action {
-    int reward = 0;
-};
+// 道路データは不変なのでStateには複製しません。
+struct Road { int from, to, minutes, toll; };
+struct State { int city = 0; }; // 現在都市だけで次の行動を決められます。
+struct Action { int road = -1; }; // 出力したい道路番号を1操作分だけ保存します。
 
 int main() {
-    const std::array<int, 4> rewards{0, 1, 5, 8};
-    int hours = 0;
-    long long profit = 0; // 外部状態はmove callbackが探索位置へ合わせます。
+    const std::array<Road, 8> roads{{
+        {0, 1, 2, 4}, {0, 2, 1, 1}, {1, 3, 2, 1}, {1, 5, 4, 2},
+        {2, 3, 3, 2}, {2, 4, 1, 5}, {3, 5, 1, 1}, {4, 5, 2, 1}
+    }};
+    constexpr int goal_city = 5;
     BS::Param param{};
-    param.max_turn = 6;            // turnを経過時間として使います。
-    param.max_step = 3;            // 1作業は1〜3時間です。
-    param.beam_width = 16; // 同じturnの候補を保持する上限です。
-    param.nodes_capacity = 0;      // capacity_policyに従って自動設定します。
-    param.capacity_policy = BS::CapacityPolicy::Safe; // まずは容量不足を避ける設定にします。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = false; // この例ではHashによる重複排除を使いません。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
+    param.max_turn = 6; // 6分以内。到着が6分ちょうどである必要はありません。
+    param.max_step = 4; // 1本の道路の所要時間の最大値です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+
+    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        for (int id = 0; id < static_cast<int>(roads.size()); ++id) {
+            const Road& road = roads[id];
+            if (road.from != now.state.city) continue;
+            if (road.minutes > param.max_turn - now.turn) continue;
+            const bool goal = road.to == goal_city;
+            // 同じ到着時刻・都市なら将来条件が同じ。安い通行料の経路を残します。
+            // costは通行料、stepは所要時間であり、両者は別の量です。
+            emit.push(State{road.to}, Action{id}, now.cost + road.toll,
+                      static_cast<Hash>(road.to), road.minutes, goal);
+        }
+    };
+    const auto result = BS::run<State, Action>(param, State{}, 0LL, Hash{0}, expand);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    std::cout << "toll=" << result.best_cost << " arrival=" << result.best_turn << " roads=";
+    // multiのpathはEdge<Action>列です。経路長と経過turn数は一致しません。
+    for (const auto& edge : result.path) std::cout << edge.action.road << ' ';
+    std::cout << '\n';
+    for (const auto& edge : result.path) {
+        const Road& road = roads[edge.action.road];
+        // Edgeには出発turn・stepがあり、next_turn()で到着turnを取れます。
+        std::cout << road.from << " -> " << road.to
+                  << " depart=" << edge.turn << " arrive=" << edge.next_turn() << '\n';
+    }
+}
+```
+
+実行例：
+
+```text
+toll=4 arrival=5 roads=1 4 6
+0 -> 2 depart=0 arrive=1
+2 -> 3 depart=1 arrive=4
+3 -> 5 depart=4 arrive=5
+```
+
+5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
+
+## 6. beam_delta_multi_v69.hpp
+
+### 例07：時刻に依存する生産をEdge付きcallbackで扱う
+
+1〜3時間かかる生産方式を選び、6時間分の計画を作ります。早く完成した製品の単価が高いため、状態の更新に到着時刻を使います。外部状態へ経過時間と利益を置き、移動callbackは`const BS::Edge<Action>&`を受け取ります。
+
+Actionは生産方式の番号だけを持ち、出発時刻と所要時間はEdgeが持ちます。`forward`では`edge.next_turn()`で売上を計算し、`backward`では同じ計算を引いて`edge.turn`へ戻します。時刻依存の資源回復や設備稼働を差分更新する場合にも使える形です。
+
+`max_turn_is_answer=true`で6時間ちょうどの計画を完成解にします。費用関数や差分適用が重い実問題では、評価用の計算を共通化するか、必要な差分値をActionへ保存して取り消しを軽くします。この例はHashを指定せず、幅で候補を選びます。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include "beam_delta_multi_v69.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = bs::Beam<long long, Hash>;
+
+// 時刻はEdgeが持つので、Actionは実行する生産方式の番号だけを持ちます。
+struct Action { int recipe = -1; };
+
+int main() {
+    const std::array<int, 3> duration{1, 2, 3}, quantity{1, 5, 8};
+    auto income = [&](int recipe, int finish_time) {
+        // 3時間目までに完了した製品は単価2、それ以降は単価1です。
+        return static_cast<long long>(quantity[recipe]) * (finish_time <= 3 ? 2 : 1);
+    };
+    int hours = 0;
+    long long profit = 0; // この2変数が探索位置に対応した外部状態です。
+    BS::Param param{};
+    param.max_turn = 6; // 6時間を使い切る生産計画です。
+    param.max_step = 3; // 生産方式により1回で1〜3時間進みます。
+    param.beam_width = 32; // 同じ到着時刻に残す候補数です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 6時間に達した計画を完成解にします。
+    param.use_hash_dedup = false; // この例はHashを使わず、幅だけで候補を選びます。
+    param.time_limit_ms = 1000.0; // 探索全体の時間予算です。
+    param.use_turn_time_limit = true; // 残り時間を残りturn数で配分します。
+    param.time_check_interval = 64; // expand自体を途中で中断する指定ではありません。
 
     auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
-        assert(hours == now.turn); // 外部状態とライブラリの時刻が一致することを確認します。
-        for (int duration = 1; duration <= 3; ++duration) {
-            if (duration > param.max_turn - now.turn) continue;
-            emit.push(Action{rewards[duration]}, -(profit + rewards[duration]), duration);
+        for (int recipe = 0; recipe < 3; ++recipe) {
+            const int step = duration[recipe];
+            if (step > param.max_turn - now.turn) continue;
+            // hoursはcallbackがnow.turnと一致するように復元しています。
+            const long long next_profit = profit + income(recipe, hours + step);
+            emit.push(Action{recipe}, -next_profit, step);
         }
     };
-    // multiのEdgeは出発turn、step、actionを持ちます。next_turn()は到着turnです。
+    // callbackがEdgeを受け取ると、Actionだけでなく出発・到着時刻も使えます。
     auto forward = [&](const BS::Edge<Action>& edge) {
-        assert(hours == edge.turn);
+        profit += income(edge.action.recipe, edge.next_turn());
         hours = edge.next_turn();
-        profit += edge.action.reward;
     };
     auto backward = [&](const BS::Edge<Action>& edge) {
-        assert(hours == edge.next_turn());
-        profit -= edge.action.reward;
-        hours = edge.turn;
+        profit -= income(edge.action.recipe, edge.next_turn());
+        hours = edge.turn; // 更新前の時刻はEdgeに保存されています。
     };
-
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, Hash{0}, expand, forward, backward);
-    assert(hours == 0 && profit == 0); // 正常終了時に初期状態へ戻ります。
-    if (!result.found || result.node_pool_exhausted) return 1;
-    // multiのpathはvector<Edge<Action>>です。Action数と経過turn数は一致しません。
+    // この例ではHashを使わないため、初期Hashを省略します。
+    const auto result = BS::run<Action>(param, 0LL, expand, forward, backward);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    // runから正常に戻ると初期状態です。解の状態が必要ならpathを再適用します。
     for (const auto& edge : result.path) forward(edge);
-    assert(hours == 6 && profit == 16 && result.best_cost == -profit);
-    std::cout << "hours=" << hours << " profit=" << profit
-              << " actions=" << result.path.size() << '\n';
+    std::cout << "profit=" << profit << " hours=" << hours << " recipes=";
+    for (const auto& edge : result.path) std::cout << edge.action.recipe << ' ';
+    std::cout << '\n';
 }
 ```
 
-確認する結果は`hours=6 profit=16 actions=2`です。
+実行例：
 
-### 例11：Actionだけを受け取るcallbackと早期有効解
+```text
+profit=24 hours=6 recipes=2 2
+```
 
-例08の作業選択を、使用集合と利益の外部状態で表します。時間を外部状態として持たないため、移動callbackは`const Action&`を受け取ります。multi版でもこの形が使えますが、結果のpathの要素は引き続き`Edge<Action>`です。
+生産方式2を2回使い、3時間目までの高単価と、その後の生産収入を合わせています。
 
-Hash付き`push`、途中での`finished=true`、CSVを組み合わせます。容量不足のフラグを確認し、解のEdge列の時間と作業番号を検算します。
+### 例08：時刻を外部状態に持たず、Actionだけで作業を取り消す
 
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
+5時間以内に実行する仕事の利益を最大にします。時間はライブラリのturnに任せ、外部状態は使用集合と利益だけにすると、callbackは`const Action&`で足ります。時刻に依存しない更新へEdgeを持ち込む必要はありません。
+
+`push`へHash・`int`のstep・`is_answer=true`を渡します。各作業の終了時点で停止してよいので、最大turnより前の解も保存します。利益0の空集合は利用側で保持し、改善する結果があれば採用します。
+
+callbackがAction型でも、返る`path`は`Edge<Action>`列です。外部状態の再生には`edge.action`を渡し、所要時間は`best_turn`やEdgeの時刻情報で確認します。正常終了時の外部状態への復元を前提に、返った経路を初期状態から再適用します。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v59.hpp"
+#include "beam_delta_multi_v69.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// この問題は仕事番号だけで元へ戻せます。不可逆な更新なら変更前の値も保存します。
-struct Action {
-    int job = -1; // root用にデフォルト構築できるようにします。
-};
+// 仕事番号から追加・取消の両方を計算できます。出力順もAction列に残ります。
+struct Action { int job = -1; };
 
 int main() {
     const std::array<int, 4> duration{2, 3, 1, 2};
     const std::array<int, 4> reward{6, 8, 2, 5};
+    BS::Param param{};
+    param.max_turn = 5; // turnは作業数ではなく、消費した時間です。
+    param.max_step = 3; // 1作業にかかる時間の最大値です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+
     unsigned used = 0;
     long long profit = 0;
-    BS::Param param{};
-    param.max_turn = 5;            // 5時間以内で作業を選びます。
-    param.max_step = 3; // 1回の行動で進められるturn数の上限です。
-    param.beam_width = 16; // 同じturnの候補を保持する上限です。
-    param.nodes_capacity = 0; // ノード容量は自動設定にします。
-    param.capacity_policy = BS::CapacityPolicy::Safe; // 自動ノード容量を安全側の見積もりで決めます。
-    param.hash_capacity = 0; // Hash表容量はビーム幅を基準に自動設定します。
-    param.use_hash_dedup = true;   // 同じ到着turn・使用集合なら同じ将来条件です。
-    param.max_turn_is_answer = false; // 有効解はfinished=trueで明示します。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
-
     auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
         for (int job = 0; job < 4; ++job) {
             if (used & (1U << job)) continue;
-            const int step = duration[job];
+            const int step = duration[job]; // stepはboolやlong longでなくintで渡します。
             if (step > param.max_turn - now.turn) continue;
             const Hash hash = static_cast<Hash>(used | (1U << job));
-            // 各作業後に停止してよいのでfinished=true。これは探索停止命令ではありません。
+            // 仕事を終えるたびに停止できるので、どの到着状態も有効解です。
+            // is_answer=trueでも、そこへ仕事を追加する探索は続けられます。
             emit.push(Action{job}, -(profit + reward[job]), hash, step, true);
         }
     };
-    // 時刻が外部状態に不要なら、multi版でもActionだけを受け取れます。
+    // 時刻は外部状態へ持たないので、callbackはEdgeでなくActionを受け取ります。
     auto forward = [&](const Action& action) {
-        assert((used & (1U << action.job)) == 0);
         used |= 1U << action.job;
         profit += reward[action.job];
     };
@@ -1122,1044 +1100,1000 @@ int main() {
         used &= ~(1U << action.job);
         profit -= reward[action.job];
     };
-
-    BS::CsvStatHook csv("delta_multi_jobs.csv", 0.0); // 状態移動数や容量使用量も解析できます。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, Hash{0}, expand, forward, backward, csv);
-    assert(used == 0 && profit == 0);
-    if (!result.found || result.node_pool_exhausted || result.hash_table_full) return 1;
+    const auto result = BS::run<Action>(param, 0LL, expand, forward, backward);
+    // runは初期状態へ戻します。空の作業集合は利用側の初期解として保持します。
     int hours = 0;
-    // callbackがAction型でも、戻り値のpathの要素はEdge<Action>です。
-    for (const auto& edge : result.path) {
-        assert(edge.turn == hours && edge.step == duration[edge.action.job]);
-        hours = edge.next_turn();
-        forward(edge.action);
+    if (result.found && result.best_cost < 0) {
+        // callbackがAction型でも、multiのpathの要素はEdge<Action>です。
+        for (const auto& edge : result.path) forward(edge.action);
+        hours = result.best_turn;
     }
-    assert(hours <= 5 && hours == result.best_turn && profit == 14);
-    assert(result.best_cost == -profit);
-    std::cout << "hours=" << hours << " profit=" << profit << '\n';
+    std::cout << "profit=" << profit << " hours=" << hours << " jobs=";
+    for (int job = 0; job < 4; ++job) if (used & (1U << job)) std::cout << job << ' ';
+    std::cout << '\n';
 }
 ```
 
-最良利益は14です。`delta_multi_jobs.csv`も生成します。
+実行例：
 
-### 例12：探索候補から落ちた途中の有効解を受け取る
-
-ゴールに到達する経路を探します。低costの行き止まりと、costは高いが有効なゴールを同じ到着turnへ生成します。`beam_width=1`なので探索候補には行き止まりだけが残りますが、ゴールは解として独立に保存されます。`max_turn_is_answer=false`で、ゴールへ渡す`finished=true`だけを解の条件にします。
-
-Actionは親と遷移先を持ち、前進・巻き戻しで外部状態を復元します。`push`の戻り値はfalseでも、`result.found`はtrueです。返却されたpathを初期状態から再生すると、探索候補に残らなかったゴールを取り出せます。
-
-`step=2`は消費turn数です。到着待ちの間も解は保存され、`best_turn`は2になります。`max_step=2`と、到着先が`max_turn`以内であることを守ります。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "beam_delta_multi_v59.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-// Actionには前進と巻き戻しに必要な情報を持たせます。
-// コピー可能な型とし、探索中に消えるオブジェクトへの参照は入れません。
-struct Action {
-    int from = 0;
-    int to = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-    param.max_step = 2; // 1操作で最大2turn進めます。この例は2turnの遷移を使います。
-    param.nodes_capacity = 0; // 探索木の容量はライブラリの自動設定を使います。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int current_node = 0; // ライブラリの状態移動に合わせて更新する外部状態です。
-
-    auto expand = [&](const BS::NodeView& now, auto& emit) {
-        assert(now.turn == 0 || now.turn == 2);
-        if (current_node == 2) ++goal_expansions;
-        if (current_node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(Action{0, 1}, 0LL, 2, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push(Action{0, 2}, 10LL, 2, true);
-    };
-
-    // 前進・巻き戻しは互いに逆の操作にします。
-    auto forward = [&](const BS::Edge<Action>& edge) {
-        const Action& action = edge.action; // Edgeには操作と開始turn・消費turnが入ります。
-        assert(current_node == action.from);
-        current_node = action.to;
-    };
-    auto backward = [&](const BS::Edge<Action>& edge) {
-        const Action& action = edge.action;
-        assert(current_node == action.to);
-        current_node = action.from;
-    };
-
-    // deltaのrunでは初期Hashも渡します。Hashなしpushは重複排除の対象外です。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, std::uint64_t{0}, expand, forward, backward);
-    assert(current_node == 0); // run終了時には外部状態が初期状態へ戻ります。
-    assert(!selected); // pushのboolは、探索候補としての採用結果です。
-    assert(result.found && result.path.size() == 1);
-
-    // 保存された操作列を、初期状態から再生して解を取り出します。
-    for (const auto& edge : result.path) forward(edge);
-    assert(current_node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 2);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+profit=14 hours=5 jobs=0 1
 ```
 
-出力は`found=1 best_cost=10 best_turn=2 selected=0`です。
+出力は選んだ仕事の集合です。実行順による段取り費用がないため、仕事番号順に表示しています。
 
-## 7. chokudai_copy_single_v06.hpp
+## 7. chokudai_copy_single_v13.hpp
 
-### 例13：最初に後回しにした候補を次スイープで展開する
+### 例09：割当の未展開候補を残し、時間内に別案も探索する
 
-途中評価では経路Aが良いのに、完成費用はAが100、Bが1になる小さな探索木です。`beam_width=2`で両方を残し、`chokudai_width=1`で1件ずつ展開します。スイープ上限1と2で独立に探索し、後回しの候補を展開する効果を確認します。
+担当者へ仕事を1件ずつ割り当て、最終的な割当表を返します。途中の評価で優先しなかった割当も未展開候補として残し、完成解を得た後も時間があれば別の経路を探索したい場合にchokudaiを使います。結果の利用は`run<State>`と`best_state`です。
 
-この例は、途中costが完成費用の下界である必要がないことも示します。`run`を2回呼ぶのは前回探索の再開ではなく、同じ初期状態からの比較です。
+`beam_width`は各turnに保持する候補数、`sweep_width`は1スイープで取り出す数です。この例では32件を保持し、2件ずつ取り出します。`max_sweeps=0`で回数制限は設けず、全体1,000msまたは候補切れで通常探索を終えます。`continue_on_timeout=true`は解未発見時の追加探索を許す設定です。
 
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "chokudai_copy_single_v06.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = cs::ChokudaiCopySingle<long long, std::uint64_t>;
-
-// id=0が初期状態、1と2が途中経路、3と4がそれぞれの完成状態です。
-// Stateはコピー・代入できる型にします。必要な履歴もStateに保存します。
-struct State {
-    int id = 0;
-};
-
-int main() {
-    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        if (now.state.id == 0) {
-            emit.push(State{1}, 0LL); // 途中評価は良いが、完成時は費用100になる経路です。
-            emit.push(State{2}, 5LL); // 途中評価は悪いが、完成時は費用1になる経路です。
-        } else if (now.state.id == 1) {
-            emit.push(State{3}, 100LL);
-        } else if (now.state.id == 2) {
-            emit.push(State{4}, 1LL);
-        }
-        // single版なので各pushで必ず1turn進みます。
-    };
-
-    for (int sweeps : {1, 2}) {
-        BS::Param param{};
-        param.max_turn = 2; // 初期turn=0から到達できる最大turnです。
-        param.beam_width = 2;      // turn=1に両方の途中経路を残せる容量です。
-        param.chokudai_width = 1;  // 各turnから1スイープで展開するのは1候補だけです。
-        param.max_sweeps = sweeps; // 今回は時間でなくスイープ数を制限します。
-        param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-        param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-        param.use_hash_dedup = false; // この例ではHashによる重複排除を使いません。
-
-        // runごとに独立した探索が始まります。前回の候補を引き継ぐ呼び出しではありません。
-        // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-        const auto result = BS::run<State>(param, State{}, 0LL, expand);
-        if (!result.found) return 1;
-        const long long expected = sweeps == 1 ? 100 : 1;
-        assert(result.best_cost == expected);
-        assert(result.best_state->id == (sweeps == 1 ? 3 : 4));
-        // 2回目のスイープで、turn=1に残っていたid=2を展開できたことが分かります。
-        std::cout << "max_sweeps=" << sweeps << " cost=" << result.best_cost << '\n';
-    }
-}
-```
-
-1スイープでは費用100、2スイープでは費用1になります。
-
-### 例14：割当問題を少しずつ展開し、CSVで改善を追う
-
-割当問題へHashと`push_lazy`を使い、各turnから1候補ずつ展開します。`beam_width`は保持量、`chokudai_width`は1スイープの展開量です。両者を区別してください。
-
-この小さな例は`time_limit_ms=0`、`max_sweeps=0`で候補切れまで進めます。時間を制限する場合に備え、`finish_on_timeout=true`も明示していますが、時間制限が0のこの実行では救済は発動しません。正の時間制限へ変えると、同じ最適値や`exhausted`は保証できないため、末尾の固定値確認も用途に合わせて変更します。
+Hashと遅延コピーの使い方は通常copy singleと同じです。展開済み状態を永久に記録する方式ではないため、同じ状態が後から再生成されることがあります。スイープ数や解の更新はCSVで分析でき、CSVのためだけに探索の仕方を変える必要はありません。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
 #include <iostream>
-#include <vector>
-#include "chokudai_copy_single_v06.hpp"
+#include "chokudai_copy_single_v13.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = cs::ChokudaiCopySingle<long long, Hash>;
 
-// 使用集合は今後の選択に必要で、assignmentは出力用です。
-// Stateはコピー・代入可能にします。大きなStateではpush_lazyが有効です。
+// 最終的な割当表そのものが回答なので、操作履歴を別に持つ必要はありません。
+// Stateはコピー可能な値型にし、探索中に共有の配列を書き換えないようにします。
 struct State {
     unsigned used = 0;
-    std::vector<int> assignment;
+    std::array<int, 4> job_for_worker{{-1, -1, -1, -1}};
 };
 
 int main() {
+    // fee[担当者][仕事]。標準入力なしで動く、小さな割当問題です。
     const std::array<std::array<int, 4>, 4> fee{{
-        {{9, 2, 7, 8}}, {{6, 4, 3, 7}}, {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
+        {{9, 2, 7, 8}}, {{6, 4, 3, 7}},
+        {{5, 8, 1, 8}}, {{7, 6, 9, 4}}
     }};
     BS::Param param{};
-    param.max_turn = 4; // 初期turn=0から到達できる最大turnです。
-    param.beam_width = 16;         // 各turnの未展開候補の保持上限です。
-    param.chokudai_width = 1;      // 少数ずつ先へ進め、次のスイープで別の候補を展開します。
-    param.max_sweeps = 0;          // スイープ数は無制限。有限な小問題なので候補切れで終わります。
-    param.time_limit_ms = 0.0;     // 実問題では、たとえば100.0で全体の時間を制限できます。
-    param.finish_on_timeout = true; // 解なしで時間切れなら幅1の追加スイープを高々1回行います。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = true;   // 同turnの未展開候補だけが重複排除の対象です。
-    param.hash_capacity = 0; // Hash表容量はビーム幅を基準に自動設定します。
+    param.max_turn = 4; // 1人への割当が1turn。初期turn=0、4人で完成です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
 
-    auto expand = [&](const BS::StateView<State>& now, const BS::Runtime& runtime,
-                      BS::Emitter<State>& emit) {
-        (void)runtime; // runtime.sweepは現在のスイープ番号です。時刻は直近の計測値です。
+    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         for (int job = 0; job < 4; ++job) {
             if (now.state.used & (1U << job)) continue;
             const unsigned used = now.state.used | (1U << job);
             const long long cost = now.cost + fee[now.turn][job];
-            emit.push_lazy(cost, static_cast<Hash>(used), [&now, used, job]() {
-                // makerは採用時に同期実行されます。参照先nowを後から使うことはありません。
+            // 同turn・同使用集合なら、安い方を残してよい問題です。
+            // 割当表が大きくなる場合に備え、必要な候補だけStateをコピーします。
+            // makerはこのpush_lazy中に高々1回呼ばれ、後で呼ばれることはありません。
+            emit.push_lazy(cost, static_cast<Hash>(used), [&now, job, used] {
                 State next = now.state;
                 next.used = used;
-                next.assignment.push_back(job);
+                next.job_for_worker[now.turn] = job;
                 return next;
             });
         }
     };
 
-    BS::CsvStatHook csv("chokudai_single_assignment.csv", 0.0); // 全SweepEndを記録します。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("chokudai_single_assignment.csv", 50.0);
+    // run<State>はStateだけを保存します。初期costは0、初期使用集合も0です。
     const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
-    unsigned used = 0;
-    long long actual_cost = 0;
-    assert(result.best_state->assignment.size() == 4);
-    for (int person = 0; person < 4; ++person) {
-        const int job = result.best_state->assignment[person];
-        assert((used & (1U << job)) == 0);
-        used |= 1U << job;
-        actual_cost += fee[person][job];
+    if (!result.found) { // best_stateを参照する前に、有効解の有無を確認します。
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(actual_cost == 13 && actual_cost == result.best_cost);
-    assert(result.exhausted); // 時間・回数を制限していないので、この例は候補切れで終わります。
-    std::cout << "cost=" << result.best_cost << " sweeps=" << result.runtime.sweep << '\n';
+    std::cout << "cost=" << result.best_cost << " jobs=";
+    for (int job : result.best_state->job_for_worker) std::cout << job << ' ';
+    std::cout << '\n';
 }
 ```
 
-合計費用は13です。`chokudai_single_assignment.csv`でスイープ単位の進捗を確認できます。
+実行例：
 
-### 例15：幅で落ちた途中の有効解を保存する
-
-低costの行き止まりと、高costのゴールをこの順に生成します。`beam_width=1`なので、ゴールは探索キューへ受理されません。それでも`finished=true`で生成した最良有効解として保存され、未展開候補が尽きた後に受け取れます。
-
-`max_turn_is_answer=false`は利用側がゴールを判定する設定です。`chokudai_width=1`は各turnで1件ずつ展開し、`max_sweeps=0`は回数制限を設けません。singleでは1回の遷移で必ず次のturnへ進みます。
-
-`push_lazy`のfalseは探索キューへの棄却を意味します。makerは解の保存に必要なので1回呼ばれます。`result.found`を確認してから`best_state`を使います。Hashによる棄却でも、改善する有効解は同じように保存されます。履歴が必要な問題では、Stateに操作列などを持たせてください。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "chokudai_copy_single_v06.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = cs::ChokudaiCopySingle<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-struct State {
-    int node = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-
-    param.chokudai_width = 1; // 1スイープで各turnから1件ずつ展開します。
-    param.max_sweeps = 0; // 回数無制限。未展開候補が尽きれば終了します。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int maker_calls = 0;
-
-    auto expand = [&](const BS::StateView<State>& now, auto& emit) {
-        if (now.state.node == 2) ++goal_expansions;
-        if (now.state.node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(State{1}, 0LL, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push_lazy(10LL, true, [&] {
-            ++maker_calls;
-            return State{2}; // makerは解の保存のために1回だけ呼ばれます。
-        });
-    };
-
-    // 初期State、初期cost、候補生成処理を渡します。Hashは使っていません。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run(param, State{}, 0LL, expand);
-    assert(!selected); // push_lazyのboolは、探索候補としての採用結果です。
-    assert(maker_calls == 1);
-    assert(result.found && result.best_state->node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 1);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+cost=13 jobs=1 0 2 3
 ```
 
-cost=10のゴールが得られ、`selected=0`になります。保存したゴールはビーム幅を消費せず、この例では展開もされません。
+仕事番号は0始まりです。出力の並びは担当者0・1・2・3への割当を表します。
 
-## 8. chokudai_copy_multi_v07.hpp
+### 例10：未展開経路を残しながらゴールへの操作列を探す
 
-### 例16：可変時間の経路と、上限より前の目的地到着
+静的な迷路で目的地へ移動し、コマンド列を返します。途中評価だけでは良い経路を選び切れない問題を想定し、浅いturnに残った未展開候補も後のスイープで試せる形にします。Stateは位置、Actionは移動方向です。
 
-最初の移動は2時間で、次の移動が経路によって1時間または2時間かかります。turn=3で目的地へ着いた状態も、turn=4で着いた状態も有効解です。`max_turn_is_answer=false`と`finished=true`で目的地到着を明示します。
+`run<State, Action>`で操作列を保持し、`max_turn_is_answer=false`と`is_answer=true`で途中のゴールを完成条件にします。`sweep_width`は保持幅ではなく1回の取出し量です。時間制限があっても、保存済みの最良有効解は`found`と`path`から受け取れます。
 
-同じturn=2に残した経路をスイープごとに展開するため、1回目と2回目で解が改善します。目的地の状態は候補を出さず、余分な遷移を防ぎます。
+`emit.history()`で直前の移動を参照して往復を省き、その方向をHashにも含めます。参照は当該expand内だけで扱い、`push`をまたぐAction参照は保持しません。この小さな迷路には厳密な最短路法も使えますが、コードは追加の盤面条件を持つ経路問題へ組み替えやすい形です。
 
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "chokudai_copy_multi_v07.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = cs::ChokudaiCopyMulti<long long, std::uint64_t>;
-
-// 0が出発点、1と2が経路の途中、3と4が目的地です。
-// Stateはコピー・代入可能にし、将来の分岐に必要な情報を持たせます。
-struct State {
-    int id = 0;
-};
-
-int main() {
-    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        if (now.state.id == 0) {
-            // 引数順はstate, cost, step。2時間後の同じturnのキューへ入ります。
-            emit.push(State{1}, 0LL, 2);
-            emit.push(State{2}, 5LL, 2);
-        } else if (now.state.id == 1) {
-            emit.push(State{3}, 100LL, 2, true); // turn=4の目的地です。
-        } else if (now.state.id == 2) {
-            emit.push(State{4}, 1LL, 1, true);   // turn=3でもfinishedにより有効解です。
-        }
-        // 目的地id=3,4は候補を出さずに終了します。
-        // finishedだけでは展開が止まらないため、ユーザー側でこの終端処理が必要です。
-    };
-
-    for (int sweeps : {1, 2}) {
-        BS::Param param{};
-        param.max_turn = 4;             // 到着可能な時刻の上限です。
-        param.max_step = 2;             // 1回で進めるのは最大2時間です。
-        param.beam_width = 2; // 同じturnの候補を保持する上限です。
-        param.chokudai_width = 1;       // turn=2の残り候補を次スイープへ持ち越します。
-        param.max_sweeps = sweeps; // 探索を続けるスイープ数の上限です。
-        param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-        param.max_turn_is_answer = false; // 目的地到着だけをfinishedで有効解にします。
-        param.use_hash_dedup = false; // この例ではHashによる重複排除を使いません。
-
-        // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-        const auto result = BS::run<State>(param, State{}, 0LL, expand);
-        if (!result.found) return 1;
-        assert(result.best_cost == (sweeps == 1 ? 100 : 1));
-        assert(result.best_turn == (sweeps == 1 ? 4 : 3));
-        std::cout << "max_sweeps=" << sweeps << " cost=" << result.best_cost
-                  << " arrival=" << result.best_turn << '\n';
-    }
-}
-```
-
-1スイープでは費用100・到着4、2スイープでは費用1・到着3になります。
-
-### 例17：時間制約付き作業選択をHashと遅延生成で探索する
-
-5時間以内の作業選択をchokudai multiで解きます。異なる所要時間を`step`で指定し、同じ到着turnに残った候補を少しずつ展開します。各作業終了時点を有効解として扱います。
-
-展開済み状態を永久に記録する方式ではないため、同じ使用集合が後から再生成されることもあります。この例はturnが必ず進み、作業の重複使用も禁止しているので、無制限設定でも有限に終わります。
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
 #include <array>
-#include <cassert>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
-#include <vector>
-#include "chokudai_copy_multi_v07.hpp"
+#include <string_view>
+#include "chokudai_copy_single_v13.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = cs::ChokudaiCopySingle<long long, Hash>;
+
+constexpr int HEIGHT = 4, WIDTH = 5;
+constexpr int GOAL_ROW = 3, GOAL_COL = 4;
+const std::array<std::string_view, HEIGHT> board{
+    "S..#.", ".#...", "...#.", "#...G"
+};
+constexpr std::array<int, 4> dr{-1, 0, 1, 0}, dc{0, 1, 0, -1};
+constexpr std::array<char, 4> command{'U', 'R', 'D', 'L'};
+
+// 探索中は残距離も評価に使います。ゴールで0になるので、解のcostは実手数です。
+int distance_to_goal(int row, int col) {
+    return std::abs(row - GOAL_ROW) + std::abs(col - GOAL_COL);
+}
+Hash state_hash(int row, int col, int previous) {
+    // 直前の逆操作を省くため、位置だけでなく直前方向もHashに含めます。
+    // previous=-1は初期状態。小さい状態なので、この整数化には衝突がありません。
+    return static_cast<Hash>((row * WIDTH + col) * 5 + previous + 1);
+}
+
+// Stateは現在位置だけ。出力用の文字列を毎回コピーしません。
+struct State { int row = 0, col = 0; };
+// Actionは1回分の操作です。ライブラリが共有木で履歴を保存します。
+struct Action { int direction = 0; };
+
+int main() {
+    BS::Param param{};
+    param.max_turn = 12; // 最大12手。ゴールなら12手より前でも完成です。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
+
+    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        // 1手前のActionを参照します。履歴全体のコピーや走査は不要です。
+        const auto history = emit.history();
+        int previous = -1;
+        if (!history.empty()) {
+            const Action& last = history.action();
+            previous = last.direction; // 参照が無効化され得るpushより前に読み取ります。
+        }
+        for (int dir = 0; dir < 4; ++dir) {
+            // この静的な迷路では、直後の往復は最短路に不要です。
+            if (previous >= 0 && dir == (previous + 2) % 4) continue;
+            const int row = now.state.row + dr[dir], col = now.state.col + dc[dir];
+            if (row < 0 || row >= HEIGHT || col < 0 || col >= WIDTH) continue;
+            if (board[row][col] == '#') continue;
+            const bool goal = row == GOAL_ROW && col == GOAL_COL;
+            const long long cost = now.turn + 1LL + distance_to_goal(row, col);
+            // 履歴ありpushはStateの直後にActionを渡します。
+            emit.push(State{row, col}, Action{dir}, cost, state_hash(row, col, dir), goal);
+        }
+    };
+    // 第2テンプレート引数Actionを指定すると、最終Stateと操作列を両方受け取れます。
+    const auto result = BS::run<State, Action>(
+        param, State{}, static_cast<long long>(distance_to_goal(0, 0)),
+        state_hash(0, 0, -1), expand
+    );
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    // pathは初期状態から解へ向かう実行順です。pushの受理可否で解を判定しません。
+    std::cout << "steps=" << result.best_turn << " cost=" << result.best_cost << " moves=";
+    for (const Action& action : result.path) std::cout << command[action.direction];
+    std::cout << '\n';
+}
+```
+
+実行例：
+
+```text
+steps=7 cost=7 moves=RRDRRDD
+```
+
+同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
+
+## 8. chokudai_copy_multi_v15.hpp
+
+### 例11：時間内の作業選択を複数スイープで改善する
+
+所要時間の異なる仕事を選び、5時間以内の利益を最大にします。各作業後に停止してよいので、その状態を有効解として比較しつつ、残り時間へ別の仕事を追加します。回答は作業集合であり、Action履歴を持たない`run<State>`を使います。
+
+`max_step`と各pushのstepが経過時間を進め、`sweep_width`は同じ到着turnのキューから少しずつ候補を展開します。`max_turn_is_answer=false`と各候補の`is_answer=true`により、時間を使い切らない高利益の計画も残ります。
+
+`max_sweeps=0`で全体時間を主な終了条件にし、解なしの時間切れには`continue_on_timeout`の追加探索を許可します。利益0の空集合は利用側で確保します。Hashは使用集合ですが、仕事順に依存する段取り費用などを追加する場合には、最後の仕事などもHashへ含めます。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include "chokudai_copy_multi_v15.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = cs::ChokudaiCopyMulti<long long, Hash>;
 
-// usedは将来の選択肢、profitは目的値、jobsは出力用の履歴です。
-// Stateはコピー・代入可能な値型にします。
-struct State {
-    unsigned used = 0;
-    long long profit = 0;
-    std::vector<int> jobs;
-};
+// 作業順に意味がなく、選んだ集合が回答です。Stateだけを返す形を使います。
+struct State { unsigned used = 0; long long profit = 0; };
 
 int main() {
     const std::array<int, 4> duration{2, 3, 1, 2};
     const std::array<int, 4> reward{6, 8, 2, 5};
     BS::Param param{};
-    param.max_turn = 5;            // turnは累計作業時間です。
-    param.max_step = 3;            // 最長の作業は3時間です。
-    param.beam_width = 16;         // 各到着turnの未展開候補の上限です。
-    param.chokudai_width = 1;      // 1スイープでは各turnから1候補ずつ展開します。
-    param.max_sweeps = 0;          // この有限な例は候補が尽きるまで探索します。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-    param.finish_on_timeout = true; // 正の時間制限を使う場合の、未発見時の救済設定です。
-    param.max_turn_is_answer = false; // 有効解はfinished=trueで明示します。
-    param.use_hash_dedup = true;   // 展開済みのHashを永久に禁止する設定ではありません。
-    param.hash_capacity = 0; // Hash表容量はビーム幅を基準に自動設定します。
+    param.max_turn = 5; // turnは作業数ではなく、消費した時間です。
+    param.max_step = 3; // 1作業にかかる時間の最大値です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
 
     auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         for (int job = 0; job < 4; ++job) {
             if (now.state.used & (1U << job)) continue;
-            const int step = duration[job];
+            const int step = duration[job]; // stepは1..max_stepのintです。
             if (step > param.max_turn - now.turn) continue;
-            const unsigned used = now.state.used | (1U << job);
-            const long long profit = now.state.profit + reward[job];
-            // 各作業後の状態が有効解です。さらに追加作業を行う探索も継続します。
-            // makerは探索候補または最良解の保存時に1回呼ばれ、不要なvectorのコピーを省きます。
-            emit.push_lazy(-profit, static_cast<Hash>(used), step, true,
-                           [&now, used, profit, job]() {
-                State next = now.state;
-                next.used = used;
-                next.profit = profit;
-                next.jobs.push_back(job);
-                return next;
-            });
+            State next = now.state; // このStateは小さいので、通常のpushを使います。
+            next.used |= 1U << job;
+            next.profit += reward[job];
+            // 同じ到着turn・使用集合なら将来の選択肢も利益も同じです。
+            // 途中で停止してもよいので、各作業の終了状態を有効解にします。
+            emit.push(next, -next.profit, static_cast<Hash>(next.used), step, true);
         }
     };
-
-    BS::CsvStatHook csv("chokudai_multi_jobs.csv", 0.0); // 各SweepEndの改善状況を記録します。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
-    unsigned used = 0;
+    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand);
+    // 正のmax_turnでは初期状態にis_answerを渡せないので、空集合は自分で比較します。
+    State answer;
     int hours = 0;
-    long long profit = 0;
-    for (int job : result.best_state->jobs) {
-        assert((used & (1U << job)) == 0);
-        used |= 1U << job;
-        hours += duration[job];
-        profit += reward[job];
+    if (result.found && result.best_cost < 0) {
+        answer = *result.best_state;
+        hours = result.best_turn;
     }
-    assert(hours <= 5 && hours == result.best_turn);
-    assert(profit == 14 && result.best_cost == -profit && result.exhausted);
-    std::cout << "hours=" << hours << " profit=" << profit << '\n';
+    std::cout << "profit=" << answer.profit << " hours=" << hours << " jobs=";
+    for (int job = 0; job < 4; ++job) if (answer.used & (1U << job)) std::cout << job << ' ';
+    std::cout << '\n';
 }
 ```
 
-最良利益は14です。`chokudai_multi_jobs.csv`も生成します。
+実行例：
 
-### 例18：幅で落ちた途中の有効解を保存する
-
-低costの行き止まりと、高costのゴールをこの順に生成します。`beam_width=1`なので、ゴールは探索キューへ受理されません。それでも`finished=true`で生成した最良有効解として保存され、未展開候補が尽きた後に受け取れます。
-
-`max_turn_is_answer=false`は利用側がゴールを判定する設定です。`chokudai_width=1`は各turnで1件ずつ展開し、`max_sweeps=0`は回数制限を設けません。multiではstep=2で2turn先へ進み、best_turnにはその到着turnが入ります。
-
-`push_lazy`のfalseは探索キューへの棄却を意味します。makerは解の保存に必要なので1回呼ばれます。`result.found`を確認してから`best_state`を使います。Hashによる棄却でも、改善する有効解は同じように保存されます。履歴が必要な問題では、Stateに操作列などを持たせてください。
-
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include "chokudai_copy_multi_v07.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = cs::ChokudaiCopyMulti<long long>;
-
-// node=0は出発点、1は低costだが行き止まり、2は有効なゴールです。
-// 有効解の判定は利用側が行い、候補追加時のfinishedへ渡します。
-struct State {
-    int node = 0;
-};
-
-int main() {
-    BS::Param param;
-    param.max_turn = 5; // 最大5turnまで探索できます。ゴールはそれより前にあります。
-    param.beam_width = 1; // 探索候補は1件。cost=0の行き止まりが残ります。
-    param.max_turn_is_answer = false; // 最大turnへの到達だけでは解にしません。
-    param.time_limit_ms = 0.0; // この小さな例は時間無制限で実行します。
-    param.max_step = 2; // 1操作で最大2turn進めます。この例は2turnの遷移を使います。
-
-    param.chokudai_width = 1; // 1スイープで各turnから1件ずつ展開します。
-    param.max_sweeps = 0; // 回数無制限。未展開候補が尽きれば終了します。
-
-    bool selected = true;
-    int goal_expansions = 0;
-    int maker_calls = 0;
-
-    auto expand = [&](const BS::StateView<State>& now, auto& emit) {
-        if (now.state.node == 2) ++goal_expansions;
-        if (now.state.node != 0) return; // 行き止まりとゴールからは子を生成しません。
-
-        // 先に、低costの非有効解でビームを埋めます。
-        emit.push(State{1}, 0LL, 2, false);
-
-        // ゴールはcost=10なので、探索候補としては選別で落ちます。
-        // finished=trueの有効解としては、選別とは独立に保存されます。
-        selected = emit.push_lazy(10LL, 2, true, [&] {
-            ++maker_calls;
-            return State{2}; // makerは解の保存のために1回だけ呼ばれます。
-        });
-    };
-
-    // 初期State、初期cost、候補生成処理を渡します。Hashは使っていません。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run(param, State{}, 0LL, expand);
-    assert(!selected); // push_lazyのboolは、探索候補としての採用結果です。
-    assert(maker_calls == 1);
-    assert(result.found && result.best_state->node == 2);
-    assert(goal_expansions == 0); // ゴールを探索候補へ残さなくても、解は得られます。
-    assert(result.best_cost == 10 && result.best_turn == 2);
-    std::cout << "found=" << result.found
-              << " best_cost=" << result.best_cost
-              << " best_turn=" << result.best_turn
-              << " selected=" << selected << '\n';
-}
+```text
+profit=14 hours=5 jobs=0 1
 ```
 
-cost=10のゴールが得られ、`selected=0`になります。保存したゴールはビーム幅を消費せず、この例では展開もされません。
+出力は選んだ仕事の集合です。実行順による段取り費用がないため、仕事番号順に表示しています。
 
-## 9. beam_copy_sub_v04.hpp
+### 例12：所要時間の異なる経路を探索し、Edge列を返す
 
-### 例19：任意回数の研修を行ってから生産する
+6分以内で目的地へ到達する経路を、通行料で評価します。途中の都市に残した未展開候補を後から試し、完成経路を改善するためにchokudai multiを使います。Stateは現在都市だけとし、道路番号はAction履歴へ保存します。
 
-生産を2回行います。初期レベルは1で、研修は費用2でレベルを1上げ、上限は3です。生産すると、その時点のレベルの5倍の利益を得ます。研修を何回行うかは任意です。
+`run<State, Action>`と`Emitter<State, Action>`を組み合わせます。各pushでは所要時間をstepへ渡し、目的地への到着だけを有効解とします。`beam_width`は保持数、`sweep_width`は各turnでの1回の展開量です。
 
-`Next::Sub`で研修を続け、`Next::Turn`で生産回数を進めます。研修費用だけを見ると途中のcostは悪化しますが、生産後の候補は同じ完了turnで比較されます。`beam_width`と`sub_beam_width`を別に指定します。有限性はレベル上限で保証します。
+最良経路は`Edge<Action>`列です。Actionの道路番号と、Edgeの出発・到着turnを使えば実行順と時刻を出力できます。都市番号だけのHashが使えるのは、この例では同じ到着時刻・都市からの将来条件が等しいためです。
 
-```cpp
-#include <cassert>
-#include <cstdint>
-#include <iostream>
-#include <string>
-#include "beam_copy_sub_v04.hpp"
-
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
-using BS = bs::Beam<long long, std::uint64_t>;
-
-// 1turnの間に研修を何回か行い、その後に1回生産します。
-// Stateはコピー・代入可能にし、出力用の履歴も含めます。
-struct State {
-    int level = 1;
-    long long profit = 0;
-    std::string history; // L=研修、P=生産です。
-};
-
-int main() {
-    BS::Param param{};
-    param.max_turn = 2;            // 生産を2回行う問題です。研修回数はturnに数えません。
-    param.beam_width = 8;          // 次turnの開始候補を最大8状態保持します。
-    param.sub_beam_width = 4;      // 同turn内の次sub層に最大4状態を保持します。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = false;  // 基本例では状態の重複排除を省きます。
-
-    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        // 研修せず、現在のレベルで生産してturnを終える選択肢です。
-        State produced = now.state;
-        produced.profit += 5 * produced.level;
-        produced.history += 'P';
-        emit.push(produced, -produced.profit, BS::Next::Turn);
-
-        if (now.state.level < 3) {
-            // 研修は費用2でレベルを1上げます。まだ同じturn内です。
-            State trained = now.state;
-            ++trained.level;
-            trained.profit -= 2;
-            trained.history += 'L';
-            emit.push(trained, -trained.profit, BS::Next::Sub);
-        }
-        // levelの上限3によりSubの連鎖は必ず有限になります。
-        // Next::Turnの候補は、後のsub層から来る生産候補とも比較されます。
-    };
-
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, expand);
-    if (!result.found) return 1;
-    const State& answer = *result.best_state;
-    int level = 1;
-    int turns = 0;
-    long long profit = 0;
-    for (char action : answer.history) {
-        if (action == 'L') {
-            assert(level < 3);
-            ++level;
-            profit -= 2;
-        } else {
-            assert(action == 'P');
-            ++turns;
-            profit += 5 * level;
-        }
-    }
-    assert(turns == 2 && profit == 26 && answer.profit == profit);
-    assert(result.best_cost == -26 && result.best_turn == 2);
-    assert(result.best_sub_step == 0 && result.best_depth == 4);
-    // best_depthはLもPも数えます。best_turnはPだけを数えます。
-    std::cout << "profit=" << profit << " history=" << answer.history
-              << " turns=" << result.best_turn << " depth=" << result.best_depth << '\n';
-}
-```
-
-最良利益は26、履歴は`LLPP`です。2turnに対して総遷移数は4です。
-
-### 例20：turn途中の有効解をHash付きpush_lazyで保存する
-
-価値1または2を1回ずつ回収し、合計5以上を目指します。1turnの回収は最大3回で、turnを確定すれば次の回収期間へ進めます。目的は回収回数の最小化です。
-
-`max_turn_is_answer=false`にし、合計5以上になるSub遷移へ`finished=true`を渡します。解はturn=0の途中でも返ります。`sub_step`の上限がturn内の有限性を保証します。CSVでSubとTurnの両方の生成・棄却を確認できます。
-
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
-#include <cassert>
+#include <array>
 #include <cstdint>
 #include <iostream>
-#include <string>
-#include "beam_copy_sub_v04.hpp"
+#include "chokudai_copy_multi_v15.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = cs::ChokudaiCopyMulti<long long, Hash>;
+
+// 道路データは不変なのでStateには複製しません。
+struct Road { int from, to, minutes, toll; };
+struct State { int city = 0; }; // 現在都市だけで次の行動を決められます。
+struct Action { int road = -1; }; // 出力したい道路番号を1操作分だけ保存します。
+
+int main() {
+    const std::array<Road, 8> roads{{
+        {0, 1, 2, 4}, {0, 2, 1, 1}, {1, 3, 2, 1}, {1, 5, 4, 2},
+        {2, 3, 3, 2}, {2, 4, 1, 5}, {3, 5, 1, 1}, {4, 5, 2, 1}
+    }};
+    constexpr int goal_city = 5;
+    BS::Param param{};
+    param.max_turn = 6; // 6分以内。到着が6分ちょうどである必要はありません。
+    param.max_step = 4; // 1本の道路の所要時間の最大値です。
+    param.beam_width = 32; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
+
+    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        for (int id = 0; id < static_cast<int>(roads.size()); ++id) {
+            const Road& road = roads[id];
+            if (road.from != now.state.city) continue;
+            if (road.minutes > param.max_turn - now.turn) continue;
+            const bool goal = road.to == goal_city;
+            // 同じ到着時刻・都市なら将来条件が同じ。安い通行料の経路を残します。
+            // costは通行料、stepは所要時間であり、両者は別の量です。
+            emit.push(State{road.to}, Action{id}, now.cost + road.toll,
+                      static_cast<Hash>(road.to), road.minutes, goal);
+        }
+    };
+    const auto result = BS::run<State, Action>(param, State{}, 0LL, Hash{0}, expand);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    std::cout << "toll=" << result.best_cost << " arrival=" << result.best_turn << " roads=";
+    // multiのpathはEdge<Action>列です。経路長と経過turn数は一致しません。
+    for (const auto& edge : result.path) std::cout << edge.action.road << ' ';
+    std::cout << '\n';
+    for (const auto& edge : result.path) {
+        const Road& road = roads[edge.action.road];
+        // Edgeには出発turn・stepがあり、next_turn()で到着turnを取れます。
+        std::cout << road.from << " -> " << road.to
+                  << " depart=" << edge.turn << " arrive=" << edge.next_turn() << '\n';
+    }
+}
+```
+
+実行例：
+
+```text
+toll=4 arrival=5 roads=1 4 6
+0 -> 2 depart=0 arrive=1
+2 -> 3 depart=1 arrive=4
+3 -> 5 depart=4 arrive=5
+```
+
+5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
+
+## 9. beam_copy_sub_v12.hpp
+
+### 例13：各期の前処理回数を選び、完成した計画表を返す
+
+3期にわたり生産します。各期の生産前に設備を何回増強するかを選び、増強費用を引いた利益を最大にします。増強1回は能力を1上げて費用6、生産1回の収入は能力の5倍です。資金の不足制約はなく、能力の上限は4です。
+
+増強を`Next::Sub`、生産を`Next::Turn`にし、生産を終えた期数をそろえて比較します。`sub_beam_width`は期の中、`beam_width`は期の境界の候補数です。能力上限があるため、どの経路のSub操作も有限です。
+
+回答は各期の増強回数の表なので、それをStateへ持たせて`best_state`から返します。操作列の追加保存は不要です。`push_lazy`のmakerは計画表のコピーを保存が必要なときまで遅らせます。同じ能力なら将来条件が等しいので、利益が大きい計画をHashで残せます。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include "beam_copy_sub_v12.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// 1回の回収で価値1か2を加え、合計5以上にします。1turn内の回収は最大3回です。
-// historyには回収値とturn区切りを残します。Stateはコピー・代入可能にします。
+constexpr int PERIODS = 3, MAX_LEVEL = 4;
+constexpr long long UPGRADE_COST = 6, INCOME_PER_LEVEL = 5;
+
+// 回答は各期の増強回数の表です。操作順は「増強してから生産」で固定です。
+// これは最終計画のデータなので、Action履歴を追加しなくても出力できます。
 struct State {
-    int sum = 0;
-    std::string history;
+    int level = 1;
+    long long profit = 0;
+    std::array<int, PERIODS> upgrades{};
 };
 
 int main() {
     BS::Param param{};
-    param.max_turn = 3;              // 完了できるturnの上限です。
-    param.beam_width = 16; // 各turnの開始候補を保持する上限です。
-    param.sub_beam_width = 16;       // 同sub層の異なるsumを残せる幅です。
-    param.max_turn_is_answer = false; // 最大turn到達だけでは有効解にしません。
-    param.use_hash_dedup = true; // Hashを明示した候補の重複を、同じ保存先内で除きます。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
+    param.max_turn = PERIODS; // 1期の生産を終えるたびにturnが進みます。
+    param.beam_width = 16; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.use_turn_time_limit = true; // 残り時間を残りturn数に配分します。
+    param.sub_beam_width = 8; // 同turnの次sub層へ残す候補数です。
 
     auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        if (now.state.sum >= 5) return; // finishedは展開停止命令ではないため、終端を明示します。
-        if (now.sub_step < 3) {
-            for (int value : {1, 2}) {
-                const int sum = now.state.sum + value;
-                const bool finished = sum >= 5;
-                // Subへの遷移でもfinishedを指定できます。turn未完了の解を保存します。
-                // costは回収回数です。Hashは将来条件を決めるsumを正確に表します。
-                emit.push_lazy(now.cost + 1, static_cast<Hash>(sum), finished,
-                               [&now, sum, value]() {
+        const long long profit = now.state.profit + INCOME_PER_LEVEL * now.state.level;
+        // makerは保存が必要なときだけ実行されます。末尾のNextが保存先を決めます。
+        emit.push_lazy(-profit, static_cast<Hash>(now.state.level), false,
+            [&now, profit] {
+                State next = now.state;
+                next.profit = profit;
+                return next;
+            }, BS::Next::Turn);
+        if (now.state.level < MAX_LEVEL) {
+            const int level = now.state.level + 1;
+            const long long next_profit = now.state.profit - UPGRADE_COST;
+            emit.push_lazy(-next_profit, static_cast<Hash>(level), false,
+                [&now, level, next_profit] {
                     State next = now.state;
-                    next.sum = sum;
-                    next.history += static_cast<char>('0' + value);
+                    next.level = level;
+                    next.profit = next_profit;
+                    ++next.upgrades[now.turn];
                     return next;
-                }, BS::Next::Sub); // makerは候補または最良解を保存するときに同期実行されます。
-            }
+                }, BS::Next::Sub);
         }
-        if (now.sub_step > 0) {
-            // 区切り操作は回収回数を増やしませんが、depthは1増えます。
-            State next = now.state;
-            next.history += '|';
-            emit.push(next, now.cost, static_cast<Hash>(next.sum), false, BS::Next::Turn);
-        }
+        // level上限により、どの経路のSub遷移も有限です。
+        // 同じ保存先・levelなら将来条件は同じで、利益が大きい計画を残せます。
     };
 
-    BS::CsvStatHook csv("copy_sub_early.csv", 0.0); // SubStepEndとTurnEndを両方記録します。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
-    int sum = 0;
-    int picks = 0;
-    for (char action : result.best_state->history) {
-        if (action == '|') continue;
-        assert(action == '1' || action == '2');
-        sum += action - '0';
-        ++picks;
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("copy_sub_production.csv", 50.0);
+    const auto result = BS::run<State>(param, State{}, 0LL, Hash{1}, expand, csv);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(sum >= 5 && sum == result.best_state->sum && picks == 3);
-    assert(result.best_cost == 3 && result.best_turn == 0 && result.best_sub_step == 3);
-    std::cout << "sum=" << sum << " picks=" << picks
-              << " turn=" << result.best_turn << " sub=" << result.best_sub_step << '\n';
+    const State& answer = *result.best_state;
+    std::cout << "profit=" << answer.profit << " level=" << answer.level << " upgrades=";
+    for (int count : answer.upgrades) std::cout << count << ' ';
+    std::cout << '\n';
 }
 ```
 
-回収3回で解になります。合計値は選択された同点解によって5または6になり得ます。`best_turn=0`、`best_sub_step=3`です。
+実行例：
 
-## 10. beam_delta_sub_v05.hpp
+```text
+profit=42 level=4 upgrades=3 0 0
+```
 
-外部状態は、現在の候補から共通祖先へ巻き戻し、次の候補までActionを適用して復元します。同じSub層では親をまとめ、turn境界で深さの異なる親が混ざる場合も同じ部分木の候補を近づけて、経路間の往復を減らします。展開順そのものに依存する副作用は避けてください。同costの候補が多い場合や時間制限がある場合、展開順は採用される経路にも影響します。
+最初の期に3回増強し、その後は生産だけを行う計画です。
 
-不要ノードの回収では、保存済み最良解、以前のSub層で生成した次turn候補、現在地の祖先も保護します。Actionの移動・破棄で回収するため、Actionは通常のC++の値としてコピー・移動できるようにしてください。ライブラリ内のActionを指す参照やポインタをcallbackの呼び出し後まで保持しないでください。
+### 例14：1日内に複数件を配達し、途中で完成した操作列を返す
 
-`used_nodes`は構築済みノード数で、次の回収まで残る不要ノードも含みます。`reserved_nodes`は配列に確保したスロット数です。回収後も確保済み容量は毎回縮めず、次のノードへ再利用します。`nodes_capacity`は構築ノード数の上限で、Action内部の可変長データなどを含むメモリ量のバイト上限ではありません。
+1日の燃料が8の車で4件を配達します。1日内の配達件数は経路ごとに異なり、車庫へ戻って給油すると次の日へ進みます。最大3日で、最後の配達が済めばその地点で終了できます。目的は総移動距離の最小化です。
 
-### 例21：turnごとのAction区間を取り出す
+配達を`Next::Sub`、帰庫・給油を`Next::Turn`にします。Stateは配達済み集合・現在地・残燃料、Actionは配達先または日終了の指示です。`run<State, Action>`により、状態コピーへ長い出力履歴を含めずにすみます。Subごとに未配達件数が減るので有限です。
 
-例19の研修・生産をdelta型で解きます。Actionにレベル差分、利益差分、表示用ラベルを持たせます。SubとTurnはどちらもActionとして保存されるので、Action列をturn単位に切るには`turn_offsets`を使います。
+最大日数への到達だけでは完成でないため`max_turn_is_answer=false`にし、全配達を終えたSub候補を有効解にします。`best_turn`は完了した日数で、最後の配達日はその次の日です。`turn_offsets.back()`より後の未完了日の操作も出力する点が重要です。
 
-`nodes_capacity=0`は回収・再利用を伴う動的増設です。正の上限を設けた場合は、回収しても不足したときの`NodeLimit`による終了を確認します。この例では、最初のturnに研修2回と生産1回、次のturnに生産1回が入ります。
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
-#include <cassert>
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
-#include "beam_delta_sub_v05.hpp"
+#include "beam_copy_sub_v12.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// 差分だけを保存します。変更前の値が必要な問題ではActionへ追加してください。
-// root用のデフォルト構築と、コピー・代入が可能な型にします。
-struct Action {
-    int level_delta = 0;
-    long long profit_delta = 0;
-    char label = '?';
-};
+constexpr int CUSTOMERS = 4, FUEL = 8;
+constexpr unsigned ALL_DONE = (1U << CUSTOMERS) - 1;
+// 0は車庫、1〜4は配達先です。1次元上の距離を移動費用・燃料消費とします。
+constexpr std::array<int, CUSTOMERS + 1> position{0, -3, -1, 2, 4};
+struct State { unsigned done = 0; int at = 0, fuel = FUEL; };
+
+Hash state_hash(const State& state) {
+    // 同じ保存先での将来条件は配達済み集合・現在地・燃料で決まります。
+    // 途中の訪問順は将来条件に影響せず、Hashへ履歴全体を入れる必要はありません。
+    return static_cast<Hash>((state.done * (CUSTOMERS + 1) + state.at) * (FUEL + 1) + state.fuel);
+}
+
+// Stateへ操作列を入れず、1操作分の出力情報をActionとして渡します。
+struct Action { int to = 0; bool end_day = false; };
 
 int main() {
+    BS::Param param{};
+    param.max_turn = 3; // turn=0,1,2が1〜3日目です。3日目までに配達します。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sub_beam_width = 64; // 同turnの次sub層へ残す候補数です。
+
+    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        for (int to = 1; to <= CUSTOMERS; ++to) {
+            const unsigned bit = 1U << (to - 1);
+            if (now.state.done & bit) continue;
+            const int distance = std::abs(position[to] - position[now.state.at]);
+            if (distance > now.state.fuel) continue;
+            const State next{now.state.done | bit, to, now.state.fuel - distance};
+            // 履歴ありpushはStateの直後にActionを置き、Nextは最後に指定します。
+            emit.push(next, Action{to, false}, now.cost + distance, state_hash(next),
+                      next.done == ALL_DONE, BS::Next::Sub);
+        }
+        const int distance = std::abs(position[now.state.at]);
+        if (now.turn + 1 < param.max_turn && now.state.at != 0 && distance <= now.state.fuel) {
+            const State next{now.state.done, 0, FUEL};
+            // 帰庫・給油は日を確定する操作です。配達回数に関係なく次turnへ進みます。
+            emit.push(next, Action{0, true}, now.cost + distance, state_hash(next),
+                      false, BS::Next::Turn);
+        }
+        // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
+    };
+    const auto result = BS::run<State, Action>(param, State{}, 0LL, state_hash(State{}), expand);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    std::cout << "distance=" << result.best_cost << " completed_days=" << result.best_turn << '\n';
+    auto print_range = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const Action& action = result.path[i];
+            if (action.end_day) std::cout << " return";
+            else std::cout << " deliver:" << action.to;
+        }
+        std::cout << '\n';
+    };
+    for (int day = 0; day < result.best_turn; ++day) {
+        std::cout << "day=" << day + 1;
+        print_range(result.turn_offsets[day], result.turn_offsets[day + 1]);
+    }
+    // 最後の配達はSubなので、その日のTurn境界はまだありません。
+    // turn_offsets.back()より後のActionも、出力する解の一部です。
+    if (result.turn_offsets.back() < result.path.size()) {
+        std::cout << "day=" << result.best_turn + 1;
+        print_range(result.turn_offsets.back(), result.path.size());
+    }
+}
+```
+
+実行例：
+
+```text
+distance=10 completed_days=1
+day=1 deliver:1 deliver:2 return
+day=2 deliver:3 deliver:4
+```
+
+1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
+
+## 10. beam_delta_sub_v12.hpp
+
+### 例15：期内の操作を差分適用し、期ごとのAction区間を返す
+
+3期の生産計画で、各期の前に行う設備増強の回数を選びます。増強は費用6で能力を1上げ、生産は能力の5倍の収入を得ます。能力上限は4です。外部状態に能力と累計利益を持ち、Actionへ更新の種類と利益差分を保存します。
+
+`Next::Sub`は同じ期の続き、`Next::Turn`は生産して次の期へ進む操作です。`forward`と`backward`で差分を適用・取消します。能力上限によりSub探索が有限になることを利用側で保証します。
+
+`path`は増強も生産も含むAction列です。各期の操作を出力するときは、`turn_offsets[t]`から`turn_offsets[t+1]`の区間を使います。この例は最大turnで完成するため、最後のoffsetはpath末尾です。copy subで計画表を返す形と、delta subで実行操作を返す形の違いを示します。
+
+```cpp
+#include <array>
+#include <cstdint>
+#include <iostream>
+#include "beam_delta_sub_v12.hpp"
+
+using Hash = std::uint64_t;
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
+using BS = bs::Beam<long long, Hash>;
+
+constexpr int PERIODS = 3, MAX_LEVEL = 4;
+constexpr long long UPGRADE_COST = 6, INCOME_PER_LEVEL = 5;
+
+// upgradeなら能力を1上げます。利益差分を保存すると逆操作が簡単になります。
+struct Action { bool upgrade = false; long long profit_delta = 0; };
+
+int main() {
+    BS::Param param{};
+    param.max_turn = PERIODS; // 1期の生産を終えるたびにturnが進みます。
+    param.beam_width = 16; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.use_turn_time_limit = true; // 残り時間を残りturn数に配分します。
+    param.sub_beam_width = 8; // 同turnの次sub層へ残す候補数です。
+
     int level = 1;
     long long profit = 0;
-    BS::Param param{};
-    param.max_turn = 2;            // 生産回数です。研修はSubとして同turn内で行います。
-    param.beam_width = 8; // 各turnの開始候補を保持する上限です。
-    param.sub_beam_width = 4; // 同turnの次sub層に保持する候補数の上限です。
-    param.nodes_capacity = 0;      // sub版では0以下が動的増設です。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = true;   // 同じ保存先・同じlevelなら今後の利益条件は同じです。
-
-    auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
-        (void)now;
-        const Action produce{0, 5LL * level, 'P'};
-        emit.push(produce, -(profit + produce.profit_delta), static_cast<Hash>(level),
-                  false, BS::Next::Turn);
-        if (level < 3) {
-            const Action train{1, -2, 'L'};
-            emit.push(train, -(profit - 2), static_cast<Hash>(level + 1),
-                      false, BS::Next::Sub);
+    auto expand = [&](const BS::NodeView&, BS::Emitter<Action>& emit) {
+        // 生産は期を確定する操作です。増強回数の違う経路も次turnで比較されます。
+        const long long income = INCOME_PER_LEVEL * level;
+        emit.push(Action{false, income}, -(profit + income),
+                  static_cast<Hash>(level), BS::Next::Turn);
+        if (level < MAX_LEVEL) {
+            // 増強は同turn内の操作です。level上限によりSubの連鎖は必ず有限です。
+            emit.push(Action{true, -UPGRADE_COST}, -(profit - UPGRADE_COST),
+                      static_cast<Hash>(level + 1), BS::Next::Sub);
         }
-        // 外部状態は変更せず候補を列挙します。level上限によりSubは有限です。
     };
     auto forward = [&](const Action& action) {
-        level += action.level_delta;
+        if (action.upgrade) ++level;
         profit += action.profit_delta;
     };
     auto backward = [&](const Action& action) {
-        level -= action.level_delta;
         profit -= action.profit_delta;
+        if (action.upgrade) --level;
     };
 
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, Hash{1}, expand, forward, backward);
-    assert(level == 1 && profit == 0); // 正常終了時には外部状態が元に戻ります。
-    if (!result.found || result.runtime.stop_reason == BS::StopReason::NodeLimit) return 1;
-    // turn_offsets[t]〜turn_offsets[t+1]が、0始まりのturn tに属するAction区間です。
-    assert(result.turn_offsets.size() == 3);
-    assert(result.turn_offsets[0] == 0 && result.turn_offsets[1] == 3 && result.turn_offsets[2] == 4);
-    for (int turn = 0; turn < result.best_turn; ++turn) {
-        std::cout << "turn " << turn << ':';
-        for (std::size_t i = result.turn_offsets[turn]; i < result.turn_offsets[turn + 1]; ++i) {
-            const Action& action = result.path[i];
-            forward(action);
-            std::cout << action.label;
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("delta_sub_production.csv", 50.0);
+    // 初期能力1をHashにします。将来条件が同じなら利益の大きい計画を残せます。
+    const auto result = BS::run<Action>(param, 0LL, Hash{1}, expand, forward, backward, csv);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    // 外部状態は初期状態に戻っています。以下で解の操作を再生します。
+    for (const Action& action : result.path) forward(action);
+    std::cout << "profit=" << profit << " level=" << level << '\n';
+    for (int period = 0; period < result.best_turn; ++period) {
+        // 完了した期の操作範囲は、隣接するturn_offsetsで切り出せます。
+        std::cout << "period=" << period + 1 << " commands=";
+        for (std::size_t i = result.turn_offsets[period];
+             i < result.turn_offsets[period + 1]; ++i) {
+            std::cout << (result.path[i].upgrade ? 'U' : 'P');
         }
         std::cout << '\n';
     }
-    assert(profit == 26 && level == 3 && result.best_cost == -26);
-    assert(result.best_depth == 4 && result.best_sub_step == 0);
-    std::cout << "profit=" << profit << '\n';
 }
 ```
 
-出力は`turn 0:LLP`、`turn 1:P`、利益26です。`turn_offsets`は`{0, 3, 4}`です。
+実行例：
 
-### 例22：未完了turnの末尾を含むpathを復元する
+```text
+profit=42 level=4
+period=1 commands=UUUP
+period=2 commands=P
+period=3 commands=P
+```
 
-例20の回収問題をdelta型で解きます。有効解は最初のturnの途中で見つかるため、完了したturnは0ですが、pathには3回の回収が入っています。
+最初の期に3回増強し、その後は生産だけを行う計画です。 Uは増強、Pは生産です。
 
-`turn_offsets.back()`をpathの終端とみなすと、この末尾を読み落とします。コードではpath全体を再生し、最後のturn境界以降のAction数も確認します。`found=false`では`turn_offsets`が空なので、必ず先にfoundを確認します。
+### 例16：配達状態を巻き戻し、未完了日の末尾まで再生する
 
-全体1,000msを各turnへ配分し、`time_check_interval=1`で各expandの終了後に確認します。この小問題には余裕のある設定です。実問題で予算を短くして探索を打ち切る場合、末尾の固定スコアのassertも見直してください。
+最大3日で4件の配達を終える問題です。1日内で配達を繰り返し、帰庫・給油で日を進めます。最後の配達後の帰庫は不要です。外部状態へ配達済み集合・現在地・燃料を置き、1操作ごとの差分をActionとして保存します。
+
+現在地と燃料は上書きするため、変更前の値をActionへ持たせます。完了集合は未配達先の1bitを追加・取消します。`max_turn_is_answer=false`とし、全配達完了をSub遷移の`is_answer=true`で知らせます。Hashには現在地・燃料・配達済み集合を含めます。
+
+正常終了後、外部状態は初期状態です。最終状態を作るにはpath全体を再生します。最後の配達日はTurn操作で締められていないため、`turn_offsets.back()`を再生や出力の終端にしてはいけません。完了日の区間に続けて、path末尾まで出力します。
+
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
-#include <cassert>
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
-#include "beam_delta_sub_v05.hpp"
+#include "beam_delta_sub_v12.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = bs::Beam<long long, Hash>;
 
-// value=1,2が回収、0がturn確定です。差分の逆操作に必要な値を保持します。
-// Actionはデフォルト構築・コピー・代入が可能な型にします。
+constexpr int CUSTOMERS = 4, FUEL = 8;
+constexpr unsigned ALL_DONE = (1U << CUSTOMERS) - 1;
+// 0は車庫、1〜4は配達先です。1次元上の距離を移動費用・燃料消費とします。
+constexpr std::array<int, CUSTOMERS + 1> position{0, -3, -1, 2, 4};
+struct State { unsigned done = 0; int at = 0, fuel = FUEL; };
+
+Hash state_hash(const State& state) {
+    // 同じ保存先での将来条件は配達済み集合・現在地・燃料で決まります。
+    // 途中の訪問順は将来条件に影響せず、Hashへ履歴全体を入れる必要はありません。
+    return static_cast<Hash>((state.done * (CUSTOMERS + 1) + state.at) * (FUEL + 1) + state.fuel);
+}
+
+// 変更前の現在地・燃料を保存します。完了集合は未訪問先の1bitだけを変えます。
 struct Action {
-    int value = 0;
+    int from = 0, to = 0, old_fuel = FUEL, distance = 0;
+    bool end_day = false;
 };
 
 int main() {
-    int sum = 0; // 現在の外部状態。ライブラリがforward/backwardで探索位置を合わせます。
     BS::Param param{};
-    param.max_turn = 3; // 初期turn=0から到達できる最大turnです。
-    param.beam_width = 16; // 各turnの開始候補を保持する上限です。
-    param.sub_beam_width = 16;      // 同turnの次sub層の幅です。
-    param.nodes_capacity = 0;       // 動的増設。正の上限ではNodeLimitによる終了に注意します。
-    param.max_turn_is_answer = false; // 有効解はfinished=trueで明示します。
-    param.use_hash_dedup = true; // Hashを明示した候補の重複を、同じ保存先内で除きます。
-    param.time_limit_ms = 1000.0; // 探索全体の時間予算。小さい例なので十分な余裕を設けます。
-    param.use_turn_time_limit = true; // 各turn開始時に、残り時間を残りturn数へ配分します。
-    param.time_check_interval = 1; // 各expand終了後に時計を確認します。expand自体は中断しません。
+    param.max_turn = 3; // turn=0,1,2が1〜3日目です。3日目までに配達します。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sub_beam_width = 64; // 同turnの次sub層へ残す候補数です。
 
+    State world;
+    long long traveled = 0;
     auto expand = [&](const BS::NodeView& now, BS::Emitter<Action>& emit) {
-        if (sum >= 5) return; // 有効解の状態を終端にする判定は利用側で書きます。
-        if (now.sub_step < 3) {
-            for (int value : {1, 2}) {
-                const int next_sum = sum + value;
-                emit.push(Action{value}, now.cost + 1, static_cast<Hash>(next_sum),
-                          next_sum >= 5, BS::Next::Sub);
-            }
+        for (int to = 1; to <= CUSTOMERS; ++to) {
+            const unsigned bit = 1U << (to - 1);
+            if (world.done & bit) continue;
+            const int distance = std::abs(position[to] - position[world.at]);
+            if (distance > world.fuel) continue;
+            const State next{world.done | bit, to, world.fuel - distance};
+            const Action action{world.at, to, world.fuel, distance, false};
+            // 配達は同じ日のSub操作です。全件完了したSub状態を解にします。
+            emit.push(action, traveled + distance, state_hash(next),
+                      next.done == ALL_DONE, BS::Next::Sub);
         }
-        if (now.sub_step > 0) {
-            // turn確定は回収回数を増やしませんが、pathにActionとして1件入ります。
-            emit.push(Action{0}, now.cost, static_cast<Hash>(sum), false, BS::Next::Turn);
+        const int distance = std::abs(position[world.at]);
+        if (now.turn + 1 < param.max_turn && world.at != 0 && distance <= world.fuel) {
+            const State next{world.done, 0, FUEL};
+            // 車庫へ戻って給油すると、次の日へ進みます。
+            emit.push(Action{world.at, 0, world.fuel, distance, true},
+                      traveled + distance, state_hash(next), false, BS::Next::Turn);
         }
+        // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
     };
-    auto forward = [&](const Action& action) { sum += action.value; };
-    auto backward = [&](const Action& action) { sum -= action.value; };
-
-    BS::CsvStatHook csv("delta_sub_early.csv", 0.0); // sub層・turn境界とノード使用量を記録します。
-    // runへ初期cost・初期Hash・候補生成・前進・巻き戻しを渡します。
-    const auto result = BS::run<Action>(param, 0LL, Hash{0}, expand, forward, backward, csv);
-    assert(sum == 0);
-    if (!result.found || result.runtime.stop_reason == BS::StopReason::NodeLimit) return 1;
-    // 有効解がturn途中なら、最後のturn_offsets以降にも未完了turnのActionが残ります。
-    assert(result.best_turn == 0 && result.best_sub_step == 3);
-    assert(result.turn_offsets.size() == 1 && result.turn_offsets.front() == 0);
-    int picks = 0;
-    for (const Action& action : result.path) {
-        forward(action);
-        if (action.value != 0) ++picks;
+    auto forward = [&](const Action& action) {
+        world.at = action.to;
+        world.fuel = action.end_day ? FUEL : action.old_fuel - action.distance;
+        if (!action.end_day) world.done |= 1U << (action.to - 1);
+        traveled += action.distance;
+    };
+    auto backward = [&](const Action& action) {
+        if (!action.end_day) world.done &= ~(1U << (action.to - 1));
+        world.at = action.from;
+        world.fuel = action.old_fuel;
+        traveled -= action.distance;
+    };
+    const auto result = BS::run<Action>(
+        param, 0LL, state_hash(world), expand, forward, backward
+    );
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(sum >= 5 && picks == 3 && result.best_cost == 3);
-    const auto unfinished = result.path.size() - result.turn_offsets.back();
-    assert(unfinished == 3);
-    std::cout << "sum=" << sum << " picks=" << picks
-              << " unfinished_actions=" << unfinished << '\n';
+    // 外部状態は初期状態へ戻っています。未完了日の末尾も含め、path全体を再生します。
+    for (const Action& action : result.path) forward(action);
+    std::cout << "distance=" << traveled << " completed_days=" << result.best_turn << '\n';
+    auto print_range = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const Action& action = result.path[i];
+            if (action.end_day) std::cout << " return";
+            else std::cout << " deliver:" << action.to;
+        }
+        std::cout << '\n';
+    };
+    for (int day = 0; day < result.best_turn; ++day) {
+        std::cout << "day=" << day + 1;
+        print_range(result.turn_offsets[day], result.turn_offsets[day + 1]);
+    }
+    // 最後の配達はSubなので、その日のTurn境界はまだありません。
+    // turn_offsets.back()より後のActionも、出力する解の一部です。
+    if (result.turn_offsets.back() < result.path.size()) {
+        std::cout << "day=" << result.best_turn + 1;
+        print_range(result.turn_offsets.back(), result.path.size());
+    }
 }
 ```
 
-回収3回で合計5以上になり、`unfinished_actions=3`です。
+実行例：
 
-## 11. chokudai_copy_sub_v03.hpp
+```text
+distance=10 completed_days=1
+day=1 deliver:1 deliver:2 return
+day=2 deliver:3 deliver:4
+```
 
-### 例23：turn内は通常ビーム、開始候補は次スイープへ残す
+1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-研修・生産の問題をchokudai subで解きます。`chokudai_width=1`により、各スイープで各turnから開始候補を1件取り出し、そのturn内を`sub_beam_width=4`で探索します。残りの開始候補は次スイープへ持ち越します。
+## 11. chokudai_copy_sub_v11.hpp
 
-Hashには将来の生産能力であるlevelを使います。同じturn開始状態の同じlevelなら、利益が大きい経路を残してよいためです。履歴文字列のコピーは`push_lazy`のmaker内で行います。最終turnへ到達した後も残り候補を探索したことを、スイープ数で確認します。
+### 例17：期の開始候補を残し、期内の増強回数を探索する
+
+各期の増強回数が異なる3期の生産計画を探索します。増強費用6、能力上限4、生産収入は能力の5倍です。最終的には各期の増強回数の表を返すので、Stateだけを保存します。
+
+`sweep_width`件の期開始候補を取り出し、その期内を`sub_beam_width`の通常ビームで探索します。期の開始候補の残りは次スイープへ持ち越せますが、期内のsub層そのものを再開する仕組みではありません。`Next::Sub`と`Next::Turn`はこの境界に合わせます。
+
+`max_sweeps=0`、全体時間1,000msで、完成計画を得た後も余裕があれば別の開始候補を試します。chokudai subにも`continue_on_timeout`があり、既定trueで未発見時の救済を許可します。`use_turn_time_limit`はありません。時間制限は厳密な強制停止ではありません。
 
 ```cpp
-#include <cassert>
+#include <array>
 #include <cstdint>
 #include <iostream>
-#include <string>
-#include "chokudai_copy_sub_v03.hpp"
+#include "chokudai_copy_sub_v11.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = cs::ChokudaiCopySub<long long, Hash>;
 
-// levelは将来の生産能力、profitは累計利益、historyは解の復元用です。
-// Stateはコピー・代入可能な値型にします。
+constexpr int PERIODS = 3, MAX_LEVEL = 4;
+constexpr long long UPGRADE_COST = 6, INCOME_PER_LEVEL = 5;
+
+// 回答は各期の増強回数の表です。操作順は「増強してから生産」で固定です。
+// これは最終計画のデータなので、Action履歴を追加しなくても出力できます。
 struct State {
     int level = 1;
     long long profit = 0;
-    std::string history;
+    std::array<int, PERIODS> upgrades{};
 };
 
 int main() {
     BS::Param param{};
-    param.max_turn = 2;            // 生産を2回行います。研修はturnを進めません。
-    param.beam_width = 8;          // 各turnの開始候補を保持する幅です。
-    param.chokudai_width = 1;      // 1turn・1スイープで取り出す開始候補は1件です。
-    param.sub_beam_width = 4;      // 取り出した候補のturn内探索に用いる通常ビーム幅です。
-    param.max_sweeps = 0;          // 有限な例なので候補が尽きるまで繰り返します。
-    param.time_limit_ms = 0.0; // この小問題は時間無制限で実行します。
-    param.max_turn_is_answer = true; // 最大turnへの到達を、自動的に有効解とします。
-    param.use_hash_dedup = true;   // 同じ保存先・levelなら将来条件が等しいので統合します。
+    param.max_turn = PERIODS; // 1期の生産を終えるたびにturnが進みます。
+    param.beam_width = 16; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = true; // 有効解も継続探索の候補にします。最大turnは展開しません。
+    param.max_turn_is_answer = true; // 最大turnへの到達を完成解として扱います。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
+    param.sub_beam_width = 8; // 同turnの次sub層へ残す候補数です。
 
     auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        const long long profit = now.state.profit + 5 * now.state.level;
-        // Next::Turnは次turnのキューへ送ります。開始候補としてスイープをまたいで保持されます。
+        const long long profit = now.state.profit + INCOME_PER_LEVEL * now.state.level;
+        // makerは保存が必要なときだけ実行されます。末尾のNextが保存先を決めます。
         emit.push_lazy(-profit, static_cast<Hash>(now.state.level), false,
-                       [&now, profit]() {
-            State next = now.state;
-            next.profit = profit;
-            next.history += 'P';
-            return next;
-        }, BS::Next::Turn);
-        if (now.state.level < 3) {
-            const int level = now.state.level + 1;
-            const long long trained_profit = now.state.profit - 2;
-            // Next::Subは同turnの次sub層へ送ります。turn内の層は次スイープへ持ち越しません。
-            emit.push_lazy(-trained_profit, static_cast<Hash>(level), false,
-                           [&now, level, trained_profit]() {
+            [&now, profit] {
                 State next = now.state;
-                next.level = level;
-                next.profit = trained_profit;
-                next.history += 'L';
+                next.profit = profit;
                 return next;
-            }, BS::Next::Sub);
+            }, BS::Next::Turn);
+        if (now.state.level < MAX_LEVEL) {
+            const int level = now.state.level + 1;
+            const long long next_profit = now.state.profit - UPGRADE_COST;
+            emit.push_lazy(-next_profit, static_cast<Hash>(level), false,
+                [&now, level, next_profit] {
+                    State next = now.state;
+                    next.level = level;
+                    next.profit = next_profit;
+                    ++next.upgrades[now.turn];
+                    return next;
+                }, BS::Next::Sub);
         }
-        // levelに上限があるため、どの経路でもSub遷移は有限です。
-        // makerは保存が必要なときだけ、この呼び出し中に実行されます。
+        // level上限により、どの経路のSub遷移も有限です。
+        // 同じ保存先・levelなら将来条件は同じで、利益が大きい計画を残せます。
     };
 
-    BS::CsvStatHook csv("chokudai_sub_production.csv", 0.0); // sub・turn・sweepのイベントを記録します。
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
+    // -DLOCALを付けたビルドでのみCSVを記録します。未定義時は空実装です。
+    // 第2引数50.0は記録の最小間隔ms。0.0なら対象イベントを毎回記録します。
+    BS::CsvStatHook csv("chokudai_sub_production.csv", 50.0);
     const auto result = BS::run<State>(param, State{}, 0LL, Hash{1}, expand, csv);
-    if (!result.found) return 1;
-    int level = 1;
-    int turns = 0;
-    long long profit = 0;
-    for (char action : result.best_state->history) {
-        if (action == 'L') {
-            assert(level < 3);
-            ++level;
-            profit -= 2;
-        } else {
-            assert(action == 'P');
-            ++turns;
-            profit += 5 * level;
-        }
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
     }
-    assert(turns == 2 && profit == 26 && result.best_cost == -26);
-    assert(result.best_turn == 2 && result.best_sub_step == 0 && result.best_depth == 4);
-    assert(result.runtime.sweep > 1); // 最終turn到達後にも、残っていた開始候補を探索しました。
-    std::cout << "profit=" << profit << " history=" << result.best_state->history
-              << " sweeps=" << result.runtime.sweep << '\n';
+    const State& answer = *result.best_state;
+    std::cout << "profit=" << answer.profit << " level=" << answer.level << " upgrades=";
+    for (int count : answer.upgrades) std::cout << count << ' ';
+    std::cout << '\n';
 }
 ```
 
-最良利益は26、履歴は`LLPP`です。`chokudai_sub_production.csv`にはsub・turn・sweep単位の進捗が入ります。
+実行例：
 
-### 例24：時間超過後も未発見を救済し、Sub途中の有効解で終了する
+```text
+profit=42 level=4 upgrades=3 0 0
+```
 
-1turn内で2回の準備を行ってから次turnへ進み、準備が合計4回に達すれば有効解とします。最初のexpandだけ3ms待ち、1msの時間制限を確実に超えさせます。この待機は動作確認専用で、実問題の処理へ持ち込む必要はありません。
+最初の期に3回増強し、その後は生産だけを行う計画です。
 
-最初は有効解も次turn候補もないため、時間超過後もSub探索を続けます。次turn候補ができたら進み、次turnのSub途中で有効解を得た後、expand終了時点で探索を終えます。`time_check_interval=1`、`finished=true`、`StopReason::TimeLimit`の関係を確認する例です。
+### 例18：日単位で別経路も探索し、途中完成の配達列を返す
+
+1日内の配達をSub、帰庫・給油をTurnとして、最大3日で全配達を終える経路を探します。候補の開始日をそろえたchokudai探索と、日内の通常ビームを組み合わせます。StateとActionを分離して配達コマンド列を返します。
+
+`beam_width`は各日の開始候補の保持量、`sweep_width`は1スイープで取り出す開始候補数、`sub_beam_width`は日内の幅です。`max_turn_is_answer=false`で、最後の配達を終えたSub状態だけを有効解にします。最終Stateとpathは`run<State, Action>`の結果から受け取れます。
+
+時間を超えたときに有効解があれば、処理中のexpandを終えて探索を終了します。解がなければ可能な探索を続けるため、提出全体の締切には余裕を残します。出力は完了した日ごとの区間と、最終日の未完了区間の両方を含めます。
+
+`expand_answers=false`で、完成した有効解を継続探索の候補から外します。完成解がビーム幅を消費せず、`expand`内の完成判定によるreturnも不要です。
 
 ```cpp
-#include <cassert>
-#include <chrono>
+#include <array>
 #include <cstdint>
+#include <cstdlib>
 #include <iostream>
-#include <thread>
-#include "chokudai_copy_sub_v03.hpp"
+#include "chokudai_copy_sub_v11.hpp"
 
 using Hash = std::uint64_t;
-// costは小さいほど良い評価値です。ここではlong longと64bitのHashを使います。
+// Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
 using BS = cs::ChokudaiCopySub<long long, Hash>;
 
-// 1turnで準備を2回進めてから次turnへ移ります。準備が計4回進めば有効解です。
-// Stateはコピー・代入可能である必要があります。
-struct State {
-    int work = 0;
-};
+constexpr int CUSTOMERS = 4, FUEL = 8;
+constexpr unsigned ALL_DONE = (1U << CUSTOMERS) - 1;
+// 0は車庫、1〜4は配達先です。1次元上の距離を移動費用・燃料消費とします。
+constexpr std::array<int, CUSTOMERS + 1> position{0, -3, -1, 2, 4};
+struct State { unsigned done = 0; int at = 0, fuel = FUEL; };
+
+Hash state_hash(const State& state) {
+    // 同じ保存先での将来条件は配達済み集合・現在地・燃料で決まります。
+    // 途中の訪問順は将来条件に影響せず、Hashへ履歴全体を入れる必要はありません。
+    return static_cast<Hash>((state.done * (CUSTOMERS + 1) + state.at) * (FUEL + 1) + state.fuel);
+}
+
+// Stateへ操作列を入れず、1操作分の出力情報をActionとして渡します。
+struct Action { int to = 0; bool end_day = false; };
 
 int main() {
     BS::Param param{};
-    param.max_turn = 2; // 初期turn=0から到達できる最大turnです。
-    param.beam_width = 2; // 各turnの開始候補を保持する上限です。
-    param.sub_beam_width = 2; // 同turnの次sub層に保持する候補数の上限です。
-    param.chokudai_width = 1; // 1turn・1スイープで取り出す開始候補数です。
-    param.max_sweeps = 1;           // 通常スイープの上限。時間超過後の解なし救済には適用しません。
-    param.time_limit_ms = 1.0;      // 探索全体のsoft limitです。
-    param.time_check_interval = 1;  // 各expandの終了後に時間を確認します。
-    param.max_turn_is_answer = false; // 有効解はfinished=trueで明示します。
-    param.use_hash_dedup = true; // Hashを明示した候補の重複を、同じ保存先内で除きます。
+    param.max_turn = 3; // turn=0,1,2が1〜3日目です。3日目までに配達します。
+    param.beam_width = 64; // 同じ保存先に残す候補数の上限です。
+    param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
+    param.expand_answers = false; // 有効解は保存だけを行い、その先は展開しません。
+    param.max_turn_is_answer = false; // 解の条件は各候補のis_answerで指定します。
+    param.use_hash_dedup = true; // 明示したHashで、同じ将来条件の候補をまとめます。
+    param.time_limit_ms = 1000.0; // 探索全体の予算です。この小例には余裕を持たせています。
+    param.time_check_interval = 64; // 通常は64展開ごとに確認。expandの途中では中断しません。
+    param.sweep_width = 2; // 各turnから1スイープで取り出す候補数です。
+    param.max_sweeps = 0; // 回数では制限せず、時間または候補切れまで探索します。
+    param.sub_beam_width = 64; // 同turnの次sub層へ残す候補数です。
 
-    auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
-        if (now.state.work >= 4) return;
-        if (now.turn == 0 && now.sub_step == 0) {
-            // 時間切れの動作を再現するためだけの待機です。実問題では削除してください。
-            // expandは途中中断されないので、この3msの後に候補を生成できます。
-            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+    auto expand = [&](const BS::StateView<State>& now, BS::Emitter<State, Action>& emit) {
+        for (int to = 1; to <= CUSTOMERS; ++to) {
+            const unsigned bit = 1U << (to - 1);
+            if (now.state.done & bit) continue;
+            const int distance = std::abs(position[to] - position[now.state.at]);
+            if (distance > now.state.fuel) continue;
+            const State next{now.state.done | bit, to, now.state.fuel - distance};
+            // 履歴ありpushはStateの直後にActionを置き、Nextは最後に指定します。
+            emit.push(next, Action{to, false}, now.cost + distance, state_hash(next),
+                      next.done == ALL_DONE, BS::Next::Sub);
         }
-        if (now.sub_step < 2) {
-            const int work = now.state.work + 1;
-            const bool finished = work == 4;
-            // 有効解がなく次turn候補もない間は、時間を超えてもSub探索を継続します。
-            emit.push_lazy(now.cost + 1, static_cast<Hash>(work), finished,
-                           [work]() { return State{work}; }, BS::Next::Sub);
-        } else {
-            // 次turnの開始候補ができたので、時間切れなら速やかに次turnへ進めます。
-            emit.push(now.state, now.cost, static_cast<Hash>(now.state.work),
+        const int distance = std::abs(position[now.state.at]);
+        if (now.turn + 1 < param.max_turn && now.state.at != 0 && distance <= now.state.fuel) {
+            const State next{now.state.done, 0, FUEL};
+            // 帰庫・給油は日を確定する操作です。配達回数に関係なく次turnへ進みます。
+            emit.push(next, Action{0, true}, now.cost + distance, state_hash(next),
                       false, BS::Next::Turn);
         }
+        // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
     };
-
-    BS::CsvStatHook csv("chokudai_sub_timeout.csv", 0.0);
-    // runは初期Stateから探索し、最良有効解をresult.best_stateへ返します。
-    const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand, csv);
-    if (!result.found) return 1;
-    // 4回目の準備で有効解を得た直後、実行中のexpandが終わった時点で終了します。
-    assert(result.time_limit_reached && result.runtime.stop_reason == BS::StopReason::TimeLimit);
-    assert(result.best_state->work == 4 && result.best_cost == 4);
-    assert(result.best_turn == 1 && result.best_sub_step == 2 && result.best_depth == 5);
-    assert(!result.completed_max_turn && result.runtime.expanded_after_timeout > 0);
-    std::cout << "found=" << result.found << " timed_out=" << result.time_limit_reached
-              << " turn=" << result.best_turn << " sub=" << result.best_sub_step
-              << " work=" << result.best_state->work << '\n';
+    const auto result = BS::run<State, Action>(param, State{}, 0LL, state_hash(State{}), expand);
+    if (!result.found) {
+        std::cout << "no solution\n";
+        return 0;
+    }
+    std::cout << "distance=" << result.best_cost << " completed_days=" << result.best_turn << '\n';
+    auto print_range = [&](std::size_t begin, std::size_t end) {
+        for (std::size_t i = begin; i < end; ++i) {
+            const Action& action = result.path[i];
+            if (action.end_day) std::cout << " return";
+            else std::cout << " deliver:" << action.to;
+        }
+        std::cout << '\n';
+    };
+    for (int day = 0; day < result.best_turn; ++day) {
+        std::cout << "day=" << day + 1;
+        print_range(result.turn_offsets[day], result.turn_offsets[day + 1]);
+    }
+    // 最後の配達はSubなので、その日のTurn境界はまだありません。
+    // turn_offsets.back()より後のActionも、出力する解の一部です。
+    if (result.turn_offsets.back() < result.path.size()) {
+        std::cout << "day=" << result.best_turn + 1;
+        print_range(result.turn_offsets.back(), result.path.size());
+    }
 }
 ```
 
-確認する結果は`found=1 timed_out=1 turn=1 sub=2 work=4`です。最大turn=2を完了する前に有効解を返します。実際の経過ミリ秒はOSのスケジューリングに依存するため固定値と比較しません。
+実行例：
 
-## 12. サンプルの検証範囲
+```text
+distance=10 completed_days=1
+day=1 deliver:1 deliver:2 return
+day=2 deliver:3 deliver:4
+```
 
-対象9ヘッダを使い、掲載した24本の完全なコード例をGCC 13.3.0で検証しています。
+1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-- C++20で全24例をコンパイル・実行し、AddressSanitizerとUndefinedBehaviorSanitizerで検査しました。
-- C++23の最適化ビルドでも全24例をコンパイル・実行しました。計48実行が成功しています。
-- 警告をエラーとして扱う設定でコンパイルしました。
-- 小問題の期待値は、割当の全順列、作業集合の全列挙、短い動的計画法などでも独立に確認しました。
-- 解の行動再生、費用・利益の再計算、deltaの初期状態への復元、turn区間、未完了turnの末尾、時間超過後の有効解を確認しました。
-- CSVを出力する10例について、ヘッダと各行の列数、RunStart・RunEnd、最終解、時間切れ例の停止理由を確認しました。
-- Markdownへ埋め込む際に補った説明はコメントのみで、コンパイル・実行したコードと、コメントを除いた内容が一致することを確認しました。
+## 12. コード例を本番へ組み込むとき
 
-これらは掲載例の検証です。任意の利用側コードの正しさや、一般の問題に対する最適解・厳密な締切内終了を保証するものではありません。
+まず、問題の1手がsingle・multi・subのどれに相当するかを決め、完成条件を`max_turn_is_answer`と`is_answer`へ対応させます。次に、最終Stateだけで回答できるか、Action列も必要かを決めます。deltaを選ぶ場合は、状態の変更前の値も含め、巻き戻せるActionを設計します。
 
-サンプルの`assert`は問題に合わせた説明用の検査です。盤面、目的関数、時間制限、ビーム幅を変えた場合は、固定の期待値も見直してください。`-DNDEBUG`を付けるとassertは無効になるため、サンプルを確認する最初の実行では付けないでください。
+Hashには、以降の合法手や目的値への影響を変える情報を含めます。掲載例の使用集合や現在地だけでは足りない問題では、残り資源・盤面・直前操作などを追加してください。出力だけの履歴をHashに含める必要はありません。
+
+幅と時間予算は実際の入力で調整します。全turnを進めたい通常ビームではturn別配分を検討し、chokudaiでは保持幅とスイープごとの取出し量を分けて調整します。どの場合も、`found`を確認してから解を取り出し、有効な初期解があるなら利用側でも保持しておきます。
+
+掲載した18本の完全なコードは、対応する9ヘッダを用いてGCC 13.3.0・C++20でコンパイル・実行しています。`LOCAL`あり／なしの両方で`-Wall -Wextra -Werror`を通し、割当・作業選択・生産計画は全列挙や動的計画法、経路・配達は最短路計算で得た値と照合しました。操作列の再生、日別・期別の出力、CSVの出力条件も確認しています。

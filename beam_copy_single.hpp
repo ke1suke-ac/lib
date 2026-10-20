@@ -1,20 +1,86 @@
 #pragma once
+#include <bits/stdc++.h>
 
-#include <algorithm>
-#include <chrono>
-#include <cmath>
-#include <concepts>
-#include <cstdint>
-#include <cstdio>
-#include <functional>
-#include <iostream>
-#include <limits>
-#include <optional>
-#include <sstream>
-#include <string>
-#include <type_traits>
-#include <utility>
-#include <vector>
+#ifndef BEAM_COPY_HISTORY_STORAGE_V01
+#define BEAM_COPY_HISTORY_STORAGE_V01
+namespace beam_history_detail {
+// 出力用履歴だけを共有する。祖先のStateは保持しない。
+// indexで参照するためvector再確保でもLink/Viewは有効。Action参照は再取得が必要。
+template<class Value>
+class Pool {
+public:
+    static constexpr std::size_t none = std::numeric_limits<std::size_t>::max();
+private:
+    struct Node {
+        std::optional<Value> value;
+        std::size_t parent = none, refs = 0;
+    };
+    std::vector<Node> nodes_;
+    std::size_t free_ = none;
+    void retain(std::size_t id) noexcept { if (id != none) ++nodes_[id].refs; }
+    void release(std::size_t id) noexcept {
+        // 長い経路も再帰せず解放。各ノードの解放費用は生成回数に償却される。
+        while (id != none && --nodes_[id].refs == 0) {
+            auto& node = nodes_[id];
+            const auto parent = node.parent;
+            node.value.reset(); node.parent = free_; free_ = id;
+            id = parent;
+        }
+    }
+public:
+    class Link {
+        friend class Pool;
+        Pool* pool_ = nullptr;
+        std::size_t id_ = none;
+        Link(Pool* pool, std::size_t id) noexcept : pool_(pool), id_(id) {}
+    public:
+        Link() = default;
+        Link(const Link& other) noexcept : pool_(other.pool_), id_(other.id_) {
+            if (pool_) pool_->retain(id_);
+        }
+        Link(Link&& other) noexcept
+            : pool_(std::exchange(other.pool_, nullptr)), id_(other.id_) {}
+        Link& operator=(const Link& other) noexcept {
+            if (this != &other) { Link copy(other); swap(copy); }
+            return *this;
+        }
+        Link& operator=(Link&& other) noexcept {
+            if (this != &other) { Link moved(std::move(other)); swap(moved); }
+            return *this;
+        }
+        ~Link() { if (pool_) pool_->release(id_); }
+        void swap(Link& other) noexcept {
+            std::swap(pool_, other.pool_); std::swap(id_, other.id_);
+        }
+        std::size_t id() const noexcept { return pool_ ? id_ : none; }
+    };
+    Pool() = default;
+    Pool(const Pool&) = delete;
+    Pool& operator=(const Pool&) = delete;
+    template<class... Args>
+    Link make(std::size_t parent, Args&&... args) {
+        std::size_t id = free_;
+        if (id == none) {
+            id = nodes_.size();
+            nodes_.push_back(Node{std::optional<Value>(std::in_place, std::forward<Args>(args)...), parent, 1});
+        } else {
+            auto& node = nodes_[id];
+            node.value.emplace(std::forward<Args>(args)...);
+            free_ = node.parent; node.parent = parent; node.refs = 1;
+        }
+        retain(parent);
+        return Link(this, id);
+    }
+    const Value& value(std::size_t id) const noexcept { return *nodes_[id].value; }
+    std::size_t parent(std::size_t id) const noexcept { return nodes_[id].parent; }
+};
+template<class State, class Value>
+struct TracedState {
+    State state;
+    typename Pool<Value>::Link trace;
+};
+} // namespace beam_history_detail
+#endif
 
 namespace bs {
 
@@ -91,15 +157,25 @@ inline bool is_valid_cost(Cost cost) {
 // doubleのms指定を内部比較用のマイクロ秒へ丸める。正の極小値は1usとして扱う。
 inline std::int64_t time_limit_to_microseconds(double time_limit_ms) {
     if (!(time_limit_ms > 0.0)) return 0;
-
-    const double us = time_limit_ms * 1000.0;
-    constexpr double max_us = static_cast<double>(std::numeric_limits<std::int64_t>::max());
-    if (us >= max_us) return std::numeric_limits<std::int64_t>::max();
-
-    return std::max<std::int64_t>(1, static_cast<std::int64_t>(us + 0.5));
+    const long double us = static_cast<long double>(time_limit_ms) * 1000.0L;
+    const auto upper = std::numeric_limits<std::int64_t>::max();
+    if (us >= static_cast<long double>(upper) - 0.5L) return upper;
+    return std::max<std::int64_t>(1, static_cast<std::int64_t>(us + 0.5L));
 }
 
+#if __INCLUDE_LEVEL__ == 0
+// 単体実行時だけの仮想時計。通常includeでは領域・分岐とも存在しない。
+struct TestClock {
+    static inline bool enabled = false;
+    static inline std::int64_t value = 0;
+    static inline std::uint64_t calls = 0;
+};
+#endif
 inline std::int64_t now_microseconds() {
+#if __INCLUDE_LEVEL__ == 0
+    ++TestClock::calls;
+    if (TestClock::enabled) return TestClock::value;
+#endif
     return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
@@ -111,7 +187,6 @@ template<CostType Cost = long long, HashType Hash = std::uint64_t>
 struct Beam {
     using cost_type = Cost;
     using hash_type = Hash;
-
 
 private:
     template<class State>
@@ -125,32 +200,26 @@ public:
 // use_turn_time_limit=trueでは各turn開始時に残り時間/残りturn数を配分する。
 // turn期限後は未来候補があれば進み、なければ候補ができるか尽きるまで展開する。
 // turn期限だけでは保持幅を縮めず、次turnで通常展開へ戻る。time_check_interval=1なら毎展開確認。
-// 全体制限到達を検出したturnでは、通常展開を止め、未展開候補から最良1本だけを追加展開する。
+// 全体制限後は、解保存済みまたはcontinue_on_timeout=falseなら終了する。
+// 未発見の救済時は、未展開候補から最良1本だけを追加展開する。
 // 以後は各turnで最良1本だけを進め、到着候補も最良1件だけをmaterializeする。
-// 解候補は finished=true、または max_turn_is_answer=true で最大ターンに到達した状態。
+// 解候補は is_answer=true、または max_turn_is_answer=true で最大ターンに到達した状態。
 struct Param {
     int max_turn = 0;               // 初期状態を0とする最大ターン。負値は0に丸める。
     int beam_width = 1;             // 各frontier更新で残す候補数。
     int hash_capacity = 0;          // use_hash_dedup=true かつ 0なら自動設定。過大値もbeam_width基準で丸める。
 
-    double time_limit_ms = 0.0;    // 0なら無制限。正なら制限到達検出後に最良1本の縮退探索へ移るsoft limit。
+    double time_limit_ms = 0.0;    // 0なら無制限。全体のsoft limit。到達後の救済はcontinue_on_timeoutで指定。
     int time_check_interval = 64;   // 何ノード展開ごとに時間を見るか。expand中は中断しない。
+    bool continue_on_timeout = true; // 時間切れで解未発見なら救済探索を続ける。
+    bool expand_answers = true; // falseなら有効解を保存のみ行い、探索候補へ登録しない。
     bool max_turn_is_answer = true; // trueなら turn==max_turn の状態を解候補として扱う。
     bool use_hash_dedup = true;     // trueならHash付きpushで同一frontier内の重複排除を行う。Hashなしpushは対象外。
     bool use_turn_time_limit = false; // 残り時間を残りturnへ配分。全体制限が有効な場合だけ使用。
 };
 
 // Hookの発火タイミング。
-// CsvStatHookはRunStart/TurnEnd/RunEndだけを記録し、TurnStart/BestUpdate行は出力しない。
-// BestUpdateは1回のexpand内の更新をまとめ、expand終了時に通知する。更新回数はbest_update_count。
-// BestUpdate時のsnapshot系統計は直前値のまま渡される。
-enum class EventType {
-    RunStart,
-    RunEnd,
-    TurnStart,
-    TurnEnd,
-    BestUpdate,
-};
+enum class EventType { RunStart, RunEnd, TurnEnd };
 
 // expand に渡す現在状態の読み取りビュー。
 // state はライブラリが保持する状態への const 参照であり、ユーザー側で直接変更しない。
@@ -167,17 +236,33 @@ struct StateView {
         : turn(turn_), cost(cost_), state(state_), hash(hash_), has_hash(has_hash_) {}
 };
 
+// 候補群のコスト分布。count=0のbest/worst/average()は0。
+struct CostStats {
+    int count = 0;
+    Cost best{}, worst{};
+    double sum = 0.0;
+    bool add(Cost cost) {
+        const bool improved = count == 0 || cost < best;
+        if (improved) best = cost;
+        if (count == 0 || worst < cost) worst = cost;
+        ++count; sum += static_cast<double>(cost);
+        return improved;
+    }
+    double average() const { return count > 0 ? sum / count : 0.0; }
+};
+
 // Hookから観測できる実行時情報。
 // expanded/generated/accepted/selected/best などの累積カウンタは常に更新される。
 // live_*、selected_* などのsnapshot系は DebugHook有効時、またはRunEndの最終Result用に更新される。
 // best更新からの停滞量は、NoOp実行後の Result::runtime でも最終値を確認できる。
 struct Runtime {
+    Param param; // 探索に使用する設定。Engineとの二重保持を避ける。
+
+    std::uint64_t terminal_candidates = 0; // 有効なmax_turn到着候補数。候補プールには入れない。
+    std::uint64_t answer_only_candidates = 0; // expand_answers=falseで除外したmax_turn未満の有効候補数。
     // 基本情報。
     int turn = 0;                   // 現在処理中のターン。初期状態は0。
-    int materialized_turn = 0;     // frontierとして実体化済みの最大ターン。探索完了確認にはこちらを見る。
-    int max_turn = 0;               // 初期状態を0とする最大ターン。負値指定は0に丸めた後の値。
-    int beam_width = 0;
-    int hash_capacity = 0;
+    int materialized_turn = 0;     // 到着候補の確定処理済みの最大turn。候補0件の場合も含む。
 
     // 各ターンの幅と、探索全体での最大幅。
     int active_width = 0;           // このターンで実際にexpandした状態数。縮退探索では1本だけになり得る。
@@ -208,8 +293,7 @@ struct Runtime {
 
     // CSVデバッグ用の軽量スナップショット。
     // DebugHook有効時、またはRunEndの最終Result用に更新される。
-    double time_limit_ms = 0.0;
-    bool use_turn_time_limit = false;
+
     double time_remaining_ms = -1.0;
     std::int64_t elapsed_us = 0;
     // turn時刻はrun開始からのus。配分無効・turn未開始はstart/deadline=-1。
@@ -221,13 +305,10 @@ struct Runtime {
     // expand中の即時中断を意味しない。
     bool time_limit_reached = false;
 
-    Cost live_best_cost{};         // frontier + selector 全体の保持中候補の最良cost。確定best_costとは別。
-    Cost live_worst_cost{};
-    double live_avg_cost = 0.0;
+    CostStats live_costs{}; // 最良・最悪・合計・件数を一つに保持。
 
-    Cost selected_best_cost{};     // 直近materializeでfrontierへ進んだ候補のcost分布。縮退探索では1件分。
-    Cost selected_worst_cost{};
-    double selected_avg_cost = 0.0;
+    CostStats selected_costs{}; // 最良・最悪・合計・件数を一つに保持。
+
     int width_pruned_cost_count = 0;
     Cost width_pruned_best_cost{};
     double pruned_best_gap = 0.0;
@@ -243,7 +324,7 @@ struct Runtime {
     int best_update_count = 0;
 
     bool exhausted = false;
-    // max_turn到着候補を少なくとも1件materializeした。
+    // 不正でないmax_turn到着候補を少なくとも1件生成した。
     // 全候補を通常幅で展開した保証ではない。
     bool completed_max_turn = false;
 };
@@ -255,271 +336,120 @@ struct NoOp {
 
 // CSV出力Hook。
 // RunStart/TurnEnd/RunEnd の統計をCSVに出力する。
-// TurnStart/BestUpdate行は出力しない。
 // 行はメモリ上に保持し、RunEndで一括してファイルへ書き出す。
+// LOCAL定義時のみCSVを記録する。未定義時は同じ呼び出し方で使える空実装。
 struct CsvStatHook {
-    // RowはRuntimeのスナップショットに、CSV固有の期間統計を足したもの。
-    struct Row : Runtime {
-        Row() = default;
-        explicit Row(const Runtime& runtime) : Runtime(runtime) {}
-
-        const char* event = "";
-        double elapsed_ms = 0.0;
-        double period_ms = 0.0;
-        int period_turns = 0;
-
-        long long period_expanded_nodes = 0;
-        long long period_generated_candidates = 0;
-        long long period_accepted_candidates = 0;
-        long long period_selected_nodes = 0;
-        long long period_pruned_by_width = 0;
-        long long period_pruned_by_hash = 0;
-        long long period_duplicate_by_hash = 0;
-        long long period_replaced_by_width = 0;
-        long long period_replaced_by_hash = 0;
-        long long period_invalid_candidates = 0;
-        long long period_hash_rebuild_count = 0;
-        int period_best_updates = 0;
-
-        double expand_per_sec = 0.0;
-        double generate_per_sec = 0.0;
-        double accept_per_sec = 0.0;
-        double select_per_sec = 0.0;
-        double accept_rate = 0.0;
-        double width_prune_rate = 0.0;
-        double hash_prune_rate = 0.0;
-        double branching_factor = 0.0;
-        double duplicate_rate = 0.0;
-        double accepted_per_expanded = 0.0;
-        double selected_per_expanded = 0.0;
-    };
-
+#ifdef LOCAL
+    struct Row : Runtime { const char* event = ""; };
     std::string filename;
-    std::int64_t interval_us = 1;
+    std::int64_t interval_us;
     std::vector<Row> rows;
     std::int64_t next_record_us = 0;
     bool started = false;
 
-    explicit CsvStatHook(std::string csv_filename = "beam_stat.csv", double interval_ms = 50.0)
-        : filename(std::move(csv_filename)),
-          interval_us(interval_ms <= 0.0
-              ? 0
-              : std::max<std::int64_t>(1, static_cast<std::int64_t>(interval_ms * 1000.0 + 0.5))) {}
+    explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50.0)
+        : filename(std::move(path)), interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
 
-    void operator()(EventType event_type, const Runtime& runtime) {
-        switch (event_type) {
-            case EventType::RunStart:
-                rows.clear();
-                started = true;
-                next_record_us = runtime.elapsed_us + interval_us;
-                push_row(event_type, runtime);
-                return;
-
-            case EventType::TurnEnd:
-                if (started && (interval_us == 0 || runtime.elapsed_us >= next_record_us)) {
-                    push_row(event_type, runtime);
-                    if (interval_us > 0) next_record_us = runtime.elapsed_us + interval_us;
-                }
-                return;
-
-            case EventType::RunEnd:
-                if (started) {
-                    push_row(event_type, runtime);
-                    write_csv();
-                    started = false;
-                }
-                return;
-
-            case EventType::TurnStart:
-            case EventType::BestUpdate:
-                // CsvStatHookではTurnStart/BestUpdate行は出さない。
-                // それらの情報はTurnEnd/RunEndの累積値で確認する。
-                return;
-        }
+    void operator()(EventType event, const Runtime& rt) {
+        if (event == EventType::RunStart) { rows.clear(); started = true; }
+        if (!started) return;
+        if (event != EventType::RunStart && event != EventType::RunEnd &&
+            (event != EventType::TurnEnd || (interval_us > 0 && rt.elapsed_us < next_record_us))) return;
+        const char* name = event == EventType::RunStart ? "RunStart" :
+                           event == EventType::RunEnd ? "RunEnd" : "TurnEnd";
+        rows.push_back({rt, name});
+        next_record_us = rt.elapsed_us + std::min(interval_us,
+            std::numeric_limits<std::int64_t>::max() - rt.elapsed_us);
+        if (event == EventType::RunEnd) { write_csv(); started = false; }
     }
 
 private:
-    static double elapsed_ms(std::int64_t elapsed_us) {
-        return static_cast<double>(elapsed_us) * 0.001;
-    }
-
-    static const char* event_name(EventType event_type) {
-        switch (event_type) {
-            case EventType::RunStart: return "RunStart";
-            case EventType::RunEnd: return "RunEnd";
-            case EventType::TurnStart: return "TurnStart";
-            case EventType::TurnEnd: return "TurnEnd";
-            case EventType::BestUpdate: return "BestUpdate";
-        }
-        return "Unknown";
-    }
-
-    void push_row(EventType event_type, const Runtime& runtime) {
-        Row row(runtime);
-        row.event = event_name(event_type);
-        row.elapsed_ms = elapsed_ms(runtime.elapsed_us);
-        if (!rows.empty()) {
-            const Row& prev = rows.back();
-            row.period_ms = row.elapsed_ms - prev.elapsed_ms;
-            row.period_turns = row.materialized_turn - prev.materialized_turn;
-            row.period_expanded_nodes = row.expanded_nodes - prev.expanded_nodes;
-            row.period_generated_candidates = row.generated_candidates - prev.generated_candidates;
-            row.period_accepted_candidates = row.accepted_candidates - prev.accepted_candidates;
-            row.period_selected_nodes = row.selected_nodes - prev.selected_nodes;
-            row.period_pruned_by_width = row.pruned_by_width - prev.pruned_by_width;
-            row.period_pruned_by_hash = row.pruned_by_hash - prev.pruned_by_hash;
-            row.period_duplicate_by_hash = row.duplicate_by_hash - prev.duplicate_by_hash;
-            row.period_replaced_by_width = row.replaced_by_width - prev.replaced_by_width;
-            row.period_replaced_by_hash = row.replaced_by_hash - prev.replaced_by_hash;
-            row.period_invalid_candidates = row.invalid_candidates - prev.invalid_candidates;
-            row.period_hash_rebuild_count = row.hash_rebuild_count - prev.hash_rebuild_count;
-            row.period_best_updates = row.best_update_count - prev.best_update_count;
-            if (row.period_ms > 0.0) {
-                row.expand_per_sec = static_cast<double>(row.period_expanded_nodes) * 1000.0 / row.period_ms;
-                row.generate_per_sec = static_cast<double>(row.period_generated_candidates) * 1000.0 / row.period_ms;
-                row.accept_per_sec = static_cast<double>(row.period_accepted_candidates) * 1000.0 / row.period_ms;
-                row.select_per_sec = static_cast<double>(row.period_selected_nodes) * 1000.0 / row.period_ms;
-            }
-            if (row.period_generated_candidates > 0) {
-                const double denom = static_cast<double>(row.period_generated_candidates);
-                row.accept_rate = static_cast<double>(row.period_accepted_candidates) / denom;
-                row.width_prune_rate = static_cast<double>(row.period_pruned_by_width) / denom;
-                row.hash_prune_rate = static_cast<double>(row.period_pruned_by_hash) / denom;
-                row.duplicate_rate = static_cast<double>(row.period_duplicate_by_hash) / denom;
-            }
-            if (row.period_expanded_nodes > 0) {
-                const double denom = static_cast<double>(row.period_expanded_nodes);
-                row.branching_factor = static_cast<double>(row.period_generated_candidates) / denom;
-                row.accepted_per_expanded = static_cast<double>(row.period_accepted_candidates) / denom;
-                row.selected_per_expanded = static_cast<double>(row.period_selected_nodes) / denom;
-            }
-        }
-
-        rows.push_back(row);
-    }
-
     void write_csv() const {
-        std::ostringstream ofs;
-        ofs << "event,elapsed_ms,turn,materialized_turn,max_turn,beam_width,hash_capacity,";
-        ofs << "active_width,selected_width,candidate_count,max_active_width,max_selected_width,beam_saturated_turns,";
-        ofs << "expanded_nodes,generated_candidates,accepted_candidates,selected_nodes,";
-        ofs << "pruned_by_width,pruned_by_hash,duplicate_by_hash,replaced_by_width,replaced_by_hash,invalid_candidates,hash_rebuild_count,";
-        ofs << "live_nodes,max_live_nodes,";
-        ofs << "time_limit_ms,time_remaining_ms,use_turn_time_limit,turn_start_ms,turn_deadline_ms,turn_budget_ms,turn_elapsed_ms,turn_time_limit_reached,";
-        ofs << "live_best_cost,live_worst_cost,live_avg_cost,";
-        ofs << "selected_best_cost,selected_worst_cost,selected_avg_cost,";
-        ofs << "width_pruned_cost_count,width_pruned_best_cost,pruned_best_gap,";
-        ofs << "turns_since_best_update,expanded_nodes_since_best_update,ms_since_best_update,";
-        ofs << "found,best_cost,best_turn,best_update_count,time_limit_reached,exhausted,completed_max_turn,";
-        ofs << "period_ms,period_turns,period_expanded_nodes,period_generated_candidates,period_accepted_candidates,period_selected_nodes,";
-        ofs << "period_pruned_by_width,period_pruned_by_hash,period_duplicate_by_hash,period_replaced_by_width,period_replaced_by_hash,period_invalid_candidates,period_hash_rebuild_count,period_best_updates,";
-        ofs << "expand_per_sec,generate_per_sec,accept_per_sec,select_per_sec,accept_rate,width_prune_rate,hash_prune_rate,";
-        ofs << "branching_factor,duplicate_rate,accepted_per_expanded,selected_per_expanded\n";
-        ofs.setf(std::ios::fixed);
-        ofs.precision(6);
-        for (const Row& row : rows) {
-            ofs << row.event << ','
-                << row.elapsed_ms << ','
-                << row.turn << ','
-                << row.materialized_turn << ','
-                << row.max_turn << ','
-                << row.beam_width << ','
-                << row.hash_capacity << ','
-                << row.active_width << ','
-                << row.selected_width << ','
-                << row.candidate_count << ','
-                << row.max_active_width << ','
-                << row.max_selected_width << ','
-                << row.beam_saturated_turns << ','
-                << row.expanded_nodes << ','
-                << row.generated_candidates << ','
-                << row.accepted_candidates << ','
-                << row.selected_nodes << ','
-                << row.pruned_by_width << ','
-                << row.pruned_by_hash << ','
-                << row.duplicate_by_hash << ','
-                << row.replaced_by_width << ','
-                << row.replaced_by_hash << ','
-                << row.invalid_candidates << ','
-                << row.hash_rebuild_count << ','
-                << row.live_nodes << ','
-                << row.max_live_nodes << ','
-                << row.time_limit_ms << ','
-                << row.time_remaining_ms << ','
-                << static_cast<int>(row.use_turn_time_limit) << ','
-                << (row.turn_start_us < 0 ? -1.0 : row.turn_start_us * 0.001) << ','
-                << (row.turn_deadline_us < 0 ? -1.0 : row.turn_deadline_us * 0.001) << ','
-                << (row.turn_deadline_us < 0 ? -1.0 : (row.turn_deadline_us - row.turn_start_us) * 0.001) << ','
-                << row.turn_elapsed_us * 0.001 << ','
-                << static_cast<int>(row.turn_time_limit_reached) << ','
-                << row.live_best_cost << ','
-                << row.live_worst_cost << ','
-                << row.live_avg_cost << ','
-                << row.selected_best_cost << ','
-                << row.selected_worst_cost << ','
-                << row.selected_avg_cost << ','
-                << row.width_pruned_cost_count << ','
-                << row.width_pruned_best_cost << ','
-                << row.pruned_best_gap << ','
-                << row.turns_since_best_update << ','
-                << row.expanded_nodes_since_best_update << ','
-                << row.ms_since_best_update << ','
-                << static_cast<int>(row.found) << ','
-                << row.best_cost << ','
-                << row.best_turn << ','
-                << row.best_update_count << ','
-                << static_cast<int>(row.time_limit_reached) << ','
-                << static_cast<int>(row.exhausted) << ','
-                << static_cast<int>(row.completed_max_turn) << ','
-                << row.period_ms << ','
-                << row.period_turns << ','
-                << row.period_expanded_nodes << ','
-                << row.period_generated_candidates << ','
-                << row.period_accepted_candidates << ','
-                << row.period_selected_nodes << ','
-                << row.period_pruned_by_width << ','
-                << row.period_pruned_by_hash << ','
-                << row.period_duplicate_by_hash << ','
-                << row.period_replaced_by_width << ','
-                << row.period_replaced_by_hash << ','
-                << row.period_invalid_candidates << ','
-                << row.period_hash_rebuild_count << ','
-                << row.period_best_updates << ','
-                << row.expand_per_sec << ','
-                << row.generate_per_sec << ','
-                << row.accept_per_sec << ','
-                << row.select_per_sec << ','
-                << row.accept_rate << ','
-                << row.width_prune_rate << ','
-                << row.hash_prune_rate << ','
-                << row.branching_factor << ','
-                << row.duplicate_rate << ','
-                << row.accepted_per_expanded << ','
-                << row.selected_per_expanded << '\n';
-        }
-        std::FILE* fp = std::fopen(filename.c_str(), "wb");
-        if (fp == nullptr) {
+        std::ofstream out(filename, std::ios::binary | std::ios::trunc);
+        if (!out) {
             std::cerr << "[bs] warning: failed to open csv file: " << filename << '\n';
             return;
         }
-        const std::string csv = ofs.str();
-        std::fwrite(csv.data(), 1, csv.size(), fp);
-        std::fclose(fp);
+        out.imbue(std::locale::classic());
+        out << std::setprecision(std::numeric_limits<long double>::max_digits10);
+        out << "event,elapsed_ms,turn,materialized_turn,max_turn,beam_width,hash_capacity,"
+               "active_width,selected_width,candidate_count,max_active_width,max_selected_width,beam_saturated_turns,"
+               "expanded_nodes,terminal_candidates,answer_only_candidates,continue_on_timeout,expand_answers,generated_candidates,accepted_candidates,selected_nodes,"
+               "pruned_by_width,pruned_by_hash,duplicate_by_hash,replaced_by_width,replaced_by_hash,invalid_candidates,hash_rebuild_count,"
+               "live_nodes,max_live_nodes,"
+               "time_limit_ms,time_remaining_ms,use_turn_time_limit,turn_start_ms,turn_deadline_ms,turn_budget_ms,turn_elapsed_ms,turn_time_limit_reached,"
+               "live_best_cost,live_worst_cost,live_avg_cost,"
+               "selected_best_cost,selected_worst_cost,selected_avg_cost,"
+               "width_pruned_cost_count,width_pruned_best_cost,pruned_best_gap,"
+               "turns_since_best_update,expanded_nodes_since_best_update,ms_since_best_update,"
+               "found,best_cost,best_turn,best_update_count,time_limit_reached,exhausted,completed_max_turn,"
+               "period_ms,period_turns,period_expanded_nodes,period_generated_candidates,period_accepted_candidates,period_selected_nodes,"
+               "period_pruned_by_width,period_pruned_by_hash,period_duplicate_by_hash,period_replaced_by_width,period_replaced_by_hash,period_invalid_candidates,period_hash_rebuild_count,period_best_updates,"
+               "expand_per_sec,generate_per_sec,accept_per_sec,select_per_sec,accept_rate,width_prune_rate,hash_prune_rate,"
+               "branching_factor,duplicate_rate,accepted_per_expanded,selected_per_expanded\n";
+        // 前回記録行との差分を出力時に計算し、同じ統計を二重に保持しない。
+        auto rate = [](auto numerator, auto denominator) {
+            return denominator > 0 ? static_cast<double>(numerator) / static_cast<double>(denominator) : 0.0;
+        };
+        auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
+        for (std::size_t i = 0; i < rows.size(); ++i) {
+            const auto& r = rows[i];
+            const auto& prev = rows[i == 0 ? 0 : i - 1];
+            const double period_ms = ms(r.elapsed_us) - ms(prev.elapsed_us);
+            auto cells = [&](const auto&... values) { ((out << ',' << +values), ...); };
+            out << r.event;
+            cells(ms(r.elapsed_us), r.turn, r.materialized_turn,
+                  r.param.max_turn, r.param.beam_width, r.param.hash_capacity,
+                  r.active_width, r.selected_width, r.candidate_count,
+                  r.max_active_width, r.max_selected_width, r.beam_saturated_turns,
+                  r.expanded_nodes, r.terminal_candidates, r.answer_only_candidates,
+                  r.param.continue_on_timeout, r.param.expand_answers, r.generated_candidates,
+                  r.accepted_candidates, r.selected_nodes, r.pruned_by_width,
+                  r.pruned_by_hash, r.duplicate_by_hash, r.replaced_by_width,
+                  r.replaced_by_hash, r.invalid_candidates, r.hash_rebuild_count,
+                  r.live_nodes, r.max_live_nodes, r.param.time_limit_ms,
+                  r.time_remaining_ms, r.param.use_turn_time_limit, (r.turn_start_us < 0 ? -1.0 : ms(r.turn_start_us)),
+                  (r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us)), (r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us - r.turn_start_us)), ms(r.turn_elapsed_us),
+                  r.turn_time_limit_reached, r.live_costs.best, r.live_costs.worst,
+                  r.live_costs.average(), r.selected_costs.best, r.selected_costs.worst,
+                  r.selected_costs.average(), r.width_pruned_cost_count, r.width_pruned_best_cost,
+                  r.pruned_best_gap, r.turns_since_best_update, r.expanded_nodes_since_best_update,
+                  r.ms_since_best_update, r.found);
+            out << ','; if (r.found) out << +r.best_cost;
+            out << ','; if (r.found) out << +r.best_turn;
+            cells(r.best_update_count, r.time_limit_reached, r.exhausted,
+                  r.completed_max_turn, period_ms, (r.materialized_turn - prev.materialized_turn),
+                  (r.expanded_nodes - prev.expanded_nodes), (r.generated_candidates - prev.generated_candidates), (r.accepted_candidates - prev.accepted_candidates),
+                  (r.selected_nodes - prev.selected_nodes), (r.pruned_by_width - prev.pruned_by_width), (r.pruned_by_hash - prev.pruned_by_hash),
+                  (r.duplicate_by_hash - prev.duplicate_by_hash), (r.replaced_by_width - prev.replaced_by_width), (r.replaced_by_hash - prev.replaced_by_hash),
+                  (r.invalid_candidates - prev.invalid_candidates), (r.hash_rebuild_count - prev.hash_rebuild_count), (r.best_update_count - prev.best_update_count),
+                  rate(static_cast<double>(r.expanded_nodes - prev.expanded_nodes) * 1000.0, period_ms), rate(static_cast<double>(r.generated_candidates - prev.generated_candidates) * 1000.0, period_ms), rate(static_cast<double>(r.accepted_candidates - prev.accepted_candidates) * 1000.0, period_ms),
+                  rate(static_cast<double>(r.selected_nodes - prev.selected_nodes) * 1000.0, period_ms), rate((r.accepted_candidates - prev.accepted_candidates), (r.generated_candidates - prev.generated_candidates)), rate((r.pruned_by_width - prev.pruned_by_width), (r.generated_candidates - prev.generated_candidates)),
+                  rate((r.pruned_by_hash - prev.pruned_by_hash), (r.generated_candidates - prev.generated_candidates)), rate((r.generated_candidates - prev.generated_candidates), (r.expanded_nodes - prev.expanded_nodes)), rate((r.duplicate_by_hash - prev.duplicate_by_hash), (r.generated_candidates - prev.generated_candidates)),
+                  rate((r.accepted_candidates - prev.accepted_candidates), (r.expanded_nodes - prev.expanded_nodes)), rate((r.selected_nodes - prev.selected_nodes), (r.expanded_nodes - prev.expanded_nodes)));
+            out << '\n';
+        }
+        out.close();
+        if (!out) std::cerr << "[bs] warning: failed to write csv file: " << filename << '\n';
     }
+#else
+    explicit CsvStatHook(std::string = "beam_stat.csv", double = 50.0) {}
+    void operator()(EventType, const Runtime&) {}
+#endif
 };
 
 // 探索結果。
-// アクション列はライブラリ側では保持しない。必要ならユーザー側で State に含める。
+// Action型を指定した場合は操作列を共有木で保持し、pathに返す。
 // exhausted=true は、時間制限による途中終了ではなく、展開可能なfrontierが尽きたことを表す。
-template<class State>
-struct Result {
+template<class State, class Action = void> struct Result;
+    template<class State> struct Result<State, void> {
     bool found = false;
     // time_limit_msに達したことを検出したか。
     // 検出後に探索を継続する場合は最良1本の縮退探索へ移る。
     // expand中の即時中断を意味しない。
     bool time_limit_reached = false;
     bool exhausted = false;
-    // max_turn到着候補を少なくとも1件materializeした。
+    // 不正でないmax_turn到着候補を少なくとも1件生成した。
     // 全候補を通常幅で展開した保証ではない。
     bool completed_max_turn = false;
 
@@ -535,10 +465,10 @@ struct Result {
 // push/push_lazy の戻り値 true は、この呼び出し時点で候補がSelectorに入ったことを表す。
 // 後続候補に置換される可能性があるため、最終結果に残る保証ではない。
 // 有効解は幅・Hashの選別前に保存する。falseを返しても最良解を更新する場合がある。
-// finished=true は解候補フラグであり、自動的な展開停止ではない。
+// is_answer=true は解候補フラグ。expand_answers=falseなら保存だけを行う。
 // push_lazy は探索候補または最良有効解の保存に必要な場合だけ maker() を1回呼ぶ。makerは保存されない。
-template<class State>
-class Emitter {
+template<class State, class Action = void> class Emitter;
+    template<class State> class Emitter<State, void> {
 public:
     template<class U>
     requires StateArg<U, State>
@@ -548,8 +478,8 @@ public:
 
     template<class U, class B>
     requires StateArg<U, State> && BoolArg<B>
-    bool push(U&& state, Cost cost, B finished) {
-        return push_state_impl(std::forward<U>(state), cost, now_hash_, false, finished);
+    bool push(U&& state, Cost cost, B is_answer) {
+        return push_state_impl(std::forward<U>(state), cost, now_hash_, false, is_answer);
     }
 
     template<class U, class H>
@@ -560,8 +490,8 @@ public:
 
     template<class U, class H, class B>
     requires StateArg<U, State> && CompatibleHashArg<H, Hash> && BoolArg<B>
-    bool push(U&& state, Cost cost, H hash, B finished) {
-        return push_state_impl(std::forward<U>(state), cost, static_cast<Hash>(hash), true, finished);
+    bool push(U&& state, Cost cost, H hash, B is_answer) {
+        return push_state_impl(std::forward<U>(state), cost, static_cast<Hash>(hash), true, is_answer);
     }
 
     template<class Maker>
@@ -571,8 +501,8 @@ public:
 
     template<class B, class Maker>
     requires BoolArg<B>
-    bool push_lazy(Cost cost, B finished, Maker&& maker) {
-        return push_lazy_impl(cost, now_hash_, false, finished, std::forward<Maker>(maker));
+    bool push_lazy(Cost cost, B is_answer, Maker&& maker) {
+        return push_lazy_impl(cost, now_hash_, false, is_answer, std::forward<Maker>(maker));
     }
 
     template<class H, class Maker>
@@ -583,8 +513,8 @@ public:
 
     template<class H, class B, class Maker>
     requires CompatibleHashArg<H, Hash> && BoolArg<B>
-    bool push_lazy(Cost cost, H hash, B finished, Maker&& maker) {
-        return push_lazy_impl(cost, static_cast<Hash>(hash), true, finished, std::forward<Maker>(maker));
+    bool push_lazy(Cost cost, H hash, B is_answer, Maker&& maker) {
+        return push_lazy_impl(cost, static_cast<Hash>(hash), true, is_answer, std::forward<Maker>(maker));
     }
 
 private:
@@ -596,20 +526,101 @@ private:
         : engine_(engine), now_hash_(now_hash), child_turn_(child_turn) {}
 
     template<class U>
-    bool push_state_impl(U&& state, Cost cost, Hash hash, bool has_hash, bool finished) {
+    bool push_state_impl(U&& state, Cost cost, Hash hash, bool has_hash, bool is_answer) {
         auto maker = [&]() -> decltype(auto) { return std::forward<U>(state); };
-        return push_lazy_impl(cost, hash, has_hash, finished, maker);
+        return push_lazy_impl(cost, hash, has_hash, is_answer, maker);
     }
 
     template<class Maker>
-    bool push_lazy_impl(Cost cost, Hash hash, bool has_hash, bool finished, Maker&& maker) {
-        return engine_.push_candidate(cost, hash, child_turn_, has_hash, finished, std::forward<Maker>(maker));
+    bool push_lazy_impl(Cost cost, Hash hash, bool has_hash, bool is_answer, Maker&& maker) {
+        return engine_.push_candidate(cost, hash, child_turn_, has_hash, is_answer, std::forward<Maker>(maker));
     }
 
     Engine<State>& engine_;
     Hash now_hash_{};
     int child_turn_ = 0;
 };
+
+public:
+    template<class Action> class HistoryView {
+        template<class, class> friend class Emitter;
+        using Pool = beam_history_detail::Pool<Action>;
+        const Pool* pool_;
+        std::size_t id_;
+        HistoryView(const Pool& pool, std::size_t id) noexcept : pool_(&pool), id_(id) {}
+    public:
+        // expand内だけ有効。Action参照はpush/push_lazyをまたいで保持しない。
+        bool empty() const noexcept { return id_ == Pool::none; }
+        const Action& action() const noexcept { assert(!empty()); return pool_->value(id_); }
+        HistoryView parent() const noexcept { assert(!empty()); return {*pool_, pool_->parent(id_)}; }
+    };
+    template<class State, class Action>
+    struct Result : Result<State, void> {
+        std::vector<Action> path;
+    };
+    // Action型指定時だけ有効。Stateと操作列は分離し、祖先Stateは保持しない。
+    template<class State, class Action>
+    class Emitter {
+        friend struct Beam;
+        using Value = Action;
+        using Pool = beam_history_detail::Pool<Value>;
+        using Stored = beam_history_detail::TracedState<State, Value>;
+        Emitter<Stored>& raw_;
+        Pool& pool_;
+        std::size_t parent_;
+        Emitter(Emitter<Stored>& raw, Pool& pool, std::size_t parent) noexcept
+            : raw_(raw), pool_(pool), parent_(parent) {}
+        template<class A, class Maker>
+        bool emit(A&& action, Cost cost, Hash hash, bool has_hash, bool is_answer, Maker&& maker) {
+            auto traced = [&]() {
+                return Stored{State(std::invoke(std::forward<Maker>(maker))), pool_.make(parent_, std::forward<A>(action))};
+            };
+            if (has_hash) return raw_.push_lazy(cost, hash, is_answer, traced);
+            return raw_.push_lazy(cost, is_answer, traced);
+        }
+    public:
+        HistoryView<Action> history() const noexcept { return {pool_, parent_}; }
+        template<class U, class A>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action>
+        bool push(U&& state, A&& action, Cost cost) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, false, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        }
+        template<class A, class Maker>
+        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&>
+        bool push_lazy(A&& action, Cost cost, Maker&& maker) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, false, std::forward<Maker>(maker));
+        }
+        template<class U, class A, class B>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && BoolArg<B>
+        bool push(U&& state, A&& action, Cost cost, B is_answer) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, is_answer, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        }
+        template<class A, class B, class Maker>
+        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && BoolArg<B>
+        bool push_lazy(A&& action, Cost cost, B is_answer, Maker&& maker) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, is_answer, std::forward<Maker>(maker));
+        }
+        template<class U, class A, class H>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && CompatibleHashArg<H, Hash>
+        bool push(U&& state, A&& action, Cost cost, H hash) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, false, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        }
+        template<class A, class H, class Maker>
+        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && CompatibleHashArg<H, Hash>
+        bool push_lazy(A&& action, Cost cost, H hash, Maker&& maker) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, false, std::forward<Maker>(maker));
+        }
+        template<class U, class A, class H, class B>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && CompatibleHashArg<H, Hash> && BoolArg<B>
+        bool push(U&& state, A&& action, Cost cost, H hash, B is_answer) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, is_answer, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        }
+        template<class A, class H, class B, class Maker>
+        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && CompatibleHashArg<H, Hash> && BoolArg<B>
+        bool push_lazy(A&& action, Cost cost, H hash, B is_answer, Maker&& maker) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, is_answer, std::forward<Maker>(maker));
+        }
+    };
 
 private:
 
@@ -634,7 +645,7 @@ static void call_expand(Expand& expand, const StateView<State>& now, Runtime& rt
 // 固定長Hash表。Selector内の重複排除に使う。
 // clear は配列初期化ではなく epoch 更新で行う。
 // 削除は行わず、置換で生じる古いentryは参照時に候補側と照合して無視する。
-// 古いentryで表が詰まった場合だけ rebuild する。
+// 古いentryが増えたら空きが十分あるうちに rebuild する。
 // ============================================================
 class FixedHashMap {
 public:
@@ -646,7 +657,7 @@ public:
     void init(int cap) {
         cap = std::max(4, cap);
         capacity_ = detail::ceil_pow2(cap);
-        mask_ = capacity_ - 1;
+        mask_ = capacity_ - 1; occupied_ = 0;
         keys_.assign(static_cast<std::size_t>(capacity_), Hash{});
         values_.assign(static_cast<std::size_t>(capacity_), -1);
         used_.assign(static_cast<std::size_t>(capacity_), 0);
@@ -654,6 +665,7 @@ public:
     }
 
     void clear() {
+        occupied_ = 0;
         ++epoch_;
         if (epoch_ == 0) {
             std::fill(used_.begin(), used_.end(), 0);
@@ -664,7 +676,7 @@ public:
     Lookup lookup(Hash key) const {
         int i = bucket(key);
         for (int probe = 0; probe < capacity_; ++probe) {
-            if (used_[i] != epoch_) return Lookup{false, i};
+            if (used_[i] != epoch_) return Lookup{false, occupied_ >= capacity_ - capacity_ / 4 ? -1 : i};
             if (keys_[i] == key) return Lookup{true, i};
             i = (i + 1) & mask_;
         }
@@ -675,13 +687,14 @@ public:
 
     void set(int slot, Hash key, int value) {
         if (slot < 0) return;
+        occupied_ += used_[slot] != epoch_;
         used_[slot] = epoch_;
         keys_[slot] = key;
         values_[slot] = value;
     }
 
 private:
-    int capacity_ = 0;
+    int capacity_ = 0, occupied_ = 0;
     int mask_ = 0;
     std::uint32_t epoch_ = 1;
     std::vector<Hash> keys_;
@@ -697,6 +710,14 @@ private:
 
 template<class State>
 class Engine {
+    // 空の組み込みHookでは、通知用の集計・時計取得も行わない。
+    template<class Hook>
+    static constexpr bool has_debug_hook =
+        !std::same_as<std::remove_cvref_t<Hook>, NoOp>
+#ifndef LOCAL
+        && !std::same_as<std::remove_cvref_t<Hook>, CsvStatHook>
+#endif
+        ;
     static_assert(std::copy_constructible<State>, "State must be copy constructible because best_state is copied when updated");
     static_assert(std::move_constructible<State>, "State must be move constructible");
     static_assert(std::assignable_from<State&, State>, "State must be assignable because selectors replace candidates in-place");
@@ -707,15 +728,13 @@ class Engine {
         // 選抜時に頻繁に読むメタ情報を先頭に置き、Stateが大きい場合のキャッシュ効率を少し良くする。
         Cost cost{};
         Hash hash{};
-        int turn = 0;
         bool has_hash = false;
         State state;
 
         template<class U>
-        Item(U&& state_, Cost cost_, Hash hash_, int turn_, bool has_hash_)
+        Item(U&& state_, Cost cost_, Hash hash_, bool has_hash_)
             : cost(cost_),
               hash(hash_),
-              turn(turn_),
               has_hash(has_hash_),
               state(std::forward<U>(state_)) {}
     };
@@ -725,239 +744,140 @@ class Engine {
     // hashは同一frontier内の重複排除とStateView用にだけ使う。
     // State生成前に cost/hash で受理可能性を判定するため、push_lazy と通常pushの両方で内部保存の無駄を抑えられる。
     class Selector {
-    public:
-        // push結果はホットパスで返すため、複数boolではなくbit flagsにまとめる。
-        struct PushResult {
-            enum Flag : std::uint8_t {
-                Accepted        = 1u << 0,
-                Duplicate       = 1u << 1,
-                HashFull        = 1u << 2,
-                Appended        = 1u << 3,
-                ReplacedByWidth = 1u << 4,
-                ReplacedByHash  = 1u << 5,
-                HashRebuilt     = 1u << 6,
-            };
-            std::uint8_t flags = 0;
-            constexpr PushResult() = default;
-            constexpr explicit PushResult(unsigned f) : flags(static_cast<std::uint8_t>(f)) {}
-
-            [[nodiscard]] constexpr bool has(Flag flag) const noexcept {
-                return (flags & static_cast<std::uint8_t>(flag)) != 0;
-            }
-        };
-
-        void init(int beam_width, int hash_capacity, bool use_hash) {
-            beam_width_ = std::max(1, beam_width);
-            use_hash_ = use_hash;
-            candidates_.reserve(beam_width_);
-            costs_.assign(beam_width_, Cost{});
-            if (use_hash_) hash_.init(std::max(hash_capacity, beam_width_ * 2 + 1));
-            seg_n_ = 1;
-            while (seg_n_ < beam_width_) seg_n_ <<= 1;
-            seg_.assign(seg_n_ * 2, -1);
-        }
-
-        void clear() {
-            candidates_.clear();
-            worst_index_cache = -1;
-            if (use_hash_) hash_.clear();
-        }
-
-        [[nodiscard]] int size() const { return static_cast<int>(candidates_.size()); }
-        [[nodiscard]] bool full() const { return size() >= beam_width_; }
-        std::vector<Item>& selected() { return candidates_; }
-        const std::vector<Item>& selected() const { return candidates_; }
-
-        template<class Maker>
-        PushResult push(Cost cost, Hash hash, int turn, bool has_hash, Maker&& maker) {
-            // まずcostだけで幅棄却を行う。ここで落ちた候補はhash重複統計には入らない。
-            if (full() && !candidate_better_than_worst(cost)) return {};
-            return (use_hash_ && has_hash)
-                ? push_hashed(cost, hash, turn, std::forward<Maker>(maker))
-                : push_plain(cost, hash, turn, has_hash, std::forward<Maker>(maker));
-        }
-
-    private:
-        int beam_width_ = 1;
-        int seg_n_ = 1;
-        bool use_hash_ = false;
+        int width_ = 1, base_ = 1, worst_ = -1;
+        bool hashed_ = false;
+        Cost worst_cost_{};
         std::vector<Item> candidates_;
         std::vector<Cost> costs_;
-        FixedHashMap hash_;
-        std::vector<int> seg_;
-        Cost worst_cost_cache{};
-        int worst_index_cache = -1;
+        std::vector<int> tree_;
+        FixedHashMap map_;
 
-        // segment treeでは「最悪候補」を上に上げる。同costでは後ろのindexを最悪とし、既存候補を残しやすくする。
-        int worse_index(int lhs, int rhs) const {
-            if (lhs < 0) return rhs;
-            if (rhs < 0) return lhs;
-            if (costs_[lhs] != costs_[rhs]) return costs_[lhs] < costs_[rhs] ? rhs : lhs;
-            return lhs < rhs ? rhs : lhs;
+        int worse(int a, int b) const {
+            if (a < 0) return b;
+            if (b < 0) return a;
+            if (costs_[a] != costs_[b]) return costs_[a] < costs_[b] ? b : a;
+            return std::max(a, b);
         }
-
-        // 満杯時に入れる候補は worst より strictly better な cost のみ。同costは棄却する。
-        bool candidate_better_than_worst(Cost cost) const {
-            if (worst_index_cache < 0) return true;
-            return cost < worst_cost_cache;
-        }
-
-        template<class Maker>
-        void append_candidate(Cost cost, Hash hash, int turn, bool has_hash, Maker&& maker) {
-            candidates_.emplace_back(std::invoke(std::forward<Maker>(maker)), cost, hash, turn, has_hash);
-            const int j = static_cast<int>(candidates_.size()) - 1;
-            costs_[j] = cost;
-            if (static_cast<int>(candidates_.size()) == beam_width_) build_segment_tree();
-        }
-
-        template<class Maker>
-        void replace_candidate(int j, Cost cost, Hash hash, int turn, bool has_hash, Maker&& maker) {
-            Item& item = candidates_[j];
-            item.cost = cost;
-            item.hash = hash;
-            item.turn = turn;
-            item.has_hash = has_hash;
-            item.state = std::invoke(std::forward<Maker>(maker));
-            costs_[j] = cost;
-            if (full()) seg_set(j);
-        }
-
-        template<class Maker>
-        PushResult push_plain(Cost cost, Hash hash, int turn, bool has_hash, Maker&& maker) {
-            if (!full()) {
-                append_candidate(cost, hash, turn, has_hash, std::forward<Maker>(maker));
-                return PushResult(PushResult::Accepted | PushResult::Appended);
+        // 再構築ループを候補選別へインライン展開せず、通常の照合処理を小さく保つ。
+        [[gnu::noinline]] void rebuild_hash() {
+            map_.clear();
+            for (int i = 0; i < size(); ++i) if (candidates_[i].has_hash) {
+                const auto h = candidates_[i].hash;
+                map_.set(map_.lookup(h).slot, h, i);
             }
-            const int j = worst_index_cache;
-            if (j < 0) return {};
-            replace_candidate(j, cost, hash, turn, has_hash, std::forward<Maker>(maker));
-            return PushResult(PushResult::Accepted | PushResult::ReplacedByWidth);
         }
+    public:
+        struct Choice {
+            int slot = -1, hash_slot = -1;
+            bool duplicate = false, rebuilt = false;
+        };
+        void init(int width, int hash_capacity, bool hashed) {
+            width_ = width; hashed_ = hashed;
+            base_ = detail::ceil_pow2(width);
+            candidates_.reserve(width); costs_.resize(width); tree_.assign(base_ * 2, -1);
+            if (hashed_) map_.init(hash_capacity);
+        }
+        void clear() {
+            candidates_.clear(); worst_ = -1;
+            if (hashed_) map_.clear();
+        }
+        int size() const { return static_cast<int>(candidates_.size()); }
+        bool full() const { return size() == width_; }
+        std::vector<Item>& selected() { return candidates_; }
+        const std::vector<Item>& selected() const { return candidates_; }
+        bool rejects_by_width(Cost cost) const { return full() && !(cost < worst_cost_); }
 
-        template<class Maker>
-        PushResult push_hashed(Cost cost, Hash hash, int turn, Maker&& maker) {
-            auto found = hash_.lookup(hash);
-            if (found.found) {
-                const int j = hash_.get(found.slot);
-                const bool live = 0 <= j && j < static_cast<int>(candidates_.size()) &&
-                                  candidates_[j].has_hash && candidates_[j].hash == hash;
-                if (live) {
-                    if (!(cost < costs_[j])) return PushResult(PushResult::Duplicate);
-                    replace_candidate(j, cost, hash, turn, true, std::forward<Maker>(maker));
-                    hash_.set(found.slot, hash, j);
-                    return PushResult(PushResult::Accepted | PushResult::Duplicate | PushResult::ReplacedByHash);
+        // 幅判定の後、Stateを生成せず保存位置を決める。Sub版と同じchoose/putの二段階。
+        Choice choose(Cost cost, Hash hash, bool has_hash) {
+            Choice c;
+            if (hashed_ && has_hash) {
+                auto hit = map_.lookup(hash);
+                if (hit.found) {
+                    const int i = map_.get(hit.slot);
+                    if (i < size() && candidates_[i].has_hash && candidates_[i].hash == hash) {
+                        c.duplicate = true;
+                        if (cost < costs_[i]) c.slot = i;
+                        return c;
+                    }
                 }
-                // stale entry なので、この slot を上書きしてよい。候補本体は既に別候補で置換されている。
+                if (hit.slot < 0) { rebuild_hash(); hit = map_.lookup(hash); c.rebuilt = true; }
+                if (hit.slot < 0) return c;
+                c.hash_slot = hit.slot;
             }
-
-            bool hash_rebuilt = false;
-            if (found.slot < 0) {
-                rebuild_hash();
-                hash_rebuilt = true;
-                found = hash_.lookup(hash);
-                if (found.slot < 0) return PushResult(PushResult::HashFull | PushResult::HashRebuilt);
+            c.slot = full() ? worst_ : size();
+            return c;
+        }
+        template<class Maker>
+        void put(Choice c, Cost cost, Hash hash, bool has_hash, Maker&& maker) {
+            const bool appended = c.slot == size();
+            if (appended) {
+                candidates_.emplace_back(std::invoke(std::forward<Maker>(maker)), cost, hash, has_hash);
+            } else {
+                auto& item = candidates_[c.slot];
+                item.cost = cost; item.hash = hash; item.has_hash = has_hash;
+                item.state = std::invoke(std::forward<Maker>(maker));
             }
-
-            if (!full()) {
-                const int j = static_cast<int>(candidates_.size());
-                append_candidate(cost, hash, turn, true, std::forward<Maker>(maker));
-                hash_.set(found.slot, hash, j);
-                return PushResult(PushResult::Accepted | PushResult::Appended | (hash_rebuilt ? PushResult::HashRebuilt : 0));
+            costs_[c.slot] = cost;
+            if (c.hash_slot >= 0) map_.set(c.hash_slot, hash, c.slot);
+            if (full()) {
+                if (appended) {
+                    for (int i = 0; i < width_; ++i) tree_[base_ + i] = i;
+                    for (int i = base_ - 1; i > 0; --i) tree_[i] = worse(tree_[i * 2], tree_[i * 2 + 1]);
+                } else {
+                    for (int i = (base_ + c.slot) / 2; i > 0; i /= 2)
+                        tree_[i] = worse(tree_[i * 2], tree_[i * 2 + 1]);
+                }
+                worst_ = tree_[1]; worst_cost_ = costs_[worst_];
             }
-
-            const int j = worst_index_cache;
-            if (j < 0) return {};
-            replace_candidate(j, cost, hash, turn, true, std::forward<Maker>(maker));
-            hash_.set(found.slot, hash, j);
-            return PushResult(PushResult::Accepted | PushResult::ReplacedByWidth | (hash_rebuilt ? PushResult::HashRebuilt : 0));
-        }
-
-        void rebuild_hash() {
-            if (!use_hash_) return;
-            hash_.clear();
-            for (int i = 0; i < static_cast<int>(candidates_.size()); ++i) {
-                if (!candidates_[i].has_hash) continue;
-                auto slot = hash_.lookup(candidates_[i].hash);
-                if (slot.slot >= 0) hash_.set(slot.slot, candidates_[i].hash, i);
-            }
-        }
-
-        void update_worst_cache() {
-            worst_index_cache = seg_[1];
-            if (worst_index_cache >= 0) worst_cost_cache = costs_[worst_index_cache];
-        }
-
-        void build_segment_tree() {
-            std::fill(seg_.begin(), seg_.end(), -1);
-            for (int i = 0; i < beam_width_; ++i) seg_[seg_n_ + i] = i;
-            for (int i = seg_n_ - 1; i >= 1; --i) seg_[i] = worse_index(seg_[i << 1], seg_[i << 1 | 1]);
-            update_worst_cache();
-        }
-
-        void seg_set(int pos) {
-            int i = seg_n_ + pos;
-            seg_[i] = pos;
-            while (i >>= 1) seg_[i] = worse_index(seg_[i << 1], seg_[i << 1 | 1]);
-            update_worst_cache();
         }
     };
 
 public:
-    Engine(Param param_, State&& initial_state_, Cost initial_cost_, Hash initial_hash_, bool initial_has_hash_)
-        : param(param_),
-          initial_state(std::move(initial_state_)),
-          initial_cost(initial_cost_),
-          initial_hash(initial_hash_),
-          initial_has_hash(initial_has_hash_) {
-        normalize_param();
-    }
+    explicit Engine(Param param) : rt{normalize(param)} {}
 
     template<class Expand, class DebugHook>
-    Result<State> run(Expand&& expand, DebugHook&& debug_hook) {
-        rt = Runtime{};
+    Result<State> run(State&& initial_state, Cost initial_cost, Hash initial_hash, bool initial_has_hash,
+                      Expand&& expand, DebugHook&& debug_hook) {
+
         start_clock_us = detail::now_microseconds();
-        limit_us = detail::time_limit_to_microseconds(param.time_limit_ms);
+        limit_us = detail::time_limit_to_microseconds(rt.param.time_limit_ms);
         use_time_limit = (limit_us > 0);
-        debug_enabled = !std::same_as<std::decay_t<DebugHook>, NoOp>;
+        debug_enabled = has_debug_hook<DebugHook>;
 
-        initialize_search();
+        frontier.reserve(rt.param.beam_width);
+        selector.init(rt.param.beam_width, rt.param.hash_capacity, rt.param.use_hash_dedup);
+        frontier.emplace_back(std::move(initial_state), initial_cost, initial_hash, initial_has_hash);
+        refresh_runtime_usage();
 
-        rt.turn = 0;
-        rt.max_turn = param.max_turn;
-        rt.beam_width = param.beam_width;
-        rt.hash_capacity = param.hash_capacity;
-        rt.time_limit_ms = param.time_limit_ms;
-        rt.use_turn_time_limit = param.use_turn_time_limit;
+        const bool valid_initial = detail::is_valid_cost(initial_cost);
         rt.best_cost = initial_cost;
-        rt.best_turn = 0;
-        rt.materialized_turn = 0;
 
         update_time();
         if (use_time_limit && rt.elapsed_us >= limit_us) {
             rt.time_limit_reached = true;
         }
         emit_hook(EventType::RunStart, debug_hook);
-        if (param.max_turn == 0 && param.max_turn_is_answer && detail::is_valid_cost(initial_cost)) {
-            best_state.emplace(frontier.front().state);
+        if (valid_initial && rt.param.max_turn == 0 && rt.param.max_turn_is_answer) {
+            best_state.emplace(std::move(frontier.front().state));
             set_best(initial_cost, 0);
-            notify_best_update(debug_hook);
+            record_best_update();
         }
-        rt.completed_max_turn = (param.max_turn == 0);
-        if (!rt.completed_max_turn) run_loop(expand, debug_hook);
+        rt.completed_max_turn = valid_initial && rt.param.max_turn == 0;
+        if (!valid_initial) frontier.clear();
+        if (valid_initial && !rt.completed_max_turn) {
+            if (use_time_limit) run_loop<true>(expand, debug_hook);
+            else run_loop<false>(expand, debug_hook);
+        }
 
+        turn_timing_active = false;
         finalize_runtime_for_result();
         emit_hook(EventType::RunEnd, debug_hook);
         return build_result();
     }
 
 private:
-    Param param;
-    State initial_state;
-    Cost initial_cost{};
-    Hash initial_hash{};
-    bool initial_has_hash = false;
-
     Runtime rt;
+
     std::int64_t start_clock_us = 0;
     std::int64_t limit_us = 0;
     bool use_time_limit = false;
@@ -968,17 +888,19 @@ private:
     Selector selector;
     std::optional<State> best_state;
 
-    int last_candidate_count = 0;
     long long expanded_at_last_best_update = 0;
     std::int64_t last_best_update_us = 0;
     int last_best_update_turn = 0;
 
     // ユーザー指定値を内部で扱いやすい範囲へ正規化する。
     // hash_capacity はSelector保持数が高々beam_width個であることを前提に丸める。
-    void normalize_param() {
+    static Param normalize(Param param) {
         param.max_turn = std::max(0, param.max_turn);
         param.beam_width = std::max(1, param.beam_width);
         param.time_check_interval = std::max(1, param.time_check_interval);
+        if (param.max_turn == std::numeric_limits<int>::max() ||
+            param.beam_width > ((1 << 30) - 17) / 4)
+            throw std::length_error("beam parameters exceed internal index limits");
 
         if (param.use_hash_dedup) {
             // Selectorが保持する候補は高々beam_width個なので、過大なhash表はキャッシュ効率のため丸める。
@@ -989,15 +911,7 @@ private:
         } else {
             param.hash_capacity = 0;
         }
-    }
-
-    // frontierとselectorは1本ずつ持つ。探索開始時に初期状態をfrontierへ置く。
-    void initialize_search() {
-        frontier.clear();
-        frontier.reserve(std::max(1, param.beam_width));
-        selector.init(param.beam_width, param.hash_capacity, param.use_hash_dedup);
-        frontier.emplace_back(std::move(initial_state), initial_cost, initial_hash, 0, initial_has_hash);
-        refresh_runtime_usage();
+        return param;
     }
 
     void update_time() {
@@ -1028,10 +942,6 @@ private:
             rt.turns_since_best_update = std::max(0, rt.turn - last_best_update_turn);
             rt.expanded_nodes_since_best_update = rt.expanded_nodes - expanded_at_last_best_update;
             rt.ms_since_best_update = static_cast<double>(rt.elapsed_us - last_best_update_us) * 0.001;
-        } else {
-            rt.turns_since_best_update = 0;
-            rt.expanded_nodes_since_best_update = 0;
-            rt.ms_since_best_update = 0.0;
         }
     }
 
@@ -1042,60 +952,25 @@ private:
         update_debug_snapshot();
     }
 
+    void collect_selected_debug_stats(std::span<const Item> cands) {
+        auto& costs = rt.selected_costs;
+        costs = {};
+        for (const Item& item : cands) {
+            costs.add(item.cost);
+        }
+
+    }
+
     void update_debug_snapshot() {
-        const int current_selector_size = selector.size();
-        rt.candidate_count = current_selector_size > 0 ? current_selector_size : last_candidate_count;
-
-        // NoOp実行ではmaterialize中にselected_*を計算しない。
-        // RunEndの最終snapshotでは、現在保持しているfrontierから必要な値だけ復元する。
-        // DebugHook有効時はmaterialize_arrival()で直近materializeの値を保持する。
-        if (!debug_enabled) {
-            bool has_selected = false;
-            double selected_sum = 0.0;
-            int selected_count = 0;
-            for (const Item& item : frontier) {
-                if (!has_selected) {
-                    rt.selected_best_cost = rt.selected_worst_cost = item.cost;
-                    has_selected = true;
-                } else {
-                    if (item.cost < rt.selected_best_cost) rt.selected_best_cost = item.cost;
-                    if (rt.selected_worst_cost < item.cost) rt.selected_worst_cost = item.cost;
-                }
-                selected_sum += static_cast<double>(item.cost);
-                ++selected_count;
-            }
-            rt.selected_avg_cost = selected_count > 0 ? selected_sum / selected_count : 0.0;
-            if (!has_selected) {
-                rt.selected_best_cost = Cost{};
-                rt.selected_worst_cost = Cost{};
-            }
-        }
-
-        bool has_live = false;
-        double live_sum = 0.0;
-        int live_count = 0;
-        auto add_live = [&](Cost cost) {
-            if (!has_live) {
-                rt.live_best_cost = rt.live_worst_cost = cost;
-                has_live = true;
-            } else {
-                if (cost < rt.live_best_cost) rt.live_best_cost = cost;
-                if (rt.live_worst_cost < cost) rt.live_worst_cost = cost;
-            }
-            live_sum += static_cast<double>(cost);
-            ++live_count;
-        };
-        for (const Item& item : frontier) add_live(item.cost);
-        for (const Item& item : selector.selected()) add_live(item.cost);
-        if (live_count > 0) {
-            rt.live_avg_cost = live_sum / live_count;
-        } else {
-            rt.live_best_cost = rt.live_worst_cost = Cost{};
-            rt.live_avg_cost = 0.0;
-        }
+        if (selector.size() > 0) rt.candidate_count = selector.size();
+        if (!debug_enabled) collect_selected_debug_stats(frontier);
+        auto& live = rt.live_costs;
+        live = {};
+        for (const Item& item : frontier) live.add(item.cost);
+        for (const Item& item : selector.selected()) live.add(item.cost);
 
         if (rt.selected_width > 0 && rt.width_pruned_cost_count > 0) {
-            rt.pruned_best_gap = static_cast<double>(rt.width_pruned_best_cost) - static_cast<double>(rt.selected_worst_cost);
+            rt.pruned_best_gap = static_cast<double>(rt.width_pruned_best_cost) - static_cast<double>(rt.selected_costs.worst);
         } else {
             rt.pruned_best_gap = 0.0;
         }
@@ -1105,29 +980,26 @@ private:
 
     template<class DebugHook>
     void emit_hook(EventType event_type, DebugHook& debug_hook) {
-        // BestUpdate は瞬間イベントなので、CSV出力や重いスナップショット更新は行わない。
-        // 独自Hookには通知するが、frontier/selector由来のsnapshot統計は直前の値のまま渡される。
-        // RunEnd の最終Runtimeは、呼び出し元でfinalize_runtime_for_result()により整える。
-        if constexpr (!std::same_as<std::decay_t<DebugHook>, NoOp>) {
-            if (event_type != EventType::RunEnd && event_type != EventType::BestUpdate) {
-                update_debug_snapshot();
-            }
+        if constexpr (has_debug_hook<DebugHook>) {
+            // RunEndは直前に最終スナップショットを整えている。
+            if (event_type != EventType::RunEnd) update_debug_snapshot();
             debug_hook(event_type, static_cast<const Runtime&>(rt));
-        } else {
-            (void)event_type;
-            (void)debug_hook;
         }
     }
 
     // 呼出し直前に全体の時計を更新する。turn中は締切を延長しない。
     void begin_turn_time() {
-        if (!param.use_turn_time_limit || !use_time_limit) return;
+        if (!rt.param.use_turn_time_limit || !use_time_limit) return;
         turn_timing_active = true;
         rt.turn_start_us = rt.elapsed_us;
         rt.turn_elapsed_us = 0;
         const auto remaining = std::max<std::int64_t>(0, limit_us - rt.elapsed_us);
-        rt.turn_deadline_us = rt.elapsed_us + remaining / (param.max_turn - rt.turn);
+        rt.turn_deadline_us = rt.elapsed_us + remaining / (rt.param.max_turn - rt.turn);
         rt.turn_time_limit_reached = rt.elapsed_us >= rt.turn_deadline_us;
+    }
+
+    bool stop_on_timeout() const {
+        return rt.time_limit_reached && (!rt.param.continue_on_timeout || rt.found);
     }
 
     bool mark_time_limit_if_elapsed() {
@@ -1142,64 +1014,76 @@ private:
     // expandの途中はライブラリ側では中断しない。
     bool need_switch_to_minimal_by_time() {
         if (!use_time_limit) return false;
-        if ((rt.expanded_nodes % param.time_check_interval) != 0) return false;
+        if ((rt.expanded_nodes % rt.param.time_check_interval) != 0) return false;
         return mark_time_limit_if_elapsed();
     }
 
     template<class Maker>
-    bool push_candidate(Cost cost, Hash hash, int turn, bool has_hash, bool finished, Maker&& maker) {
+    bool push_candidate(Cost cost, Hash hash, int turn, bool has_hash, bool is_answer, Maker&& maker) {
         static_assert(std::invocable<Maker&&>, "maker must be callable with no arguments");
         static_assert(std::constructible_from<State, std::invoke_result_t<Maker&&>>, "maker result must be constructible as State");
         ++rt.generated_candidates;
         // NaN cost や最大ターン超過は、幅やhashではなく不正候補として扱う。
-        if (!detail::is_valid_cost(cost) || turn > param.max_turn) {
+        if (!detail::is_valid_cost(cost) || turn > rt.param.max_turn) {
             ++rt.invalid_candidates;
             return false;
         }
-        if ((finished || (param.max_turn_is_answer && turn == param.max_turn)) &&
-            (!rt.found || cost < rt.best_cost)) {
-            best_state.emplace(std::invoke(std::forward<Maker>(maker)));
-            set_best(cost, turn);
-            return select_candidate(cost, hash, turn, has_hash, [&]() -> State { return *best_state; });
+        if (turn == rt.param.max_turn) { rt.completed_max_turn = true; ++rt.terminal_candidates; }
+        if (is_answer || (rt.param.max_turn_is_answer && turn == rt.param.max_turn)) {
+            const bool answer_only = !rt.param.expand_answers && turn < rt.param.max_turn;
+            if (answer_only) ++rt.answer_only_candidates;
+            if (!rt.found || cost < rt.best_cost) {
+                best_state.emplace(std::invoke(std::forward<Maker>(maker)));
+                set_best(cost, turn);
+                if (turn == rt.param.max_turn || answer_only) return false;
+                return select_candidate(cost, hash, has_hash, [&]() -> State { return *best_state; });
+            }
+            if (answer_only) return false;
         }
-        return select_candidate(cost, hash, turn, has_hash, std::forward<Maker>(maker));
+        if (turn == rt.param.max_turn) return false;
+        return select_candidate(cost, hash, has_hash, std::forward<Maker>(maker));
     }
 
     template<class Maker>
-    bool select_candidate(Cost cost, Hash hash, int turn, bool has_hash, Maker&& maker) {
-        const auto res = selector.push(cost, hash, turn, has_hash, std::forward<Maker>(maker));
-        if (res.has(Selector::PushResult::Duplicate)) ++rt.duplicate_by_hash;
-        if (res.has(Selector::PushResult::HashRebuilt)) ++rt.hash_rebuild_count;
-        if (!res.has(Selector::PushResult::Accepted)) {
-            if (res.has(Selector::PushResult::Duplicate) || res.has(Selector::PushResult::HashFull)) {
-                ++rt.pruned_by_hash;
-            } else {
-                ++rt.pruned_by_width;
-                update_width_pruned_debug(cost);
-            }
+    bool select_candidate(Cost cost, Hash hash, bool has_hash, Maker&& maker) {
+        if (selector.rejects_by_width(cost)) {
+            ++rt.pruned_by_width;
+            update_width_pruned_debug(cost);
             return false;
         }
+        const auto choice = selector.choose(cost, hash, has_hash);
+        if (choice.duplicate) ++rt.duplicate_by_hash;
+        if (choice.rebuilt) ++rt.hash_rebuild_count;
+        if (choice.slot < 0) {
+            ++rt.pruned_by_hash;
+            return false;
+        }
+        const bool appended = choice.slot == selector.size();
+        selector.put(choice, cost, hash, has_hash, std::forward<Maker>(maker));
         ++rt.accepted_candidates;
-        if (res.has(Selector::PushResult::ReplacedByWidth)) ++rt.replaced_by_width;
-        if (res.has(Selector::PushResult::ReplacedByHash)) ++rt.replaced_by_hash;
-        if (res.has(Selector::PushResult::Appended)) refresh_runtime_usage();
+        if (choice.duplicate) ++rt.replaced_by_hash;
+        else if (!appended) ++rt.replaced_by_width;
+        if (appended) {
+            refresh_runtime_usage();
+        }
         return true;
     }
 
-    template<class Expand, class DebugHook>
-    void expand_item(Item& item, Expand& expand, DebugHook& debug_hook) {
-        StateView<State> now(item.turn, item.cost, item.state, item.hash, item.has_hash);
-        Emitter<State> emit(*this, item.hash, item.turn + 1);
+    template<class Expand>
+    void expand_item(Item& item, Expand& expand) {
+        ++rt.active_width;
+        rt.max_active_width = std::max(rt.max_active_width, rt.active_width);
+        StateView<State> now(rt.turn, item.cost, item.state, item.hash, item.has_hash);
+        Emitter<State> emit(*this, item.hash, rt.turn + 1);
         if constexpr (std::is_invocable_v<Expand&, const StateView<State>&, const Runtime&, Emitter<State>&>) {
             // Runtime付きexpandには保持量だけを最新化して渡す。
             // elapsed_usはtime limit判定・Hook・RunEndで更新し、expandごとの時刻取得を避ける。
-            rt.max_active_width = std::max(rt.max_active_width, rt.active_width);
             refresh_runtime_usage();
         }
         const int before = rt.best_update_count;
         call_expand(expand, now, rt, emit);
         ++rt.expanded_nodes;
-        if (rt.best_update_count != before) notify_best_update(debug_hook);
+        if (rt.best_update_count != before) record_best_update();
     }
 
     // 縮退探索で使うcost-onlyの最良候補選択。同costでは先に残っている候補を優先する。
@@ -1212,110 +1096,73 @@ private:
         return best;
     }
 
-    template<class Expand, class DebugHook>
+    // 時間制限の有無だけをコンパイル時に分け、探索手順は一つに保つ。
+    template<bool CheckTime, class Expand, class DebugHook>
     void run_loop(Expand& expand, DebugHook& debug_hook) {
-        bool minimal_mode = rt.time_limit_reached;
-        while (!frontier.empty()) {
-            rt.turn = frontier.front().turn;
-            rt.materialized_turn = std::max(rt.materialized_turn, rt.turn);
-            if (rt.turn >= param.max_turn) {
-                rt.completed_max_turn = true;
-                break;
+        bool minimal_mode = false;
+        for (int turn = 0; turn < rt.param.max_turn && !frontier.empty(); ++turn) {
+            rt.turn = turn;
+            begin_turn();
+            if constexpr (CheckTime) {
+                minimal_mode |= rt.time_limit_reached;
+                if (stop_on_timeout()) break;
             }
-
-            begin_turn(debug_hook);
-            minimal_mode |= rt.time_limit_reached;
-            if (use_time_limit) minimal_mode = expand_turn_time_checked(minimal_mode, expand, debug_hook);
-            else expand_turn_full(expand, debug_hook);
-
+            expand_frontier<CheckTime>(minimal_mode, expand);
+            if constexpr (CheckTime) if (stop_on_timeout()) break;
             frontier.clear();
             refresh_runtime_usage();
             materialize_arrival(minimal_mode);
-            rt.exhausted = frontier.empty();
+            rt.exhausted = frontier.empty() && !rt.completed_max_turn;
             end_turn(debug_hook);
-            minimal_mode |= rt.time_limit_reached;
-
             if (rt.completed_max_turn) break;
         }
-        rt.exhausted = frontier.empty();
+        rt.exhausted = frontier.empty() && !rt.completed_max_turn;
     }
 
-    template<class DebugHook>
-    void begin_turn(DebugHook& debug_hook) {
-        if (!frontier.empty()) rt.turn = frontier.front().turn;
+    void begin_turn() {
         rt.active_width = 0;
         rt.selected_width = 0;
         rt.candidate_count = 0;
-        last_candidate_count = 0;
         if (debug_enabled) {
-            rt.selected_best_cost = Cost{};
-            rt.selected_worst_cost = Cost{};
-            rt.selected_avg_cost = 0.0;
+            rt.selected_costs = {};
             rt.width_pruned_cost_count = 0;
             rt.width_pruned_best_cost = Cost{};
             rt.pruned_best_gap = 0.0;
         }
         if (use_time_limit) mark_time_limit_if_elapsed();
-        else if constexpr (!std::same_as<std::decay_t<DebugHook>, NoOp>) update_time();
         begin_turn_time();
-        emit_hook(EventType::TurnStart, debug_hook);
-        if (turn_timing_active) mark_time_limit_if_elapsed();
     }
 
     template<class DebugHook>
     void end_turn(DebugHook& debug_hook) {
         refresh_runtime_usage();
         if (use_time_limit) mark_time_limit_if_elapsed();
-        else if constexpr (!std::same_as<std::decay_t<DebugHook>, NoOp>) update_time();
+        else if constexpr (has_debug_hook<DebugHook>) update_time();
         turn_timing_active = false;
         emit_hook(EventType::TurnEnd, debug_hook);
     }
 
-    // time_limit_ms==0用の通常探索ホットパス。縮退探索用の分岐を混ぜない。
-    template<class Expand, class DebugHook>
-    void expand_turn_full(Expand& expand, DebugHook& debug_hook) {
-        const int n = static_cast<int>(frontier.size());
-        if constexpr (std::is_invocable_v<Expand&, const StateView<State>&, const Runtime&, Emitter<State>&>) {
-            for (int i = 0; i < n; ++i) {
-                ++rt.active_width;
-                expand_item(frontier[i], expand, debug_hook);
-            }
-        } else {
-            rt.active_width = n;
-            rt.max_active_width = std::max(rt.max_active_width, rt.active_width);
-            for (int i = 0; i < n; ++i) expand_item(frontier[i], expand, debug_hook);
-        }
-    }
-
-    // 通常モードではfrontierを順に展開する。
-    // 時間到達後は通常展開を止め、未展開部分から最良1本だけ追加で展開する。
-    template<class Expand, class DebugHook>
-    bool expand_turn_time_checked(bool minimal_mode, Expand& expand, DebugHook& debug_hook) {
-        auto expand_best_from = [&](int begin) {
-            const int best = best_item_index(frontier, begin);
-            if (best < 0) return;
-            ++rt.active_width;
-            rt.max_active_width = std::max(rt.max_active_width, rt.active_width);
-            expand_item(frontier[best], expand, debug_hook);
-        };
-
-        int next_index = 0;
+    template<bool CheckTime, class Expand>
+    void expand_frontier(bool& minimal_mode, Expand& expand) {
+        int i = 0;
         if (!minimal_mode) {
-            for (; next_index < static_cast<int>(frontier.size()); ++next_index) {
-                if (rt.turn_time_limit_reached && selector.size() != 0) break;
-                ++rt.active_width;
-                rt.max_active_width = std::max(rt.max_active_width, rt.active_width);
-                expand_item(frontier[next_index], expand, debug_hook);
-                if (need_switch_to_minimal_by_time()) {
-                    minimal_mode = true;
-                    ++next_index;
-                    break;
+            for (; i < static_cast<int>(frontier.size()); ++i) {
+                if constexpr (CheckTime) {
+                    if (rt.turn_time_limit_reached && (selector.size() != 0 || rt.completed_max_turn)) break;
+                }
+                expand_item(frontier[i], expand);
+                if constexpr (CheckTime) {
+                    if (need_switch_to_minimal_by_time()) { minimal_mode = true; ++i; break; }
                 }
             }
         }
-
-        if (minimal_mode) expand_best_from(next_index);
-        return minimal_mode;
+        if constexpr (CheckTime) {
+            // 全体時間切れ後は、未展開部分から最良1本だけを追加展開する。
+            if (minimal_mode && !stop_on_timeout()) {
+                const int best = best_item_index(frontier, i);
+                if (best >= 0) expand_item(frontier[best], expand);
+            }
+        }
     }
 
     void set_best(Cost cost, int turn) {
@@ -1326,18 +1173,17 @@ private:
         ++rt.best_update_count;
     }
 
-    template<class DebugHook>
-    void notify_best_update(DebugHook& debug_hook) {
+    void record_best_update() {
         expanded_at_last_best_update = rt.expanded_nodes;
         update_time();
         last_best_update_us = rt.elapsed_us;
-        emit_hook(EventType::BestUpdate, debug_hook);
     }
 
     void materialize_arrival(bool minimal) {
+        rt.materialized_turn = rt.turn + 1; // 候補0件も含む、到着候補の確定処理済みturn。
         // Selector内の候補を次frontierへ移す。
         // minimal=true ではSelector内の最良cost 1件だけを移し、他は破棄する。
-        // finished指定の有無によらず、選別に残った候補を展開対象にする。
+        // 選別に残った候補を展開対象にする。expand_answers=falseの有効解は登録しない。
         auto& selected = selector.selected();
         const int original_count = static_cast<int>(selected.size());
         const int best_idx = minimal ? best_item_index(selected) : -1;
@@ -1345,45 +1191,18 @@ private:
         rt.candidate_count = original_count;
         rt.selected_width = minimal ? (best_idx >= 0 ? 1 : 0) : original_count;
         rt.max_selected_width = std::max(rt.max_selected_width, rt.selected_width);
-        if (rt.selected_width >= param.beam_width) ++rt.beam_saturated_turns;
-        last_candidate_count = original_count;
-        if (debug_enabled) {
-            bool has = false;
-            double cost_sum = 0.0;
-            int count = 0;
-            for (int i = 0; i < original_count; ++i) {
-                if (minimal && i != best_idx) continue;
-                const Item& cand = selected[i];
-                if (!has) {
-                    rt.selected_best_cost = rt.selected_worst_cost = cand.cost;
-                    has = true;
-                } else {
-                    if (cand.cost < rt.selected_best_cost) rt.selected_best_cost = cand.cost;
-                    if (rt.selected_worst_cost < cand.cost) rt.selected_worst_cost = cand.cost;
-                }
-                cost_sum += static_cast<double>(cand.cost);
-                ++count;
-            }
-            if (count > 0) rt.selected_avg_cost = cost_sum / count;
-        }
+        if (rt.selected_width >= rt.param.beam_width) ++rt.beam_saturated_turns;
 
-        if (frontier.capacity() < static_cast<std::size_t>(param.beam_width)) frontier.reserve(param.beam_width);
         if (minimal) {
-            if (best_idx >= 0) materialize_one(selected[best_idx]);
+            if (best_idx >= 0) frontier.push_back(std::move(selected[best_idx]));
         } else {
-            for (Item& item : selected) materialize_one(item);
+            frontier.swap(selected);
         }
 
+        if (debug_enabled) collect_selected_debug_stats(frontier);
         rt.selected_nodes += rt.selected_width;
         selector.clear();
         refresh_runtime_usage();
-    }
-
-    // 解は生成時に保存済み。探索候補だけをfrontierへ移す。
-    void materialize_one(Item& item) {
-        rt.materialized_turn = std::max(rt.materialized_turn, item.turn);
-        rt.completed_max_turn |= (item.turn == param.max_turn);
-        frontier.push_back(std::move(item));
     }
 
     Result<State> build_result() {
@@ -1401,16 +1220,64 @@ private:
 
 };
 
-
+private:
+    template<class State, class Action, class Expand> struct HistoryExpand {
+        using Value = Action;
+        using Pool = beam_history_detail::Pool<Value>;
+        using Stored = beam_history_detail::TracedState<State, Value>;
+        Pool& pool;
+        Expand& expand;
+        template<class... Context>
+        void invoke(const StateView<Stored>& now, Emitter<Stored>& raw, Context&&... context) {
+            const auto& stored = now.state;
+            StateView<State> view{now.turn, now.cost, stored.state, now.hash, now.has_hash};
+            Emitter<State, Action> emit(raw, pool, stored.trace.id());
+            std::invoke(expand, view, std::forward<Context>(context)..., emit);
+        }
+        void operator()(const StateView<Stored>& now, Emitter<Stored>& raw)
+            requires std::invocable<Expand&, const StateView<State>&, Emitter<State, Action>&>
+            { invoke(now, raw); }
+        void operator()(const StateView<Stored>& now, const Runtime& rt, Emitter<Stored>& raw)
+            requires std::invocable<Expand&, const StateView<State>&, const Runtime&, Emitter<State, Action>&>
+            { invoke(now, raw, rt); }
+    };
+    template<class State, class Action, class Expand, class DebugHook>
+    static Result<State, Action> run_history(const Param& param, State initial_state, Cost initial_cost,
+                                            Hash hash, bool has_hash, Expand& expand, DebugHook& hook) {
+        static_assert(std::copy_constructible<Action>, "Action must be copy constructible for result.path");
+        using Value = Action;
+        using Pool = beam_history_detail::Pool<Value>;
+        using Stored = beam_history_detail::TracedState<State, Value>;
+        Pool pool;
+        HistoryExpand<State, Action, Expand> bridge{pool, expand};
+        Engine<Stored> engine(param);
+        auto raw = engine.run(Stored{std::move(initial_state), {}}, initial_cost, hash, has_hash, bridge, hook);
+        Result<State, Action> result;
+        result.found = raw.found;
+        result.time_limit_reached = raw.time_limit_reached;
+        result.exhausted = raw.exhausted;
+        result.completed_max_turn = raw.completed_max_turn;
+        result.best_cost = raw.best_cost;
+        result.best_turn = raw.best_turn;
+        result.runtime = raw.runtime;
+        if (raw.best_state) {
+            result.best_state.emplace(std::move(raw.best_state->state));
+            std::vector<std::size_t> reverse;
+            for (auto id = raw.best_state->trace.id(); id != Pool::none; id = pool.parent(id)) reverse.push_back(id);
+            result.path.reserve(reverse.size());
+            for (auto i = reverse.rbegin(); i != reverse.rend(); ++i) result.path.push_back(pool.value(*i));
+        }
+        return result;
+    }
 public:
     // Hashあり初期状態版。
     // expand は (const StateView<State>&, Emitter<State>&)、または
     // (const StateView<State>&, const Runtime&, Emitter<State>&) を受け取れる。
     // Runtime は const 参照固定であり、expand から Runtime を変更することはできない。
-    // 履歴が必要な場合はユーザー側で State に含める。
-    template<class State, class H, class Expand, class DebugHook = NoOp>
+    // 操作列が必要な場合はrun<State, Action>でAction型を指定する。
+    template<class State, class Action = void, class H, class Expand, class DebugHook = NoOp>
     requires CompatibleHashArg<H, Hash>
-    static Result<State> run(
+    static Result<State, Action> run(
         const Param& param,
         State initial_state,
         Cost initial_cost,
@@ -1418,36 +1285,36 @@ public:
         Expand&& expand,
         DebugHook&& debug_hook = DebugHook{}
     ) {
-        Engine<State> engine(
-            param,
-            std::move(initial_state),
-            initial_cost,
-            static_cast<Hash>(initial_hash),
-            true
-        );
-        return engine.run(std::forward<Expand>(expand), std::forward<DebugHook>(debug_hook));
+        if constexpr (std::is_void_v<Action>) {
+            Engine<State> engine(param);
+            return engine.run(std::move(initial_state), initial_cost, static_cast<Hash>(initial_hash), true,
+                              std::forward<Expand>(expand), std::forward<DebugHook>(debug_hook));
+
+        } else {
+            return run_history<State, Action>(param, std::move(initial_state), initial_cost, static_cast<Hash>(initial_hash), true, expand, debug_hook);
+        }
     }
 
     // Hashなし初期状態版。
     // Hash付きpushを行うまでは has_hash=false として扱われ、重複排除されない。
     // 第4引数が整数ならHashあり版だけにマッチさせ、誤ったoverload選択を避ける。
-    template<class State, class Expand, class DebugHook = NoOp>
+    template<class State, class Action = void, class Expand, class DebugHook = NoOp>
     requires (!CompatibleHashArg<Expand, Hash>)
-    static Result<State> run(
+    static Result<State, Action> run(
         const Param& param,
         State initial_state,
         Cost initial_cost,
         Expand&& expand,
         DebugHook&& debug_hook = DebugHook{}
     ) {
-        Engine<State> engine(
-            param,
-            std::move(initial_state),
-            initial_cost,
-            Hash{},
-            false
-        );
-        return engine.run(std::forward<Expand>(expand), std::forward<DebugHook>(debug_hook));
+        if constexpr (std::is_void_v<Action>) {
+            Engine<State> engine(param);
+            return engine.run(std::move(initial_state), initial_cost, Hash{}, false,
+                              std::forward<Expand>(expand), std::forward<DebugHook>(debug_hook));
+
+        } else {
+            return run_history<State, Action>(param, std::move(initial_state), initial_cost, Hash{}, false, expand, debug_hook);
+        }
     }
 };
 
@@ -1474,7 +1341,7 @@ static_assert(!bs::HashType<bool>);
 using BS = bs::Beam<int, std::uint64_t>;
 using BS32 = bs::Beam<int, std::uint32_t>;
 static_assert(std::same_as<decltype(BS::Param{}.time_limit_ms), double>);
-static_assert(std::same_as<decltype(BS::Runtime{}.time_limit_ms), double>);
+static_assert(std::same_as<decltype(BS::Runtime{}.param.time_limit_ms), double>);
 
 static_assert(bs::CompatibleHashArg<std::uint64_t, std::uint64_t>);
 static_assert(bs::CompatibleHashArg<unsigned long long, std::uint64_t>);
@@ -1513,7 +1380,7 @@ struct RefItem {
     TinyState state;
     int cost = 0;
     std::uint64_t hash = 0;
-    bool finished = false;
+    bool is_answer = false;
 };
 
 struct ExplicitEmitterExpand {
@@ -1533,7 +1400,7 @@ struct ExplicitEmitterExpand {
 
 struct ExplicitEmitterRuntimeExpand {
     void operator()(const BS32::StateView<SmallState>& now, const BS32::Runtime& rt, BS32::Emitter<SmallState>& emit) const {
-        BS_TEST_ASSERT(rt.max_turn == 1);
+        BS_TEST_ASSERT(rt.param.max_turn == 1);
         if (now.turn != 0) return;
         BS_TEST_ASSERT(!now.has_hash);
         SmallState s = now.state;
@@ -1598,19 +1465,19 @@ static std::pair<int, TinyState> run_reference(int seed, int max_turn, int beam_
                 int delta = static_cast<int>((test_mix(nx.v + nx.checksum * 3ULL + k * 1009ULL + seed) % 41));
                 int cost = now.cost + delta;
                 std::uint64_t h = use_hash ? static_cast<std::uint64_t>(nx.v) : now.hash;
-                bool finished = (nx.depth >= max_turn);
+                bool is_answer = (nx.depth >= max_turn);
                 // 解は生成時に比較し、探索用の選別では失わない。
-                if (finished && (!found || cost < best_cost)) {
+                if (is_answer && (!found || cost < best_cost)) {
                     found = true;
                     best_cost = cost;
                     best = nx;
                 }
-                ref_push(bucket, beam_width, RefItem{nx, cost, h, finished}, use_hash);
+                ref_push(bucket, beam_width, RefItem{nx, cost, h, is_answer}, use_hash);
             }
         }
         frontier.clear();
         for (RefItem& item : bucket) {
-            if (!item.finished) frontier.push_back(item);
+            if (!item.is_answer) frontier.push_back(item);
         }
     }
     BS_TEST_ASSERT(found || max_turn == 0);
@@ -1640,8 +1507,8 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 4);
         BS_TEST_ASSERT(res.best_state->x == 321);
-        BS_TEST_ASSERT(res.runtime.duplicate_by_hash == 1);
-        BS_TEST_ASSERT(res.runtime.replaced_by_hash == 1);
+        BS_TEST_ASSERT(res.runtime.duplicate_by_hash == 0);
+        BS_TEST_ASSERT(res.runtime.replaced_by_hash == 0);
     }
     {
         using BSD = bs::Beam<double, std::uint64_t>;
@@ -1673,7 +1540,7 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 6);
         BS_TEST_ASSERT(res.best_state->x == 654);
-        BS_TEST_ASSERT(res.runtime.accepted_candidates == 1);
+        BS_TEST_ASSERT(res.runtime.accepted_candidates == 0);
     }
     {
         // std::uint64_t が unsigned long の環境でも、unsigned long long リテラルを自然に渡せることを確認する。
@@ -1697,7 +1564,7 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 3);
         BS_TEST_ASSERT(res.best_state->x == 20);
-        BS_TEST_ASSERT(res.runtime.accepted_candidates == 2);
+        BS_TEST_ASSERT(res.runtime.accepted_candidates == 0);
     }
     {
         // NoOp実行でも、best更新後の停滞統計がRunEnd時点で更新されることを確認する。
@@ -1749,13 +1616,13 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.best_state->x == 10);
         BS_TEST_ASSERT(!res.exhausted);
         BS_TEST_ASSERT(res.completed_max_turn);
-        BS_TEST_ASSERT(res.runtime.selected_nodes == 1);
+        BS_TEST_ASSERT(res.runtime.selected_nodes == 0);
     }
     {
         BS::Param param;
         param.max_turn = 2;
         param.beam_width = 10;
-        int expanded_finished = 0;
+        int expanded_is_answer = 0;
         auto expand = [&](const BS::StateView<SmallState>& now, auto& emit) {
             if (now.state.depth == 0) {
                 SmallState done = now.state;
@@ -1767,7 +1634,7 @@ static void test_edge_cases() {
                 cont.x = 2;
                 emit.push(std::move(cont), 100);
             } else {
-                if (now.state.x == 1) ++expanded_finished;
+                if (now.state.x == 1) ++expanded_is_answer;
                 else BS_TEST_ASSERT(now.state.x == 2);
             }
         };
@@ -1775,7 +1642,7 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 1);
         BS_TEST_ASSERT(res.best_state->x == 1);
-        BS_TEST_ASSERT(expanded_finished == 1);
+        BS_TEST_ASSERT(expanded_is_answer == 1);
         BS_TEST_ASSERT(res.runtime.expanded_nodes == 3);
     }
     {
@@ -1785,10 +1652,10 @@ static void test_edge_cases() {
         param.beam_width = 4;
         auto expand = [](const BS::StateView<SmallState>& now, auto& emit) {
             if (now.turn == 0) {
-                SmallState finished = now.state;
-                finished.depth = 1;
-                finished.x = 10;
-                emit.push(std::move(finished), 1, true);
+                SmallState is_answer = now.state;
+                is_answer.depth = 1;
+                is_answer.x = 10;
+                emit.push(std::move(is_answer), 1, true);
                 SmallState cont = now.state;
                 cont.depth = 1;
                 cont.x = 20;
@@ -1821,9 +1688,9 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 5);
         BS_TEST_ASSERT(res.best_state->x == 5);
-        BS_TEST_ASSERT(res.runtime.duplicate_by_hash == 1);
-        BS_TEST_ASSERT(res.runtime.accepted_candidates == 2);
-        BS_TEST_ASSERT(res.runtime.replaced_by_hash == 1);
+        BS_TEST_ASSERT(res.runtime.duplicate_by_hash == 0);
+        BS_TEST_ASSERT(res.runtime.accepted_candidates == 0);
+        BS_TEST_ASSERT(res.runtime.replaced_by_hash == 0);
     }
     {
         BS::Param param;
@@ -1839,11 +1706,11 @@ static void test_edge_cases() {
         auto res = BS::run(param, SmallState{}, 0, std::uint64_t{0}, expand);
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 5);
-        BS_TEST_ASSERT(res.runtime.accepted_candidates == 2);
-        BS_TEST_ASSERT(res.runtime.replaced_by_width == 1);
-        BS_TEST_ASSERT(res.runtime.selected_nodes == 1);
-        BS_TEST_ASSERT(res.runtime.max_selected_width == 1);
-        BS_TEST_ASSERT(res.runtime.beam_saturated_turns == 1);
+        BS_TEST_ASSERT(res.runtime.accepted_candidates == 0);
+        BS_TEST_ASSERT(res.runtime.replaced_by_width == 0);
+        BS_TEST_ASSERT(res.runtime.selected_nodes == 0);
+        BS_TEST_ASSERT(res.runtime.max_selected_width == 0);
+        BS_TEST_ASSERT(res.runtime.beam_saturated_turns == 0);
     }
     {
         BS::Param param;
@@ -1871,7 +1738,7 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.best_cost == 1);
         BS_TEST_ASSERT(maker_calls == 1);
-        BS_TEST_ASSERT(res.runtime.pruned_by_width == 1);
+        BS_TEST_ASSERT(res.runtime.pruned_by_width == 0);
     }
     {
         BS::Param param;
@@ -1905,7 +1772,7 @@ static void test_edge_cases() {
         auto res = BS::run(param, SmallState{}, 0, std::uint64_t{0}, expand);
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.runtime.duplicate_by_hash == 0);
-        BS_TEST_ASSERT(res.runtime.selected_nodes == 2);
+        BS_TEST_ASSERT(res.runtime.selected_nodes == 0);
     }
     {
         BS::Param param;
@@ -1936,10 +1803,11 @@ static void test_edge_cases() {
             emit.push(std::move(s), now.cost + 1, std::uint64_t{1}, true);
         };
         auto res = BS::run(param, SmallState{}, 0, std::uint64_t{0}, expand);
-        BS_TEST_ASSERT(res.runtime.hash_capacity == 5 * 4 + 17);
+        BS_TEST_ASSERT(res.runtime.param.hash_capacity == 5 * 4 + 17);
     }
+#ifdef LOCAL
     {
-        const char* filename = "beam_copy_single_v30_stat.csv";
+        const char* filename = "beam_copy_single_v40_stat.csv";
         BS::Param param;
         param.max_turn = 1;
         param.beam_width = 2;
@@ -1976,20 +1844,20 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(header.find(removed_hash_full) == std::string::npos);
         BS_TEST_ASSERT(!hook.rows.empty());
         bool saw_turn_end = false;
-        bool saw_full_candidate_turn = false;
+        bool saw_terminal_turn = false;
         for (const auto& row : hook.rows) {
-            BS_TEST_ASSERT(std::string(row.event) != "BestUpdate");
             BS_TEST_ASSERT(std::string(row.event).find("Frontier") == std::string::npos);
             if (std::string(row.event) == "TurnEnd") {
                 saw_turn_end = true;
-                if (row.candidate_count == 2 && row.beam_saturated_turns == 1 && row.completed_max_turn) {
-                    saw_full_candidate_turn = true;
+                if (row.candidate_count == 0 && row.terminal_candidates == 2 && row.completed_max_turn) {
+                    saw_terminal_turn = true;
                 }
             }
         }
         BS_TEST_ASSERT(saw_turn_end);
-        BS_TEST_ASSERT(saw_full_candidate_turn);
+        BS_TEST_ASSERT(saw_terminal_turn);
     }
+#endif
     {
         constexpr int target_depth = 3;
         BS::Param param;
@@ -1998,14 +1866,14 @@ static void test_edge_cases() {
         param.time_limit_ms = 1;
         param.time_check_interval = 1;
         auto expand = [](const BS::StateView<SmallState>& now, auto& emit) {
-            if (now.state.depth == 0) std::this_thread::sleep_for(std::chrono::milliseconds(3));
+            if (now.state.depth == 0) bs::detail::TestClock::value += 3000;
             if (now.state.depth >= target_depth) return;
             for (int k = 0; k < 4; ++k) {
                 SmallState s = now.state;
                 ++s.depth;
                 s.x = now.state.x * 10 + k;
-                const bool finished = (s.depth >= target_depth);
-                emit.push(std::move(s), now.cost + k, static_cast<std::uint64_t>(100 + s.depth * 10 + k), finished);
+                const bool is_answer = (s.depth >= target_depth);
+                emit.push(std::move(s), now.cost + k, static_cast<std::uint64_t>(100 + s.depth * 10 + k), is_answer);
             }
         };
         auto res = BS::run(param, SmallState{}, 0, std::uint64_t{0}, expand);
@@ -2021,7 +1889,7 @@ static void test_edge_cases() {
         param.time_limit_ms = 1;
         param.time_check_interval = 1;
         auto expand = [](const BS::StateView<SmallState>& now, auto& emit) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+            bs::detail::TestClock::value += 3000;
             if (now.state.depth != 0) return;
             SmallState s = now.state;
             s.depth = 1;
@@ -2033,7 +1901,6 @@ static void test_edge_cases() {
         BS_TEST_ASSERT(res.time_limit_reached);
     }
 }
-
 
 static void test_max_turn_cases() {
     {
@@ -2066,7 +1933,7 @@ static void test_max_turn_cases() {
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.completed_max_turn);
         BS_TEST_ASSERT(!res.exhausted);
-        BS_TEST_ASSERT(res.runtime.max_turn == 0);
+        BS_TEST_ASSERT(res.runtime.param.max_turn == 0);
         BS_TEST_ASSERT(res.best_cost == 9);
         BS_TEST_ASSERT(res.best_turn == 0);
         BS_TEST_ASSERT(res.best_state->x == 88);
@@ -2085,7 +1952,7 @@ static void test_max_turn_cases() {
         BS_TEST_ASSERT(!res.found);
         BS_TEST_ASSERT(res.completed_max_turn);
         BS_TEST_ASSERT(!res.exhausted);
-        BS_TEST_ASSERT(res.runtime.max_turn == 0);
+        BS_TEST_ASSERT(res.runtime.param.max_turn == 0);
         BS_TEST_ASSERT(expand_calls == 0);
         BS_TEST_ASSERT(res.runtime.expanded_nodes == 0);
     }
@@ -2182,7 +2049,7 @@ static void test_max_turn_cases() {
         param.max_turn = 2;
         param.max_turn_is_answer = true;
         param.beam_width = 4;
-        int expanded_finished_depth1 = 0;
+        int expanded_is_answer_depth1 = 0;
         auto expand = [&](const BS::StateView<SmallState>& now, auto& emit) {
             if (now.turn == 0) {
                 SmallState s = now.state;
@@ -2190,7 +2057,7 @@ static void test_max_turn_cases() {
                 s.x = 1;
                 emit.push(std::move(s), 10, std::uint64_t{1}, true);
             } else if (now.turn == 1) {
-                ++expanded_finished_depth1;
+                ++expanded_is_answer_depth1;
                 SmallState s = now.state;
                 s.depth = 2;
                 s.x = 2;
@@ -2202,7 +2069,7 @@ static void test_max_turn_cases() {
         auto res = BS::run(param, SmallState{}, 0, std::uint64_t{0}, expand);
         BS_TEST_ASSERT(res.found);
         BS_TEST_ASSERT(res.completed_max_turn);
-        BS_TEST_ASSERT(expanded_finished_depth1 == 1);
+        BS_TEST_ASSERT(expanded_is_answer_depth1 == 1);
         BS_TEST_ASSERT(res.best_cost == 1);
         BS_TEST_ASSERT(res.best_turn == 2);
         BS_TEST_ASSERT(res.best_state->x == 2);
@@ -2218,7 +2085,7 @@ static void test_max_turn_cases() {
         auto expand = [&](const BS::StateView<SmallState>& now, auto& emit) {
             if (now.turn == 1) {
                 ++depth1_expanded;
-                std::this_thread::sleep_for(std::chrono::milliseconds(8));
+                bs::detail::TestClock::value += 8000;
             }
             if (now.turn > 0) ++expanded_total_after_root;
             for (int k = 0; k < 4; ++k) {
@@ -2263,9 +2130,9 @@ static void test_random_cases() {
                 nx.checksum = static_cast<int>((now.state.checksum * 43LL + nx.v * 5LL + k + nx.depth) % 1000003);
                 int delta = static_cast<int>((test_mix(nx.v + nx.checksum * 3ULL + k * 1009ULL + seed) % 41));
                 int cost = now.cost + delta;
-                bool finished = (nx.depth >= max_turn);
-                if (use_hash) emit.push(nx, cost, static_cast<std::uint64_t>(nx.v), finished);
-                else emit.push(nx, cost, finished);
+                bool is_answer = (nx.depth >= max_turn);
+                if (use_hash) emit.push(nx, cost, static_cast<std::uint64_t>(nx.v), is_answer);
+                else emit.push(nx, cost, is_answer);
             }
         };
         auto res = use_hash
@@ -2278,7 +2145,6 @@ static void test_random_cases() {
         BS_TEST_ASSERT(res.best_state->checksum == ref.second.checksum);
     }
 }
-
 
 static void test_random_max_turn_cases() {
     std::mt19937 rng(7654321);
@@ -2359,8 +2225,8 @@ static long long benchmark_trivial_state_once(double time_limit_ms) {
                 nx.h = test_mix(now.hash + static_cast<std::uint64_t>(k + 1) * 1000003ULL + static_cast<std::uint64_t>(nx.depth));
                 nx.data[k & 15] += static_cast<std::uint32_t>(nx.v) + nx.depth;
                 int cost = now.cost + static_cast<int>(nx.h % 97);
-                bool finished = (nx.depth >= max_turn);
-                emit.push(std::move(nx), cost, nx.h, finished);
+                bool is_answer = (nx.depth >= max_turn);
+                emit.push(std::move(nx), cost, nx.h, is_answer);
             }
         };
         auto beg = test_now_microseconds();
@@ -2392,8 +2258,8 @@ static long long benchmark_vector_state_lazy_once(double time_limit_ms) {
                 int nv = static_cast<int>((now.state.v * 31LL + k * 13LL + next_depth) % 1000003);
                 std::uint64_t h = test_mix(static_cast<std::uint64_t>(nv) + static_cast<std::uint64_t>(next_depth) * 1009ULL);
                 int cost = now.cost + static_cast<int>(h % 89);
-                bool finished = (next_depth >= max_turn);
-                emit.push_lazy(cost, h, finished, [&]() {
+                bool is_answer = (next_depth >= max_turn);
+                emit.push_lazy(cost, h, is_answer, [&]() {
                     BenchStateVector nx = now.state;
                     nx.depth = next_depth;
                     nx.v = nv;
@@ -2426,11 +2292,209 @@ static void benchmark_vector_state_lazy() {
 
 } // namespace
 
+static void test_turn_end_expansion_counts() {
+    using B = bs::Beam<int>;
+    for (double limit : {0.0, 100000.0}) {
+        B::Param p;
+        p.max_turn = 3; p.beam_width = 3; p.use_hash_dedup = false;
+        p.time_limit_ms = limit;
+        int actual = 0, notifications = 0;
+        auto expand = [&](const B::StateView<int>& now, B::Emitter<int>& emit) {
+            if (now.turn == 0) {
+                for (int i = 0; i < 3; ++i) emit.push(i, i);
+            } else if (now.turn == 1) {
+                ++actual;
+                emit.push(actual, -actual, true);
+            }
+        };
+        auto hook = [&](B::EventType event, const B::Runtime& rt) {
+            if (event == B::EventType::TurnEnd && rt.turn == 1) {
+                ++notifications;
+                BS_TEST_ASSERT(rt.active_width == actual);
+                BS_TEST_ASSERT(rt.max_active_width == actual);
+            }
+        };
+        const auto result = B::run<int>(p, 0, 0, expand, hook);
+        BS_TEST_ASSERT(notifications == 1 && result.best_cost == -3 && result.runtime.best_update_count == 3);
+    }
+}
+
+// 共通方針の境界テスト。実時間のsleepに依存せず、仮想時計で再現する。
+namespace policy_test {
+using Lib = bs::Beam<>;
+using Clock = bs::detail::TestClock;
+struct State { int id = 0; };
+struct Action { int from = 0, to = 0; };
+struct Edge {
+    int to; long long cost; bool answer = false;
+    int step = 1; bool sub = false; std::uint64_t hash = 7;
+};
+using Graph = std::vector<std::vector<Edge>>;
+void require(bool condition, const char* message) {
+    if (!condition) throw std::runtime_error(std::string("policy: ")+message);
+}
+struct Options {
+    int slow_node = -1;
+    bool expire_at_start = false, eager = false;
+};
+struct Outcome {
+    bool found = false, completed = false;
+    long long cost = 0;
+    int id = -1, turn = 0;
+    std::uint64_t makers = 0;
+    std::vector<int> visited, path;
+    std::vector<bool> accepted;
+    std::vector<std::size_t> offsets;
+    Lib::Runtime rt;
+};
+template<bool History>
+Outcome run(Lib::Param p, const Graph& graph, Options options = {}) {
+    Clock::enabled = true; Clock::value = 0;
+    Outcome out;
+
+    auto expand = [&](const auto& now, auto& emit) {
+        const int from = now.state.id;
+        out.visited.push_back(from);
+        if constexpr (History) {
+            auto history=emit.history();
+            if (from==0) require(history.empty(), "root history");
+            else require(!history.empty() && history.action().to==from, "expand history reference");
+        }
+        for (const auto& edge : graph.at(static_cast<std::size_t>(from))) {
+            auto maker=[&]{++out.makers;return State{edge.to};};
+            bool accepted;
+            if constexpr (History) {
+                if(options.eager) accepted=emit.push(maker(),Action{from,edge.to},edge.cost,edge.hash, edge.answer);
+                else accepted=emit.push_lazy(Action{from,edge.to},edge.cost,edge.hash, edge.answer,maker);
+            } else {
+                if(options.eager) accepted=emit.push(maker(),edge.cost,edge.hash, edge.answer);
+                else accepted=emit.push_lazy(edge.cost,edge.hash, edge.answer,maker);
+            }
+            out.accepted.push_back(accepted);
+        }
+        if (from == options.slow_node) Clock::value += 1000;
+    };
+    auto hook = [&](Lib::EventType event, const Lib::Runtime&) {
+        if (event == Lib::EventType::RunStart && options.expire_at_start) Clock::value += 1000;
+    };
+    auto result=[&] {
+            if constexpr (History) return Lib::run<State,Action>(p,State{},0LL,std::uint64_t{0},expand,hook);
+            else return Lib::run<State>(p,State{},0LL,std::uint64_t{0},expand,hook);
+        }();
+    out.found = result.found; out.completed = result.completed_max_turn;
+    out.cost = result.best_cost; out.turn = result.best_turn; out.rt = result.runtime;
+    if(result.found) out.id=result.best_state->id;
+    if constexpr(History) { int id=0;
+        for(const auto& item:result.path){const auto& a=item;require(a.from==id,"path continuity");id=a.to;out.path.push_back(id);}
+        if(result.found) require(id==result.best_state->id,"State matches action path"); }
+    return out;
+}
+template<bool History>
+void cases() {
+    Lib::Param p;
+    require(p.continue_on_timeout && p.expand_answers, "common defaults");
+    p.max_turn = 5; p.max_turn_is_answer = false; p.beam_width = 1;
+    p.expand_answers = false; p.time_check_interval = 1;
+    Graph graph(8);
+    graph[0] = {{1,-10,true},{2,5,true},{3,0,false}};
+    graph[1] = {{5,-100,true}};
+    graph[3] = {{4,-20,true}};
+    for (bool eager : {false,true}) {
+        auto r = run<History>(p,graph,{-1,false,eager});
+        require(r.found && r.cost == -20 && r.id == 4, "answer retained outside beam/hash selection");
+        require(r.visited == std::vector<int>({0,3}), "answers do not consume width or expand");
+        require(r.accepted == std::vector<bool>({false,false,true,false}), "push bool means search acceptance");
+        require(r.rt.answer_only_candidates == 3 && r.rt.terminal_candidates == 0, "separate answer-only counter");
+        if (!eager) require(r.makers==3, "lazy maker runs only for accepted/best candidates");
+        if constexpr (History) require(r.path==std::vector<int>({3,4}), "saved history survives queue removal");
+    }
+    p.expand_answers = true;
+    auto continued = run<History>(p,graph);
+    require(continued.found && continued.cost == -100 && continued.id == 5, "answers may remain expandable");
+    require(continued.rt.answer_only_candidates == 0, "no answer exclusions when enabled");
+    // An expired search with no solution must either stop or complete the remaining path.
+    graph = Graph(8); graph[0]={{1,0}}; graph[1]={{2,0}}; graph[2]={{3,-4,true}};
+    graph[3]={{4,-100,true}};
+    for (bool allow : {false,true}) for (bool expand_answers : {false,true}) {
+        p.continue_on_timeout=allow; p.expand_answers=expand_answers; p.time_limit_ms=1;
+        auto r=run<History>(p,graph,{0});
+        require(r.rt.time_limit_reached && r.found==allow, "timeout without answer");
+        require(r.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>({0})), "stop immediately after answer/callback");
+        if (allow) require(r.cost==-4 && r.id==3, "rescue preserves the first available answer");
+        auto at_start=run<History>(p,graph,{-1,true});
+        require(at_start.found==allow, "initialization/hook timeout policy");
+        require(at_start.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>{}), "RunStart deadline detected before expansion");
+        // Save all improving answers in the current callback, even when none can enter the beam.
+        Graph goals(8);goals[0]={{1,-100},{2,20,true},{3,10,true}};goals[1]={{4,-200,true}};
+        auto saved=run<History>(p,goals,{0});
+        require(saved.found && saved.cost==10 && saved.id==3 && saved.visited==std::vector<int>({0}), "saved answer ends overtime regardless of continuation flag");
+        // The best solution may predate the callback that reaches the time limit.
+        goals=Graph(8);goals[0]={{1,-100},{2,20,true}};goals[1]={{3,-200},{4,10,true}};
+        auto later=run<History>(p,goals,{1});
+        require(later.found && later.cost==10 && later.visited==std::vector<int>({0,1}), "existing answer stops after a later deadline");
+        // The continuation policy is inactive without an overall time limit.
+        p.time_limit_ms=0;
+        auto unlimited=run<History>(p,graph,{0});
+        require(unlimited.found && unlimited.cost==(expand_answers?-100:-4), "no limit means no early timeout stop");
+    }
+    p.continue_on_timeout=true;p.expand_answers=false;p.time_limit_ms=1;
+    Graph dead(2);dead[0]={{1,0}};
+    auto exhausted=run<History>(p,dead,{0});
+    require(!exhausted.found && exhausted.visited==std::vector<int>({0,1}), "finite dead-end rescue");
+    // Final-turn states stay terminal even when they are not answers.
+    p.time_limit_ms=0;p.max_turn=1;p.expand_answers=true;
+    Graph end(3);end[0]={{1,4,true},{2,0,false}};
+    auto terminal=run<History>(p,end);
+    require(terminal.found && terminal.cost==4 && terminal.completed, "explicit final-turn answer");
+    require(terminal.rt.terminal_candidates==2 && terminal.rt.answer_only_candidates==0 && terminal.visited.size()==1, "final-turn counters and no expansion");
+    p.max_turn_is_answer=true;
+    auto automatic=run<History>(p,end);
+    require(automatic.found && automatic.cost==0 && automatic.id==2, "implicit final-turn answer");
+    p.max_turn=0;
+    auto root=run<History>(p,end);
+    require(root.found && root.completed && root.visited.empty(), "zero-turn solution");
+
+}
+void all() {
+    const bool enabled=Clock::enabled;
+    const auto value=Clock::value;
+    cases<false>();
+    cases<true>();
+    Clock::enabled=enabled;Clock::value=value;
+}
+} // namespace policy_test
+
+// max_turn=0では初期Stateを最良解へ移し、不要なコピーを行わない
+static void test_root_state_transfer() {
+    using B = bs::Beam<>;
+    struct State {
+        int* copies;
+        std::vector<int> data{17};
+        explicit State(int& count) : copies(&count) {}
+        State(const State& s) : copies(s.copies), data(s.data) { ++*copies; }
+        State(State&&) = default;
+        State& operator=(const State& s) {
+            copies = s.copies; data = s.data; ++*copies; return *this;
+        }
+        State& operator=(State&&) = default;
+    };
+    int copies = 0;
+    typename B::Param p;
+    const auto r = B::run(p, State(copies), 0, [](const auto&, auto&) { std::abort(); });
+    if (!r.found || r.best_state->data != std::vector<int>{17} || copies != 0)
+        throw std::runtime_error("zero-turn State must transfer without a copy");
+}
+
 int main() {
+    test_root_state_transfer();
+    policy_test::all();
+    test_turn_end_expansion_counts();
+    bs::detail::TestClock::enabled = true;
     test_edge_cases();
     test_max_turn_cases();
     test_random_cases();
     test_random_max_turn_cases();
+    bs::detail::TestClock::enabled = false;
     benchmark_trivial_state();
     benchmark_vector_state_lazy();
     std::cout << "all tests passed" << std::endl;
