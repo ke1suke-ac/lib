@@ -9,11 +9,13 @@
 #include <cstdio>
 #include <iostream>
 #include <limits>
+#include <locale>
 #include <sstream>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
 namespace bs {
 
@@ -126,11 +128,15 @@ enum class CapacityPolicy { Safe, Compact };
 
 // 探索パラメータ。
 // max_step=0 は 1 として扱う。複数ターン行動を使う問題では必ず明示すること。
-// time_limit_ms は soft limit。expand実行中は中断しない。
-// 制限到達を検出したturnでは、通常展開を止め、未展開候補から最良1本だけを追加展開する。
+// time_limit_ms は探索全体のsoft limit。expand実行中は中断しない。
+// use_turn_time_limit=trueでは各turn開始時に残り時間/残りturn数を配分する。
+// turn期限後は未来候補があれば進み、なければ候補ができるか尽きるまで展開する。
+// turn期限だけでは保持幅を縮めず、次turnで通常展開へ戻る。time_check_interval=1なら毎展開確認。
+// 全体制限到達を検出したturnでは、通常展開を止め、未展開候補から最良1本だけを追加展開する。
 // 以後は各turnで最良1本だけを進め、到着候補も最良1件だけをmaterializeする。
 // Hash重複排除は既定で有効。hash_capacity=0 の場合は内部で自動設定される。
-// 解候補は「finished=true の候補」または「 max_turn 到達候補」。
+// 解候補はfinished=true、またはmax_turn_is_answer=trueでmax_turnへ到達した候補。
+// max_turn==INT_MAX または beam_width>268435451 はlength_error（内部添字の上限）。
 struct Param {
     int max_turn = 0;               // 探索終了ターン。候補は 0..max_turn に到着できる。
     int max_step = 1;               // 1手で進める最大ターン。0以下なら1扱い。
@@ -145,9 +151,10 @@ struct Param {
     bool use_hash_dedup = true;     // trueならHash付きpushで同一ターン重複排除を行う。
     bool print_warnings = true;     // 危険状態を検出したら終了時にstderrへ1回だけ警告する。
     CapacityPolicy capacity_policy = CapacityPolicy::Safe;
+    bool use_turn_time_limit = false; // 残り時間を残りturnへ配分。全体制限が有効な場合だけ使用。
 };
 
-// Hookの発火タイミング。CSVなどは外部Hookで実装する。
+// Hookの発火タイミング。BestUpdateはexpand終了時にまとめて通知し、更新回数はbest_update_countに記録する。
 enum class EventType {
     RunStart,
     RunEnd,
@@ -202,8 +209,13 @@ struct Runtime {
     // CSVデバッグ用の軽量スナップショット。
     // DebugHook有効時、またはRunEndの最終Result用に更新される。
     double time_limit_ms = 0.0;
+    bool use_turn_time_limit = false;
     double time_remaining_ms = -1.0;
     std::int64_t elapsed_us = 0;
+    // turn時刻はrun開始からのus。配分無効・turn未開始はstart/deadline=-1。
+    // elapsedは最後の時計確認時点。TurnEndで固定し、最終復元・RunEndには加算しない。
+    std::int64_t turn_start_us = -1, turn_deadline_us = -1, turn_elapsed_us = 0;
+    bool turn_time_limit_reached = false; // 各turn開始時に解除。全体のtime_limit_reachedとは独立。
     // time_limit_msに達したことを検出したか。
     // 検出後に探索を継続する場合は最良1本の縮退探索へ移る。
     // expand中の即時中断を意味しない。
@@ -237,17 +249,17 @@ struct Runtime {
     int selected_parent_unique = 0;
     int max_children_from_same_parent = 0;
 
-    int width_pruned_cost_count = 0;
+    long long width_pruned_cost_count = 0;
     Cost width_pruned_best_cost{};
     double pruned_best_gap = 0.0;
 
-    int turns_since_best_update = 0;
+    int turns_since_best_update = 0; // 最良解を生成した探索turnからの経過。解の到着turnとは別。
     double ms_since_best_update = 0.0;
 
     bool found = false;
     Cost best_cost{};
     int best_turn = 0;
-    int best_update_count = 0;
+    long long best_update_count = 0;
 
 };
 
@@ -279,7 +291,7 @@ struct CsvStatHook {
         long long period_pruned_by_width = 0;
         long long period_pruned_by_hash = 0;
         long long period_duplicate_by_hash = 0;
-        int period_best_updates = 0;
+        long long period_best_updates = 0;
 
         double expand_per_sec = 0.0;
         double generate_per_sec = 0.0;
@@ -296,23 +308,23 @@ struct CsvStatHook {
 
     explicit CsvStatHook(std::string csv_filename = "beam_stat.csv", double interval_ms = 50.0)
         : filename(std::move(csv_filename)),
-          interval_us(interval_ms <= 0.0
-              ? 0
-              : std::max<std::int64_t>(1, static_cast<std::int64_t>(interval_ms * 1000.0 + 0.5))) {}
+          interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
 
     void operator()(EventType event_type, const Runtime& runtime) {
         switch (event_type) {
             case EventType::RunStart:
                 rows.clear();
                 started = true;
-                next_record_us = runtime.elapsed_us + interval_us;
+                next_record_us = runtime.elapsed_us + std::min(interval_us,
+                    std::numeric_limits<std::int64_t>::max() - runtime.elapsed_us);
                 push_row(event_type, runtime);
                 return;
 
             case EventType::TurnEnd:
                 if (started && (interval_us == 0 || runtime.elapsed_us >= next_record_us)) {
                     push_row(event_type, runtime);
-                    if (interval_us > 0) next_record_us = runtime.elapsed_us + interval_us;
+                    if (interval_us > 0) next_record_us = runtime.elapsed_us + std::min(interval_us,
+                        std::numeric_limits<std::int64_t>::max() - runtime.elapsed_us);
                 }
                 return;
 
@@ -389,12 +401,13 @@ private:
 
     void write_csv() const {
         std::ostringstream ofs;
+        ofs.imbue(std::locale::classic());
         ofs << "event,elapsed_ms,turn,max_turn,max_step,beam_width,nodes_capacity,hash_capacity,";
         ofs << "active_width,selected_width,candidate_count,";
         ofs << "expanded_nodes,generated_candidates,selected_nodes,pruned_by_width,pruned_by_hash,duplicate_by_hash,invalid_candidates,";
         ofs << "overflow_nodes,hash_table_full,reused_nodes,stale_remove_entries,remove_entry_overflow,";
         ofs << "live_nodes,used_nodes,pending_candidates,max_live_nodes,max_used_nodes,max_pending_candidates,root_compressions,";
-        ofs << "time_limit_ms,time_remaining_ms,estimated_finish_ms,";
+        ofs << "time_limit_ms,time_remaining_ms,use_turn_time_limit,turn_start_ms,turn_deadline_ms,turn_budget_ms,turn_elapsed_ms,turn_time_limit_reached,estimated_finish_ms,";
         ofs << "current_root_turn,committed_path_length,root_compressed_edges,";
         ofs << "free_node_count,node_pool_used_rate,";
         ofs << "selector_nonempty_count,selector_total_candidates,selector_max_size,selector_full_count,selector_avg_size,selector_full_rate,";
@@ -441,6 +454,12 @@ private:
                 << row.root_compressions << ','
                 << row.time_limit_ms << ','
                 << row.time_remaining_ms << ','
+                << static_cast<int>(row.use_turn_time_limit) << ','
+                << (row.turn_start_us < 0 ? -1.0 : row.turn_start_us * 0.001) << ','
+                << (row.turn_deadline_us < 0 ? -1.0 : row.turn_deadline_us * 0.001) << ','
+                << (row.turn_deadline_us < 0 ? -1.0 : (row.turn_deadline_us - row.turn_start_us) * 0.001) << ','
+                << row.turn_elapsed_us * 0.001 << ','
+                << static_cast<int>(row.turn_time_limit_reached) << ','
                 << row.estimated_finish_ms << ','
                 << row.current_root_turn << ','
                 << row.committed_path_length << ','
@@ -454,24 +473,24 @@ private:
                 << row.selector_avg_size << ','
                 << row.selector_full_rate << ','
                 << row.live_candidate_count << ','
-                << row.live_best_cost << ','
-                << row.live_worst_cost << ','
+                << +row.live_best_cost << ','
+                << +row.live_worst_cost << ','
                 << row.live_avg_cost << ','
                 << row.live_best_turn << ','
-                << row.selected_best_cost << ','
-                << row.selected_worst_cost << ','
+                << +row.selected_best_cost << ','
+                << +row.selected_worst_cost << ','
                 << row.selected_avg_cost << ','
                 << row.selected_step_avg << ','
                 << row.selected_step_max << ','
                 << row.selected_parent_unique << ','
                 << row.max_children_from_same_parent << ','
                 << row.width_pruned_cost_count << ','
-                << row.width_pruned_best_cost << ','
+                << +row.width_pruned_best_cost << ','
                 << row.pruned_best_gap << ','
                 << row.turns_since_best_update << ','
                 << row.ms_since_best_update << ','
                 << static_cast<int>(row.found) << ','
-                << row.best_cost << ','
+                << +row.best_cost << ','
                 << row.best_turn << ','
                 << row.best_update_count << ','
                 << static_cast<int>(row.time_limit_reached) << ','
@@ -537,6 +556,7 @@ struct Result {
 // 公開型なので、expand関数の引数型として明示できる。
 // push の戻り値 true は、この呼び出し時点で候補がSelectorに入ったことを表す。
 // 後続候補に置換される可能性があるため、最終結果に残る保証ではない。
+// 有効解は幅・Hashの選別前に保存する。falseを返しても最良解を更新する場合がある。
 // finished=true は解候補フラグであり、自動的な展開停止ではない。
 template<class Action>
 class Emitter {
@@ -694,7 +714,6 @@ class Engine {
         Hash hash{};
         int parent = -1;
         bool has_hash = false;
-        bool finished = false;
     };
 
     static_assert(std::default_initializable<Action>,
@@ -731,7 +750,6 @@ class Engine {
         bool alive = false;
         bool active = true;
         bool in_remove_queue = false;
-        bool finished = false;
     };
 
     // 遅延削除entryはノードIDとは別プールで持つ。
@@ -941,13 +959,19 @@ public:
         rt.nodes_capacity = param.nodes_capacity;
         rt.hash_capacity = param.hash_capacity;
         rt.time_limit_ms = param.time_limit_ms;
+        rt.use_turn_time_limit = param.use_turn_time_limit;
         rt.best_cost = initial_cost;
         rt.best_turn = 0;
 
         update_time();
         if (use_time_limit && rt.elapsed_us >= limit_us) rt.time_limit_reached = true;
         emit_hook(EventType::RunStart, ctx);
-        if (is_answer(root)) set_best(root, ctx);
+        if (param.max_turn == 0 && param.max_turn_is_answer && detail::is_valid_cost(initial_cost)) {
+            set_best(initial_cost, 0);
+            update_time();
+            last_best_update_us = rt.elapsed_us;
+            emit_hook(EventType::BestUpdate, ctx);
+        }
 
         bool minimal_mode = rt.time_limit_reached;
         completed_max_turn = (param.max_turn == 0);
@@ -959,17 +983,23 @@ public:
             rt.candidate_count = 0;
             reset_turn_debug_stats();
             if (mark_time_limit_if_elapsed()) minimal_mode = true;
+            begin_turn_time();
             emit_hook(EventType::TurnStart, ctx);
+            if (turn_timing_active && mark_time_limit_if_elapsed()) minimal_mode = true;
 
             // 通常時はDFSで全幅を展開する。時間切れ後は各ターンの最良葉だけを展開する。
-            if (!minimal_mode) run_dfs(current_turn, minimal_mode, ctx);
+            if (!minimal_mode) {
+                if (param.use_turn_time_limit && use_time_limit) run_dfs<true>(current_turn, minimal_mode, ctx);
+                else run_dfs<false>(current_turn, minimal_mode, ctx);
+            }
             if (minimal_mode) run_minimal_dfs(current_turn, ctx);
 
             // 次ターンに到着した候補を木に接続する。時間切れ後は最良1候補だけを残す。
-            materialize_arrival(current_turn + 1, minimal_mode, ctx);
+            materialize_arrival(current_turn + 1, minimal_mode);
 
             refresh_runtime_usage();
             if (mark_time_limit_if_elapsed()) minimal_mode = true;
+            turn_timing_active = false;
             emit_hook(EventType::TurnEnd, ctx);
 
             if (completed_max_turn) break;
@@ -1001,6 +1031,7 @@ private:
     std::int64_t start_clock_us = 0;
     std::int64_t limit_us = 0;
     bool use_time_limit = false;
+    bool turn_timing_active = false;
     bool debug_enabled = false;
 
     std::vector<Node> nodes;
@@ -1024,6 +1055,7 @@ private:
     bool completed_max_turn = false;
     int current_expand_max_step = 1;
     std::int64_t last_best_update_us = 0;
+    int last_best_update_turn = 0;
 
     void normalize_param() {
         param.max_turn = std::max(0, param.max_turn);
@@ -1031,10 +1063,15 @@ private:
         param.max_step = std::min(std::max(1, param.max_step), std::max(1, param.max_turn));
         param.time_check_interval = std::max(1, param.time_check_interval);
 
+        // int添字の比較木・Hash表・経路予約が表現できない指定は確保前に拒否する。
+        if (param.max_turn == std::numeric_limits<int>::max() ||
+            param.beam_width > ((1 << 30) - 17) / 4)
+            throw std::length_error("beam parameters exceed internal index limits");
+
         if (param.nodes_capacity <= 0) {
             const long long cap = (param.capacity_policy == CapacityPolicy::Safe)
                 ? 1LL + 1LL * param.beam_width * (param.max_turn + 1)
-                : 1LL * param.beam_width * (param.max_step + 3) + param.max_turn + 1024;
+                : 1LL * param.beam_width * (3LL + param.max_step) + param.max_turn + 1024;
             param.nodes_capacity = static_cast<int>(std::min<long long>(std::max<long long>(cap, 2), std::numeric_limits<int>::max() / 4));
         }
         if (param.use_hash_dedup) {
@@ -1062,7 +1099,7 @@ private:
         for (Selector& s : selectors) s.init(param.beam_width, hash_cap, use_hash, &nodes);
 
         remove_heads.assign(ring_size, -1);
-        const long long remove_cap_ll = 1LL * param.beam_width * (param.max_step + 2) + 8;
+        const long long remove_cap_ll = 1LL * param.beam_width * (2LL + param.max_step) + 8;
         const int remove_cap = static_cast<int>(std::min<long long>(std::max<long long>(remove_cap_ll, 8), std::numeric_limits<int>::max() / 4));
         remove_entries.assign(remove_cap, RemoveEntry{});
         remove_free.clear();
@@ -1097,8 +1134,7 @@ private:
         root_node.turn = 0;
         root_node.parent = -1;
         root_node.active = true;
-        root_node.finished = false;
-        root = new_node(root_node);
+        root = new_node(std::move(root_node));
         assert(root == 0);
         refresh_runtime_usage();
     }
@@ -1115,6 +1151,10 @@ private:
 
     void update_time() {
         rt.elapsed_us = detail::now_microseconds() - start_clock_us;
+        if (turn_timing_active) {
+            rt.turn_elapsed_us = rt.elapsed_us - rt.turn_start_us;
+            rt.turn_time_limit_reached |= rt.elapsed_us >= rt.turn_deadline_us;
+        }
         rt.time_remaining_ms = use_time_limit
             ? std::max(0.0, static_cast<double>(limit_us - rt.elapsed_us) * 0.001)
             : -1.0;
@@ -1188,6 +1228,7 @@ private:
         if (!force && !debug_enabled) return;
 
         rt.time_limit_ms = param.time_limit_ms;
+        rt.use_turn_time_limit = param.use_turn_time_limit;
         rt.time_remaining_ms = use_time_limit ? std::max(0.0, static_cast<double>(limit_us - rt.elapsed_us) * 0.001) : -1.0;
         rt.estimated_finish_ms = (rt.turn > 0) ? (static_cast<double>(rt.elapsed_us) * 0.001) * static_cast<double>(param.max_turn) / static_cast<double>(rt.turn) : 0.0;
 
@@ -1260,7 +1301,7 @@ private:
         }
 
         if (rt.best_update_count > 0) {
-            rt.turns_since_best_update = std::max(0, rt.turn - rt.best_turn);
+            rt.turns_since_best_update = std::max(0, rt.turn - last_best_update_turn);
             rt.ms_since_best_update = static_cast<double>(rt.elapsed_us - last_best_update_us) * 0.001;
         } else {
             rt.turns_since_best_update = 0;
@@ -1285,7 +1326,7 @@ private:
             }
 
             // Hookに渡すRuntimeは観測専用とする。
-            // BestUpdateはset_best()で時刻更新済みの瞬間イベントなので、重いsnapshotも追加の時刻更新も行わない。
+            // BestUpdateは経路保存後に時刻更新済みなので、重いsnapshotも追加の時刻更新も行わない。
             if (event_type != EventType::BestUpdate) {
                 update_time();
                 update_debug_snapshot();
@@ -1295,6 +1336,17 @@ private:
             (void)event_type;
             (void)ctx;
         }
+    }
+
+    // 呼出し直前に全体の時計を更新する。turn中は締切を延長しない。
+    void begin_turn_time() {
+        if (!param.use_turn_time_limit || !use_time_limit) return;
+        turn_timing_active = true;
+        rt.turn_start_us = rt.elapsed_us;
+        rt.turn_elapsed_us = 0;
+        const auto remaining = std::max<std::int64_t>(0, limit_us - rt.elapsed_us);
+        rt.turn_deadline_us = rt.elapsed_us + remaining / (param.max_turn - rt.turn);
+        rt.turn_time_limit_reached = rt.elapsed_us >= rt.turn_deadline_us;
     }
 
     bool mark_time_limit_if_elapsed() {
@@ -1313,13 +1365,13 @@ private:
         return mark_time_limit_if_elapsed();
     }
 
-    int new_node(const Node& node) {
+    int new_node(Node&& node) {
         int id;
         if (!free_nodes.empty()) {
             id = free_nodes.back();
             free_nodes.pop_back();
             ++rt.reused_nodes;
-            nodes[id] = node;
+            nodes[id] = std::move(node);
         } else {
             if (static_cast<int>(nodes.size()) >= param.nodes_capacity) {
                 node_pool_exhausted = true;
@@ -1327,7 +1379,7 @@ private:
                 return -1;
             }
             id = static_cast<int>(nodes.size());
-            nodes.push_back(node);
+            nodes.push_back(std::move(node));
             used_nodes = static_cast<int>(nodes.size());
         }
         nodes[id].alive = true;
@@ -1350,18 +1402,23 @@ private:
     requires ActionArg<U, Action>
     bool push_candidate(int turn, int parent, U&& action, int step, Cost cost, Hash hash, bool has_hash, bool finished) {
         ++rt.generated_candidates;
-        if (!detail::is_valid_cost(cost) || step <= 0 || step > param.max_step || turn + step > param.max_turn) {
+        if (!detail::is_valid_cost(cost) || step <= 0 || step > param.max_step || step > param.max_turn - turn) {
             ++rt.invalid_candidates;
             return false;
         }
         const int arrival = turn + step;
+        if ((finished || (param.max_turn_is_answer && arrival == param.max_turn)) &&
+            (!rt.found || cost < rt.best_cost)) {
+            save_best_path(parent, Edge<Action>{action, turn, step});
+            set_best(cost, arrival);
+        }
         Selector& selector = selectors[arrival % ring_size];
         if (selector.rejects_by_width(cost)) {
             ++rt.pruned_by_width;
             update_width_pruned_debug(cost);
             return false;
         }
-        Candidate cand{Edge<Action>{std::forward<U>(action), turn, step}, cost, hash, parent, has_hash, finished};
+        Candidate cand{Edge<Action>{std::forward<U>(action), turn, step}, cost, hash, parent, has_hash};
         const int before = selector.size();
         const auto res = selector.push(std::move(cand));
         if (res.has(Selector::PushResult::Duplicate)) ++rt.duplicate_by_hash;
@@ -1507,10 +1564,10 @@ private:
         }
     }
 
-    int add_leaf(const Candidate& cand) {
+    int add_leaf(Candidate& cand) {
         const int parent = cand.parent;
         Node node;
-        node.edge = cand.edge;
+        node.edge = std::move(cand.edge);
         node.cost = cand.cost;
         node.hash = cand.hash;
         node.turn = cand.edge.next_turn();
@@ -1521,9 +1578,8 @@ private:
         node.future_children = 0;
         node.active = true;
         node.in_remove_queue = false;
-        node.finished = cand.finished;
 
-        const int v = new_node(node);
+        const int v = new_node(std::move(node));
         if (v < 0) {
             release_future_child(cand);
             return -1;
@@ -1542,11 +1598,6 @@ private:
         return v;
     }
 
-    bool is_answer(int id) const {
-        const Node& node = nodes[id];
-        return node.finished || (param.max_turn_is_answer && node.turn == param.max_turn);
-    }
-
     template<class Ctx>
     void expand_leaf(int v, Ctx& ctx) {
         ++rt.active_width;
@@ -1558,8 +1609,14 @@ private:
             // elapsed_usはtime limit判定・Hook・RunEndで更新し、expandごとの時刻取得を避ける。
             refresh_runtime_usage();
         }
+        const auto before = rt.best_update_count;
         call_expand(ctx.expand, now, rt, emit);
         ++rt.expanded_nodes;
+        if (rt.best_update_count != before) {
+            update_time();
+            last_best_update_us = rt.elapsed_us;
+            emit_hook(EventType::BestUpdate, ctx);
+        }
 
         // 削除は、この葉から最も遅く届く候補が到着するまでは遅延する。
         // future_childrenが残っていればremove_leaf側で削除されない。
@@ -1567,13 +1624,17 @@ private:
         enqueue_remove(v, remove_turn);
     }
 
-    template<class Ctx>
+    template<bool TurnLimit, class Ctx>
     void run_dfs(int current_turn, bool& switch_to_minimal, Ctx& ctx) {
         remove_useless_nodes(current_turn);
         update_root(ctx);
         int v = root;
         if (!nodes[v].active) return;
 
+        if constexpr (TurnLimit) if (rt.turn_time_limit_reached && rt.pending_candidates != 0) {
+            discard_other_active_leaves_at_turn(current_turn, -1);
+            return;
+        }
         while (!switch_to_minimal) {
             v = move_to_leaf(v, ctx.move_forward);
             if (nodes[v].turn != current_turn) {
@@ -1591,6 +1652,14 @@ private:
                 break;
             }
 
+            if constexpr (TurnLimit) if (rt.turn_time_limit_reached && rt.pending_candidates != 0) {
+                // DFS途中で落とした祖先のactiveを戻し、未展開葉だけを外す。
+                // 未来候補が参照する親・経路は保持する。
+                deactivate_leaf_path(v);
+                move_direct_to_root(v, ctx.move_backward);
+                discard_other_active_leaves_at_turn(current_turn, -1);
+                break;
+            }
             v = move_to_ancestor(v, ctx.move_forward, ctx.move_backward);
             if (v == root) break;
         }
@@ -1613,8 +1682,7 @@ private:
         return best;
     }
 
-    template<class Ctx>
-    void materialize_arrival(int arrival_turn, bool minimal, Ctx& ctx) {
+    void materialize_arrival(int arrival_turn, bool minimal) {
         Selector& selector = selectors[arrival_turn % ring_size];
         rt.candidate_count = selector.size();
         if (selector.empty()) return;
@@ -1632,7 +1700,6 @@ private:
             if (id < 0) continue;
             ++rt.selected_width;
             ++rt.selected_nodes;
-            if (is_answer(id)) set_best(id, ctx);
             completed_max_turn |= (nodes[id].turn == param.max_turn);
         }
         rt.pending_candidates -= selector.size();
@@ -1724,31 +1791,26 @@ private:
         move_direct_to_root(v, ctx.move_backward);
     }
 
-    template<class Ctx>
-    void set_best(int node_id, Ctx& ctx) {
-        const Node& node = nodes[node_id];
-        if (!rt.found) {
-            rt.found = true;
-        } else if (!(node.cost < rt.best_cost)) {
-            return;
-        }
-        rt.best_cost = node.cost;
-        rt.best_turn = node.turn;
+    void set_best(Cost cost, int turn) {
+        rt.found = true;
+        rt.best_cost = cost;
+        rt.best_turn = turn;
+        last_best_update_turn = rt.turn;
         ++rt.best_update_count;
-        update_time();
-        last_best_update_us = rt.elapsed_us;
+    }
 
+    void save_best_path(int parent, Edge<Action> tail) {
         best_path.clear();
         best_path.insert(best_path.end(), committed_edges.begin(), committed_edges.end());
 
         tmp_path.clear();
-        for (int v = node_id; v != -1 && nodes[v].parent != -1; v = nodes[v].parent) {
+        for (int v = parent; v != -1 && nodes[v].parent != -1; v = nodes[v].parent) {
             tmp_path.push_back(nodes[v].edge);
         }
         for (int i = static_cast<int>(tmp_path.size()) - 1; i >= 0; --i) {
             best_path.push_back(tmp_path[i]);
         }
-        emit_hook(EventType::BestUpdate, ctx);
+        best_path.push_back(std::move(tail));
     }
 
     void cleanup_after_run() {
@@ -2683,10 +2745,10 @@ int main() {
     run_random_stress(tc);
 
     if (tc.failed == 0) {
-        std::cout << "beam_delta_multi_v55 self tests passed: " << tc.passed << " checks\n";
+        std::cout << "beam_delta_multi_v59 self tests passed: " << tc.passed << " checks\n";
         return 0;
     }
-    std::cerr << "beam_delta_multi_v55 self tests failed: " << tc.failed << " / " << (tc.passed + tc.failed) << " checks\n";
+    std::cerr << "beam_delta_multi_v59 self tests failed: " << tc.failed << " / " << (tc.passed + tc.failed) << " checks\n";
     return 1;
 }
 #endif

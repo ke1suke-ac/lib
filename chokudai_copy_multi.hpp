@@ -8,7 +8,9 @@
 // ターンキューは初回の有効候補で確保する。その初回確保は O(W S)
 // ハッシュは同じ到着ターンの未展開候補だけを重複排除し、展開済み集合は持たない。
 // finished は解候補の印。途中の finished 状態も expand されるので、必要ならそこで打ち切る。
-// best_state は受理時にコピーする。履歴が必要な場合は State 自体に持たせる。
+// 最良有効解は幅・Hashの選別と独立して保存する。履歴は必要ならStateに持たせる。
+// pushのboolは探索候補の受理を表す。falseでも最良解を保存する場合がある。
+// push_lazyのmakerは探索候補または最良解の保存に必要な場合だけ、1回呼ぶ。
 // 時間制限は expand の途中では検査しない。Runtime の時刻は直近の検査値。
 
 #ifndef CS_CHOKUDAI_COPY_CONCEPTS_V01
@@ -106,7 +108,7 @@ public:
         bool time_limit_reached = false;
         std::uint64_t expanded_nodes = 0; // 完了した expand。実行中の1件は含まない
         std::uint64_t generated_candidates = 0; // 初期状態を含まない
-        std::uint64_t accepted_candidates = 0;
+        std::uint64_t accepted_candidates = 0; // 探索候補の受理数。最良解だけの保存・maker呼び出し数とは別。
         std::uint64_t pruned_by_width = 0;
         std::uint64_t replaced_by_width = 0; // accepted の内数
         std::uint64_t pruned_by_hash = 0;
@@ -193,6 +195,7 @@ public:
                 std::cerr << "chokudai: CSV open failed: " << filename << '\n';
                 return;
             }
+            out.imbue(std::locale::classic()); // 小数点・桁区切りをCSVの区切り文字と混同させない
             out << std::setprecision(std::numeric_limits<long double>::max_digits10);
             out << "event,sweep,sweep_completed,elapsed_ms,time_limit_reached,expanded_nodes,generated_candidates,accepted_candidates,pruned_by_width,replaced_by_width,pruned_by_hash,replaced_by_hash,invalid_candidates,stored_states,peak_stored_states,found,best_cost,best_turn,best_update_count,last_best_update_sweep,stop_reason,period_ms,expand_per_sec,accept_rate,period_best_updates,sweeps_since_best_update\n";
             for (const Row& r : rows) {
@@ -200,7 +203,7 @@ public:
                     << r.expanded_nodes << ',' << r.generated_candidates << ',' << r.accepted_candidates << ','
                     << r.pruned_by_width << ',' << r.replaced_by_width << ',' << r.pruned_by_hash << ',' << r.replaced_by_hash << ','
                     << r.invalid_candidates << ',' << r.stored_states << ',' << r.peak_stored_states << ',' << r.found << ',';
-                if (r.found) out << r.best_cost;
+                if (r.found) out << +r.best_cost; // char系のCostも文字ではなく数値として出力
                 out << ',';
                 if (r.found) out << r.best_turn;
                 out << ',' << r.best_update_count << ',';
@@ -265,28 +268,28 @@ public:
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, finished, maker);
     }
 
-    // 受理時だけ状態を生成して候補を追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
+    // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class S>
     requires StepArg<S>
     bool push_lazy(Cost cost, S step, Maker&& maker) {
         return engine_.push_candidate(turn_, step, cost, now_hash_, false, false, std::forward<Maker>(maker));
     }
 
-    // 受理時だけ状態を生成して候補を追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
+    // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class S, class B>
     requires StepArg<S> && BoolArg<B>
     bool push_lazy(Cost cost, S step, B finished, Maker&& maker) {
         return engine_.push_candidate(turn_, step, cost, now_hash_, false, finished, std::forward<Maker>(maker));
     }
 
-    // 受理時だけ状態を生成して候補を追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
+    // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class H, class S>
     requires CompatibleHashArg<H, Hash> && StepArg<S>
     bool push_lazy(Cost cost, H hash, S step, Maker&& maker) {
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, false, std::forward<Maker>(maker));
     }
 
-    // 受理時だけ状態を生成して候補を追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
+    // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class H, class S, class B>
     requires CompatibleHashArg<H, Hash> && StepArg<S> && BoolArg<B>
     bool push_lazy(Cost cost, H hash, S step, B finished, Maker&& maker) {
@@ -450,9 +453,9 @@ private:
                 hash_size_ = std::bit_ceil(capacity);
             }
             layers_.resize(static_cast<std::size_t>(p_.max_turn) + 1);
-            completed_max_turn_ = p_.max_turn == 0;
             // NaN の初期コストでは探索を開始しない（push の候補数には含めない）
             if (valid_cost(cost)) {
+                completed_max_turn_ = p_.max_turn == 0;
                 Queue& q = layer(0);
                 q.insert(0, cost, hash, hashed, serial_++, [&]() -> State&& { return std::move(initial); });
                 rt_.stored_states = rt_.peak_stored_states = 1;
@@ -460,7 +463,7 @@ private:
                 if (p_.max_turn == 0 && p_.max_turn_is_answer) save_best(*q.items[0], cost, 0);
             }
         }
-        // 候補を検査し、受理時だけ状態を生成する、期待償却 O(log W + S)
+        // 候補を検査し、探索候補または最良解の保存に必要なら状態を生成する、期待償却 O(log W + S)
         template<class Maker>
         bool push_candidate(int from, int step, Cost cost, Hash hash, bool has_hash, bool finished, Maker&& maker) {
             static_assert(std::invocable<Maker&&>, "maker must be callable without arguments");
@@ -472,18 +475,25 @@ private:
                 return false;
             }
             const int turn = from + step;
+            const bool answer = finished || (p_.max_turn_is_answer && turn == p_.max_turn);
+            // 棄却する候補でも、改善する有効解なら保存する。makerは受理側と合わせて高々1回。
+            auto reject = [&]() {
+                if (answer && (!rt_.found || cost < rt_.best_cost))
+                    save_best(std::invoke(std::forward<Maker>(maker)), cost, turn);
+                return false;
+            };
             Queue& q = layer(turn);
             const bool full = q.size == p_.beam_width;
             // 満杯時は幅による棄却を先に判定する。同点は既存候補を優先する
             if (full && !(cost < q.keys[static_cast<std::size_t>(q.worst())].cost)) {
                 ++rt_.pruned_by_width;
-                return false;
+                return reject();
             }
             int slot = has_hash ? q.find(hash) : -1;
             const bool duplicate = slot >= 0;
             if (duplicate && !(cost < q.keys[static_cast<std::size_t>(slot)].cost)) {
                 ++rt_.pruned_by_hash;
-                return false;
+                return reject();
             }
             if (!duplicate) slot = full ? q.worst() : q.free_slot();
             q.insert(slot, cost, hash, has_hash, serial_++, std::forward<Maker>(maker));
@@ -496,7 +506,7 @@ private:
                 rt_.peak_stored_states = std::max(rt_.peak_stored_states, rt_.stored_states);
             }
             if (turn == p_.max_turn) completed_max_turn_ = true;
-            if (finished || (p_.max_turn_is_answer && turn == p_.max_turn)) save_best(*q.items[static_cast<std::size_t>(slot)], cost, turn);
+            if (answer) save_best(*q.items[static_cast<std::size_t>(slot)], cost, turn);
             return true;
         }
         // 探索し、最良状態を返す、候補数 G に対し期待 O(T W S + G(log W + S) + スイープ数 T)
@@ -535,10 +545,11 @@ private:
             if (!q) q = std::make_unique<Queue>(p_.beam_width, hash_size_);
             return *q;
         }
-        void save_best(const State& state, Cost cost, int turn) {
-            // 受理時の解をコピーし、後から同じスロットが置換されても失わない
+        template<class U>
+        void save_best(U&& state, Cost cost, int turn) {
+            // キューとは独立した保存。受理したStateはコピーし、棄却時の生成結果は直接構築する。
             if (!rt_.found || cost < rt_.best_cost) {
-                best_state_.emplace(state);
+                best_state_.emplace(std::forward<U>(state));
                 rt_.found = true;
                 rt_.best_cost = cost;
                 rt_.best_turn = turn;
@@ -570,8 +581,10 @@ private:
             ++rt_.sweep;
             rt_.sweep_completed = false;
             hook(EventType::SweepStart, static_cast<const Runtime&>(rt_));
+            // SweepStartのHook時間も計上し、時間切れなら通常の展開を始めない。
+            if (!fallback && limit_us_ > 0) sample_time();
             const int width = fallback ? 1 : p_.chokudai_width;
-            bool stopped = false;
+            bool stopped = !fallback && rt_.time_limit_reached;
             // 空の中間ターンを飛ばし、同じスイープ中に生成した未来の候補も展開する
             for (int turn = 0; turn < p_.max_turn && !stopped; ++turn) {
                 auto& ptr = layers_[static_cast<std::size_t>(turn)];
@@ -584,7 +597,7 @@ private:
                     q.erase(slot);
                     --rt_.stored_states;
                     --pending_;
-                    StateView<State> now(turn, key.cost, item, key.hash, key.has_hash);
+                    const StateView<State> now(turn, key.cost, item, key.hash, key.has_hash);
                     Emitter<State> emit(*this, turn, key.hash);
                     // Runtime ありの形式を優先し、利用するだけでは時計を追加で読まない
                     if constexpr (std::is_invocable_v<Expand&, const StateView<State>&, const Runtime&, Emitter<State>&>) {
@@ -754,6 +767,8 @@ struct Reference {
             ++r.invalid_candidates; return false;
         }
         const int t = turn + e.step;
+        if (e.finished || (p.max_turn_is_answer && t == p.max_turn))
+            save(Item{state, e.cost, e.hash, e.hashed, 0}, t);
         auto& q = queues[static_cast<std::size_t>(t)];
         auto worst = std::max_element(q.begin(), q.end(), less);
         const bool full = q.size() == static_cast<std::size_t>(p.beam_width);
@@ -769,7 +784,6 @@ struct Reference {
         else { q.push_back(candidate); ++r.stored_states; r.peak_stored_states = std::max(r.stored_states, r.peak_stored_states); }
         ++r.accepted_candidates;
         if (t == p.max_turn) completed = true;
-        if (e.finished || (p.max_turn_is_answer && t == p.max_turn)) save(candidate, t);
         return true;
     }
     void event(BS::EventType type) { events.emplace_back(type, r); }
@@ -809,7 +823,7 @@ struct Reference {
 BS::Result<State> compare(const Graph& graph, const BS::Param& param, bool use_lazy = true) {
     Reference ref(param); ref.run(graph);
     Trace trace; PushTrace pushed; Events events;
-    std::uint64_t made = 0;
+    std::uint64_t made = 0, needed = 0;
     const auto result = BS::run(param, State{}, 0LL, std::uint64_t{0},
         [&](const BS::StateView<State>& now, const BS::Runtime& rt, BS::Emitter<State>& e) {
             invariant(rt);
@@ -817,11 +831,16 @@ BS::Result<State> compare(const Graph& graph, const BS::Param& param, bool use_l
             const auto& edges = graph[static_cast<std::size_t>(now.state.node)];
             for (std::size_t i = 0; i < edges.size(); ++i) {
                 const auto& edge = edges[i];
+                const int bound = [](const auto& config) { if constexpr (requires { config.max_step; }) return config.max_step; else return 1; }(param);
+                const bool valid = edge.step > 0 && edge.step <= std::clamp(bound, 1, std::max(1, param.max_turn)) && edge.step <= param.max_turn - now.turn;
+                const bool improves = valid && (edge.finished || (param.max_turn_is_answer && now.turn + edge.step == param.max_turn)) &&
+                    (!rt.found || edge.cost < rt.best_cost);
                 bool accepted;
                 if (use_lazy) accepted = lazy<BS, State>(e, edge.cost, edge.step, edge.hashed, edge.hash, edge.finished, [&]() {
                     ++made; return child(now.state, static_cast<int>(i), edge.node);
                 });
                 else accepted = push<BS>(e, child(now.state, static_cast<int>(i), edge.node), edge.cost, edge.step, edge.hashed, edge.hash, edge.finished);
+                needed += accepted || improves;
                 pushed.push_back(accepted);
                 invariant(rt);
             }
@@ -839,7 +858,7 @@ BS::Result<State> compare(const Graph& graph, const BS::Param& param, bool use_l
         CHECK(events[i].first == ref.events[i].first);
         CHECK(counters(events[i].second) == counters(ref.events[i].second));
     }
-    if (use_lazy) CHECK(made == result.runtime.accepted_candidates);
+    if (use_lazy) CHECK(made == needed);
     return result;
 }
 void deterministic() {
@@ -859,7 +878,7 @@ void deterministic() {
     p = {}; p.max_turn = 2; p.beam_width = 1; p.max_turn_is_answer = false;
     graph[0] = {{1,1,10,1,false,true},{2,1,1,2,false,false}};
     CHECK(compare(graph,p).best_cost == 10);
-    std::reverse(graph[0].begin(),graph[0].end()); CHECK(!compare(graph,p).found);
+    std::reverse(graph[0].begin(),graph[0].end()); CHECK(compare(graph,p).best_cost == 10);
     p.beam_width = 3;
     graph[0] = {{1,1,10,7,true,false},{2,1,5,8,true,false},{3,1,5,7,true,false}};
     graph[1].clear();graph[2].clear();graph[3].clear();
