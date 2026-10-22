@@ -1,23 +1,23 @@
-// beam_skelton_v29.cpp
+// beam_skelton_v43.cpp
 //
 // ビームサーチ6種類とchokudaiサーチ3種類を、1ファイル内で切り替えて試すためのスケルトンです。
 // 使うライブラリは BEAM_SKELTON_KIND で選びます。
 //
-//   1: beam_delta_multi_v69.hpp       turn + Action保持型
-//   2: beam_delta_single_v46.hpp      turn統一 + Action保持型。各手は必ず +1 turn
-//   3: beam_copy_multi_v44.hpp        turn + State保持型
-//   4: beam_copy_single_v40.hpp       turn統一 + State保持型。各手は必ず +1 turn
-//   5: chokudai_copy_multi_v15.hpp    chokudai + State保持型。各手のstepを指定
-//   6: chokudai_copy_single_v13.hpp   chokudai + State保持型。各手は必ず +1 turn
-//   7: beam_delta_sub_v12.hpp        turn内sub探索 + Action保持型
-//   8: beam_copy_sub_v12.hpp         turn内sub探索 + State保持型
-//   9: chokudai_copy_sub_v11.hpp     chokudai + turn内sub探索 + State保持型
+//   1: beam_delta_multi_v81.hpp       turn + Action保持型
+//   2: beam_delta_single_v57.hpp      turn統一 + Action保持型。各手は必ず +1 turn
+//   3: beam_copy_multi_v55.hpp        turn + State保持型
+//   4: beam_copy_single_v51.hpp       turn統一 + State保持型。各手は必ず +1 turn
+//   5: chokudai_copy_multi_v28.hpp    chokudai + State保持型。各手のstepを指定
+//   6: chokudai_copy_single_v26.hpp   chokudai + State保持型。各手は必ず +1 turn
+//   7: beam_delta_sub_v24.hpp        turn内sub探索 + Action保持型
+//   8: beam_copy_sub_v23.hpp         turn内sub探索 + State保持型
+//   9: chokudai_copy_sub_v24.hpp     chokudai + turn内sub探索 + State保持型
 //
 // 例:
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v29.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v29.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v29.cpp
-//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v29.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v43.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v43.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v43.cpp
+//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v43.cpp
 //
 // 注意:
 //   使うヘッダをこのファイルと同じディレクトリに置くか、コンパイル時に -I で場所を指定してください。
@@ -40,7 +40,9 @@
 //   copy型のpush_lazyは解だけの保存でもmakerを呼びます。1呼び出しにつき高々1回です。
 //   有効解をすべて終端にする問題ではexpand_answers=falseにし、expand内の終端判定を省けます。
 //   続けたい有効解と終端が混在する場合はtrueにし、終端だけ利用側でreturnします。
-//   answer_only_candidatesは、この設定で探索から除いたmax_turn未満の有効候補数です。
+//   有効解候補の生成数はdebug hookのanswer_candidatesで確認します。
+//   CSVのbest_unchanged_msは改善したexpand終了からの時間です。記録間隔には依存しません。
+//   multiではgenerated_step_avgとexpanded_step_avgで、生成と実際の展開のstepを比較できます。
 //
 // 全種類の時間切れ方針:
 //   continue_on_timeout=true（既定）では、解未発見の場合だけ時間超過後の救済探索を続けます。
@@ -57,13 +59,31 @@
 //   Runtimeのturn_time_limit_reachedは各turnでリセットされ、全体のtime_limit_reachedとは独立です。
 //   chokudaiの3種類にはuse_turn_time_limitはありません。
 //
-// chokudai のmulti / single版（5 / 6）のパラメータとスイープについて:
+// deltaの返却状態（1 / 2 / 7）:
+//   apply_best_on_return=false（既定）なら、正常返却時の外部Stateは初期状態です。
+//   trueで有効解がある場合、初期状態へ戻してから最良path全体を同じforwardで一度だけ再生します。
+//   解なしは初期状態、空pathなら移動なし。初期Stateも必要ならrun前に利用側でコピーします。
+//   RunEndは再生後です。再生時間はelapsed_us、debug hookのforward回数はforward_callsへ含みます。
+//   再生は時間超過でも完了させるため、その分の余裕を時間予算に残してください。
+//
+// chokudaiのパラメータとスイープについて（5 / 6 / 9）:
 //   beam_width は各turnに保持する未展開候補の上限、sweep_width は1スイープで各turnから展開する上限です。
+//   first_sweep_widthは初回だけの上限です。0以下はsweep_width、正値はbeam_width以下へ丸めます。
+//   例: beam_width=1024、first_sweep_width=128、sweep_width=4。初回を広く探索し、残りを細く継続します。
+//   初回幅をbeam_widthと等しくすると、初回完走でキューを使い切り、後続スイープがなくなります。
+//   sub版の両sweep幅はturn開始候補だけへ作用し、sub_beam_widthは変えません。
 //   スイープは浅いturnから順に進み、残った候補を次のスイープへ持ち越します。
 //   Hashによる重複排除は同じ到着turnの未展開候補が対象で、展開済みのHashは保持しません。
 //   max_sweeps <= 0 は回数無制限、time_limit_ms <= 0.0 は時間無制限です。
 //   時間切れ時の救済はcontinue_on_timeoutで指定します。通常スイープ上限は救済には適用しません。
 //   選別で棄却された有効解も解発見に含め、救済中なら現在のexpand終了後に打ち切ります。
+//
+// 途中層のcost分析（1 / 2 / 3 / 4 / 7 / 8 / 9）:
+//   CSVのlayer_sizeとlayer_cost_min/mean/max/stddevは、選別後・展開前の1層全体を表します。
+//   single/multiはTurnEndのturn、subはSubStepEndのturn/sub_stepで層を特定します。
+//   全層を見る実行はCsvStatHookの記録間隔を0にします。複数層のcostは合算しません。
+//   chokudai subのsub_step=0は取出し前のキュー全体。5 / 6のSweepEnd CSVには追加しません。
+//   集計は診断有効時のみ。評価値の同点と、State自体の多様性は別に確認してください。
 //
 // sub版（7 / 8 / 9）について:
 //   push / push_lazy の末尾の Next::Sub は同turnの次sub層へ、Next::Turn は次turnの開始候補へ追加します。
@@ -94,9 +114,17 @@
 // CSV Hook について:
 //   BEAM_SKELTON_USE_CSV_HOOK=1 を指定すると、debug_hook に BS::CsvStatHook を使います。
 //   CSV出力には -DLOCAL も必要です。LOCAL未定義時のCsvStatHookは、記録・出力を行わない空実装です。
-//   0 の場合は、型名を明示したラムダHookを使います。
-//   multi / single版は、ビームではturn単位、chokudaiではスイープ単位のイベントです。
-//   sub版はSubStepEnd / TurnEndも通知し、chokudaiではSweepEndも通知します。CSVの列は方式ごとに異なります。
+//   0 の場合はNoOpです。独自hookの例はBEAM_SKELTON_USE_DEBUG_HOOK=1で有効になります。
+//   全方式でRunStart / TurnEnd / SearchEnd / RunEndを通知します。
+//   subはSubStepEnd、chokudaiはSweepStart / SweepEndも通知します。CSVは共通列と方式固有列です。
+//   列順は経過・座標、最良解、層cost、探索量・選別、詳細診断、設定、方式識別です。
+//   全9種類で共通列の相対順序を揃え、方式固有列は関連項目のまとまりに入れています。
+//   CSVのschema_versionは6です。全列の出力順はガイド13.4を参照してください。
+//   chokudai single/multiのCSVはSweepEnd単位です。RunStart / SearchEnd / RunEndも記録します。
+//   初回・未完了のSweepEndは間隔によらず記録し、TurnEnd / SweepStartは記録しません。
+//   診断はBSの第3テンプレート引数EnableDiagnostics（既定true）で切り替えます。
+//   LOCALなし、またはfalse指定時は、診断用領域・更新・全debug hook通知をコンパイル時に除去します。
+//   LOCALあり・trueではNoOpでも集計します。計測負荷を止めるにはBSの第3引数をfalseにします。
 
 #ifndef BEAM_SKELTON_KIND
 #define BEAM_SKELTON_KIND 1
@@ -106,11 +134,15 @@
 #define BEAM_SKELTON_USE_CSV_HOOK 0
 #endif
 
+#ifndef BEAM_SKELTON_USE_DEBUG_HOOK
+#define BEAM_SKELTON_USE_DEBUG_HOOK 0
+#endif
+
 #include <cstdint>
 #include <iostream>
 
 #if BEAM_SKELTON_KIND == 1
-#include "beam_delta_multi_v69.hpp"
+#include "beam_delta_multi_v81.hpp"
 
 namespace {
 
@@ -128,6 +160,7 @@ int example_main() {
     // Param は現在のデフォルト値で明示的に埋めています。
     // 実探索では max_turn / max_step / beam_width などを問題に合わせて変更します。
     BS::Param param{};
+    param.apply_best_on_return = false; // trueなら、解があるとき最良解の外部Stateで返却します。
     param.max_turn = 0;
     param.max_step = 1;
     param.beam_width = 1;
@@ -144,7 +177,7 @@ int example_main() {
     int current_position = 0;
 
     // expand は NodeView と Emitter を受け取ります。
-    // IDE補完を使いやすくするため、引数型は auto ではなく明示しています。
+    // Emitterを含め、引数の型を明示しています。
     // Runtime 付きの最大引数形を使っています。
     auto expand = [&param](const BS::NodeView& now, const BS::Runtime& runtime, BS::Emitter<Action>& emit) {
         (void)runtime;
@@ -172,15 +205,17 @@ int example_main() {
     };
 
     // DebugHook は任意です。最大引数の run 例として明示的に渡しています。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各TurnEnd / RunEnd を記録します。
+    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_delta_multi_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
         // runtime.best_cost, runtime.expanded_nodes などをログ出力できます。
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const Cost initial_cost = 0;
@@ -207,7 +242,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 2
-#include "beam_delta_single_v46.hpp"
+#include "beam_delta_single_v57.hpp"
 
 namespace {
 
@@ -225,6 +260,7 @@ int example_main() {
     // Param は現在のデフォルト値で明示的に埋めています。
     // 実探索では max_turn / beam_width などを問題に合わせて変更します。
     BS::Param param{};
+    param.apply_best_on_return = false; // trueなら、解があるとき最良解の外部Stateで返却します。
     param.max_turn = 0;
     param.beam_width = 1;
     param.hash_capacity = 0;
@@ -263,14 +299,16 @@ int example_main() {
     };
 
     // DebugHook はラムダでも、標準の CsvStatHook でも指定できます。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各TurnEnd / RunEnd を記録します。
+    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_delta_single_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const Cost initial_cost = 0;
@@ -297,11 +335,11 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 3
-#include "beam_copy_multi_v44.hpp"
+#include "beam_copy_multi_v55.hpp"
 
 namespace {
 
-// State保持型。履歴や盤面など、結果として欲しい情報はStateに入れます。
+// State保持型。盤面はState、出力用の操作履歴はActionとして分けます。
 struct State {
     int value = 0;
 };
@@ -366,14 +404,16 @@ int example_main() {
     };
 
     // DebugHook はラムダでも、標準の CsvStatHook でも指定できます。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各TurnEnd / RunEnd を記録します。
+    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_copy_multi_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};
@@ -406,7 +446,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 4
-#include "beam_copy_single_v40.hpp"
+#include "beam_copy_single_v51.hpp"
 
 namespace {
 
@@ -472,14 +512,16 @@ int example_main() {
     };
 
     // DebugHook はラムダでも、標準の CsvStatHook でも指定できます。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各TurnEnd / RunEnd を記録します。
+    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_copy_single_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};
@@ -512,7 +554,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 5
-#include "chokudai_copy_multi_v15.hpp"
+#include "chokudai_copy_multi_v28.hpp"
 
 namespace {
 
@@ -544,6 +586,7 @@ int example_main() {
     param.max_turn_is_answer = true;
     param.use_hash_dedup = true;
     param.sweep_width = 1;     // 1スイープで各turnから展開する上限
+    param.first_sweep_width = 0; // 0以下は通常幅。正なら初回だけこの幅（beam_width以下）。
     param.max_sweeps = 0;        // 0以下はスイープ数の制限なし
 
     // Runtime 付きの最大引数形を使っています。
@@ -583,16 +626,19 @@ int example_main() {
         );
     };
 
-    // DebugHook のイベントは RunStart / SweepStart / SweepEnd / RunEnd です。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各SweepEnd / RunEnd を記録します。
-    // 時間切れで途中終了したSweepEndも通知され、runtime.sweep_completedで完走したか判別できます。
+    // 独自DebugHookにはTurnEnd / SweepStartも通知しますが、CSVはSweepEnd単位です。
+    // interval_ms <= 0.0なら毎sweep記録。正ならSweepEndで間隔を判定します。
+    // RunStart / SearchEnd / RunEndと初回・未完了のSweepEndは必ず記録します。
+    // 間引いた行の処理量は複数sweepの合計。sweep_completedは最後のsweepの完了状態です。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("chokudai_copy_multi_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};
@@ -625,7 +671,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 6
-#include "chokudai_copy_single_v13.hpp"
+#include "chokudai_copy_single_v26.hpp"
 
 namespace {
 
@@ -656,6 +702,7 @@ int example_main() {
     param.max_turn_is_answer = true;
     param.use_hash_dedup = true;
     param.sweep_width = 1;     // 1スイープで各turnから展開する上限
+    param.first_sweep_width = 0; // 0以下は通常幅。正なら初回だけこの幅（beam_width以下）。
     param.max_sweeps = 0;        // 0以下はスイープ数の制限なし
 
     // Runtime 付きの最大引数形を使っています。
@@ -693,16 +740,19 @@ int example_main() {
         );
     };
 
-    // DebugHook のイベントは RunStart / SweepStart / SweepEnd / RunEnd です。
-    // CsvStatHook の第2引数 interval_ms <= 0.0 の場合、RunStart / 各SweepEnd / RunEnd を記録します。
-    // 時間切れで途中終了したSweepEndも通知され、runtime.sweep_completedで完走したか判別できます。
+    // 独自DebugHookにはTurnEnd / SweepStartも通知しますが、CSVはSweepEnd単位です。
+    // interval_ms <= 0.0なら毎sweep記録。正ならSweepEndで間隔を判定します。
+    // RunStart / SearchEnd / RunEndと初回・未完了のSweepEndは必ず記録します。
+    // 間引いた行の処理量は複数sweepの合計。sweep_completedは最後のsweepの完了状態です。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("chokudai_copy_single_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};
@@ -735,7 +785,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 7
-#include "beam_delta_sub_v12.hpp"
+#include "beam_delta_sub_v24.hpp"
 
 namespace {
 
@@ -753,10 +803,11 @@ int example_main() {
     // Param は現在のデフォルト値で明示的に埋めています。
     // 実探索では max_turn / beam_width / sub_beam_width や時間制限を変更します。
     BS::Param param{};
+    param.apply_best_on_return = false; // trueなら、解があるとき最良解の外部Stateで返却します。
     param.max_turn = 0;
     param.beam_width = 1;         // 次turnの開始候補幅
     param.time_limit_ms = 0.0;
-    param.use_turn_time_limit = false; // 正の全体制限を残りturnへ配分する場合はtrue。   // 探索全体の制限。0以下は無制限
+    param.use_turn_time_limit = false; // 正の全体制限を残りturnへ配分する場合はtrue。
     param.time_check_interval = 64;
     param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
     param.expand_answers = true; // 有効解も探索候補へ登録。終端にしたい問題ではfalse。
@@ -787,7 +838,7 @@ int example_main() {
     };
 
     // Sub / TurnのどちらもAction単位で進めたり戻したりします。
-    // runが正常に返るとき、外部状態は初期状態に戻ります。
+    // 正常返却時は初期状態。apply_best_on_return=trueで解ありなら最良解の状態です。
     auto move_forward = [&current_position](const Action& action) {
         current_position += action.delta;
     };
@@ -795,15 +846,17 @@ int example_main() {
         current_position -= action.delta;
     };
 
-    // interval_ms <= 0.0 ではRunStart / 各SubStepEnd / 各TurnEnd / RunEndを記録します。
+    // interval_ms <= 0.0 ではSubStepEnd / SearchEndを含む全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_delta_sub_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
-        // runtime.turn, runtime.sub_step, runtime.sub_stats, runtime.turn_stats などを参照できます。
+        // runtime.turn, runtime.sub_step, runtime.sub_selection, runtime.turn_selection などを参照できます。
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const Cost initial_cost = 0;
@@ -836,7 +889,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 8
-#include "beam_copy_sub_v12.hpp"
+#include "beam_copy_sub_v23.hpp"
 
 namespace {
 
@@ -860,7 +913,7 @@ int example_main() {
     param.max_turn = 0;
     param.beam_width = 1;         // 次turnの開始候補幅
     param.time_limit_ms = 0.0;
-    param.use_turn_time_limit = false; // 正の全体制限を残りturnへ配分する場合はtrue。   // 探索全体の制限。0以下は無制限
+    param.use_turn_time_limit = false; // 正の全体制限を残りturnへ配分する場合はtrue。
     param.time_check_interval = 64;
     param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
     param.expand_answers = true; // 有効解も探索候補へ登録。終端にしたい問題ではfalse。
@@ -903,15 +956,17 @@ int example_main() {
         }
     };
 
-    // interval_ms <= 0.0 ではRunStart / 各SubStepEnd / 各TurnEnd / RunEndを記録します。
+    // interval_ms <= 0.0 ではSubStepEnd / SearchEndを含む全イベントを記録します。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("beam_copy_sub_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
-        // runtime.turn, runtime.sub_step, runtime.sub_stats, runtime.turn_stats などを参照できます。
+        // runtime.turn, runtime.sub_step, runtime.sub_selection, runtime.turn_selection などを参照できます。
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};
@@ -945,7 +1000,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 9
-#include "chokudai_copy_sub_v11.hpp"
+#include "chokudai_copy_sub_v24.hpp"
 
 namespace {
 
@@ -968,13 +1023,14 @@ int example_main() {
     BS::Param param{};
     param.max_turn = 0;
     param.beam_width = 1;         // 各turnに保持する未展開の開始候補幅
-    param.time_limit_ms = 0.0;   // 探索全体の制限。0以下は無制限
+    param.time_limit_ms = 0.0;
     param.time_check_interval = 64;
     param.continue_on_timeout = true; // 解未発見の時間切れでは救済探索を続けます。
     param.expand_answers = true; // 有効解も探索候補へ登録。終端にしたい問題ではfalse。
     param.max_turn_is_answer = true;
     param.use_hash_dedup = true;
     param.sweep_width = 1;    // 1turn・1スイープで取り出す開始候補数
+    param.first_sweep_width = 0; // 0以下は通常幅。正なら初回だけこの幅（beam_width以下）。
     param.max_sweeps = 0;       // 通常スイープ数の上限。0以下は無制限
     param.sub_beam_width = 0;   // 0以下ならbeam_widthを使用
 
@@ -1014,16 +1070,18 @@ int example_main() {
         }
     };
 
-    // interval_ms <= 0.0 ではRunStart / 各SubStepEnd / 各TurnEnd / 各SweepEnd / RunEndを記録します。
-    // multi / single版のSweepStartイベントやruntime.sweep_completedはありません。
+    // interval_ms <= 0.0 ではSweepStart / SubStepEnd / SearchEndを含む全イベントを記録します。
+    // DebugRuntime.sweep_completedで、SweepEnd時の完走を確認できます。
 #if BEAM_SKELTON_USE_CSV_HOOK
     BS::CsvStatHook debug_hook("chokudai_copy_sub_stats.csv", 0.0);
-#else
-    auto debug_hook = [](BS::EventType event_type, const BS::Runtime& runtime) {
+#elif BEAM_SKELTON_USE_DEBUG_HOOK
+    auto debug_hook = [](BS::EventType event_type, const BS::DebugRuntime& runtime) {
         (void)event_type;
         (void)runtime;
-        // runtime.sweep, runtime.pending_start_candidates, runtime.stop_reason などを参照できます。
+        // runtime.sweep, runtime.pending_candidates, runtime.stop_reason などを参照できます。
     };
+#else
+    BS::NoOp debug_hook;
 #endif
 
     const State initial_state{0};

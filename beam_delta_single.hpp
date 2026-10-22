@@ -2,7 +2,6 @@
 #include <bits/stdc++.h>
 
 namespace bs {
-
 // ============================================================
 // 公開concept
 // ============================================================
@@ -42,7 +41,6 @@ concept ActionArg = std::same_as<std::remove_cvref_t<U>, Action>;
 // ============================================================
 
 namespace detail {
-
 // Beamに依存しない低レベル補助関数。
 inline int ceil_pow2(int x) {
     int p = 1;
@@ -55,11 +53,6 @@ inline std::uint64_t mix64(std::uint64_t x) noexcept {
     x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
     x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
     return x ^ (x >> 31);
-}
-
-template<HashType Hash>
-inline std::uint64_t hash_to_u64(Hash x) noexcept {
-    return static_cast<std::uint64_t>(x);
 }
 
 template<CostType Cost>
@@ -98,17 +91,22 @@ inline std::int64_t now_microseconds() {
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
 }
-
 } // namespace detail
 
-template<CostType Cost = long long, HashType Hash = std::uint64_t>
+template<CostType Cost = long long, HashType Hash = std::uint64_t, bool EnableDiagnostics = true>
 struct Beam {
     using cost_type = Cost;
     using hash_type = Hash;
 
+    // 診断の保持・更新・hook通知を切り替える。探索に必要なRuntimeは常に有効。
+#ifdef LOCAL
+    static constexpr bool diagnostics_enabled = EnableDiagnostics;
+#else
+    static constexpr bool diagnostics_enabled = false;
+#endif
+
 private:
-    template<class Action>
-    class Engine;
+    template<class Action> class Engine;
 
 public:
 // 探索パラメータ。
@@ -134,9 +132,12 @@ struct Param {
     bool use_hash_dedup = true;     // trueならHash付きpushで重複排除を行う。
     bool print_warnings = true;     // 危険状態を検出したらstderrへ警告する。
     bool use_turn_time_limit = false; // 残り時間を残りturnへ配分。全体制限が有効な場合だけ使用。
+    bool apply_best_on_return = false; // 正常返却時、解があれば最良経路を再生して外部Stateを進める
 };
 
-enum class EventType { RunStart, RunEnd, TurnEnd };
+enum class StopReason { None, Completed, Exhausted, TimeLimit, SweepLimit, InvalidInitial };
+
+enum class EventType { RunStart, TurnEnd, SearchEnd, RunEnd };
 
 // expand に渡す現在ノード情報。
 struct NodeView {
@@ -145,54 +146,53 @@ struct NodeView {
     Hash hash{};
 };
 
-// Hookから観測できる実行時情報。
-struct Runtime {
-    Param param; // 探索に使用する設定。Engineとの二重保持を避ける。
+// 実行情報と、diagnostics_enabled時だけ保持する診断情報。
+    // expand と Result が見る本番用情報。診断カウンタは保持しない。
+    struct Runtime {
+        Param param;
+        int turn = 0;
+        std::int64_t elapsed_us = 0;
+        std::uint64_t expanded_nodes = 0;
+        bool time_limit_reached = false;
+        bool found = false;
+        Cost best_cost{};
+        int best_turn = 0;
+        bool completed_max_turn = false;
+        StopReason stop_reason = StopReason::None;
+        unsigned diagnostic_flags = 0; // 1: Hash表容量不足、2: 遅延削除キュー容量不足。
+        std::int64_t turn_start_us = -1, turn_deadline_us = -1, turn_elapsed_us = 0;
+        bool turn_time_limit_reached = false;
+    };
+    struct SelectionStats {
+        std::uint64_t accepted = 0, rejected_by_width = 0, rejected_by_hash = 0;
+        std::uint64_t replaced_by_width = 0, replaced_by_hash = 0, hash_checked = 0;
+        std::uint64_t rejected_by_capacity = 0;
+        std::uint64_t attempts() const {
+            return accepted + rejected_by_width + rejected_by_hash + rejected_by_capacity;
+        }
+    };
+    // debug hook にだけ渡す情報。全カウンタは run 開始からの累計。
+    struct DebugRuntime : Runtime {
 
-    std::uint64_t terminal_candidates = 0; // 有効なmax_turn到着候補数。候補プールには入れない。
-    std::uint64_t answer_only_candidates = 0; // expand_answers=falseで除外したmax_turn未満の有効候補数。
-    int turn = 0;
-
-    int active_width = 0;
-    int selected_width = 0;
-    int candidate_count = 0;
-
-    long long expanded_nodes = 0;
-    long long generated_candidates = 0;
-    long long selected_nodes = 0;
-
-    // 状態移動回数。現在位置からLCA経由で差分移動する。
-    long long move_forward_count = 0;
-    long long move_backward_count = 0;
-
-    long long pruned_by_width = 0;
-    long long pruned_by_hash = 0;
-    long long duplicate_by_hash = 0;
-    long long invalid_candidates = 0;
-    long long hash_table_full = 0;
-
-    std::size_t reserved_nodes = 0; // 確保済みNodeスロット数。
-    int used_nodes = 0; // 次の一括回収まで残る不要ノードも含む。確保済みスロット数ではない。
-    int pending_candidates = 0;
-    int max_used_nodes = 0;
-    int max_pending_candidates = 0;
-
-    double time_remaining_ms = -1.0;
-    std::int64_t elapsed_us = 0;
-    // turn時刻はrun開始からのus。配分無効・turn未開始はstart/deadline=-1。
-    // elapsedは最後の時計確認時点。TurnEndで固定し、最終復元・RunEndには加算しない。
-    std::int64_t turn_start_us = -1, turn_deadline_us = -1, turn_elapsed_us = 0;
-    bool turn_time_limit_reached = false; // 各turn開始時に解除。全体のtime_limit_reachedとは独立。
-    // time_limit_msに達したことを検出したか。
-    // 検出後に探索を継続する場合は最良1本の縮退探索へ移る。
-    // expand中の即時中断を意味しない。
-    bool time_limit_reached = false;
-
-    bool found = false;
-    Cost best_cost{};
-    int best_turn = 0;
-    long long best_update_count = 0;
-};
+        // 展開開始時の1層全体。layer_size==0ではcost統計は無効。
+        std::size_t layer_size = 0;
+        Cost layer_cost_min{}, layer_cost_max{};
+        long double layer_cost_mean = 0, layer_cost_stddev = 0;
+        std::uint64_t generated_candidates = 0, invalid_candidates = 0, answer_candidates = 0;
+        std::uint64_t best_update_count = 0, expanded_after_timeout = 0;
+        // 最終改善時刻はexpand終了時に確定。expand中の改善は-1で未確定を表す。
+        std::int64_t first_solution_us = -1, last_best_update_us = -1;
+        std::size_t frontier_size = 0, frontier_limit = 0, frontier_expanded = 0;
+        std::size_t pending_candidates = 0, peak_pending_candidates = 0;
+        SelectionStats selection;
+        std::size_t hash_table_capacity = 0; // 1選別領域の実効バケット数。未確保でも確保時の容量。
+        std::uint64_t turns_cut_by_time = 0;
+        std::uint64_t forward_calls = 0, backward_calls = 0;
+        std::size_t peak_node_capacity = 0;
+    private:
+        template<class> friend class Engine;
+        std::size_t pending_frontier_ = 0;
+    };
 
 // デフォルトHook。何もしない。
 struct NoOp {
@@ -200,98 +200,197 @@ struct NoOp {
 };
 
 // CSV出力Hook。
-// RunStart/TurnEnd/RunEnd の統計をCSVに出力する。
+// 共通の実行情報と方式別の診断をCSVに出力する。
 // 行はメモリ上に保持し、RunEndで一括してファイルへ書き出す。
 // LOCAL定義時のみCSVを記録する。未定義時は同じ呼び出し方で使える空実装。
-struct CsvStatHook {
+    // 診断の有効・無効は外側の diagnostics_enabled で決まる。
+    struct CsvStatHook {
 #ifdef LOCAL
-    struct Row : Runtime { const char* event = ""; };
-    std::string filename;
-    std::int64_t interval_us;
-    std::vector<Row> rows;
-    std::int64_t next_record_us = 0;
-    bool started = false;
-
-    explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50.0)
-        : filename(std::move(path)), interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
-
-    void operator()(EventType event, const Runtime& rt) {
-        if (event == EventType::RunStart) { rows.clear(); started = true; }
-        if (!started) return;
-        if (event != EventType::RunStart && event != EventType::RunEnd &&
-            (event != EventType::TurnEnd || (interval_us > 0 && rt.elapsed_us < next_record_us))) return;
-        const char* name = event == EventType::RunStart ? "RunStart" :
-                           event == EventType::RunEnd ? "RunEnd" : "TurnEnd";
-        rows.push_back({rt, name});
-        next_record_us = rt.elapsed_us + std::min(interval_us,
-            std::numeric_limits<std::int64_t>::max() - rt.elapsed_us);
-        if (event == EventType::RunEnd) { write_csv(); started = false; }
-    }
-
-private:
-    void write_csv() const {
-        std::ofstream out(filename, std::ios::binary | std::ios::trunc);
-        if (!out) {
-            std::cerr << "[bs] warning: failed to open csv file: " << filename << '\n';
-            return;
+        struct Row { EventType event; DebugRuntime runtime; };
+        std::string filename;
+        std::int64_t interval_us;
+        std::vector<Row> rows;
+        explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
+            : filename(std::move(path)), interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
+        void operator()(EventType event, const DebugRuntime& rt) {
+            if (event == EventType::RunStart) rows.clear();
+            const bool mandatory = event == EventType::RunStart || event == EventType::SearchEnd ||
+                event == EventType::RunEnd ;
+            const bool changed = !rows.empty() &&
+                (rt.diagnostic_flags != rows.back().runtime.diagnostic_flags ||
+                 (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) || rt.turns_cut_by_time > rows.back().runtime.turns_cut_by_time);
+            if (mandatory || changed || rows.empty() || interval_us == 0 ||
+                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.push_back({event, rt});
+            if (event == EventType::RunEnd) write();
         }
-        out.imbue(std::locale::classic());
-        out << std::setprecision(std::numeric_limits<long double>::max_digits10);
-        out << "event,elapsed_ms,turn,max_turn,beam_width,hash_capacity,"
-               "active_width,selected_width,candidate_count,"
-               "expanded_nodes,terminal_candidates,answer_only_candidates,continue_on_timeout,expand_answers,generated_candidates,selected_nodes,pruned_by_width,pruned_by_hash,duplicate_by_hash,invalid_candidates,"
-               "hash_table_full,"
-               "used_nodes,reserved_nodes,pending_candidates,max_used_nodes,max_pending_candidates,"
-               "time_limit_ms,time_remaining_ms,use_turn_time_limit,turn_start_ms,turn_deadline_ms,turn_budget_ms,turn_elapsed_ms,turn_time_limit_reached,"
-               "found,best_cost,best_turn,best_update_count,time_limit_reached,"
-               "period_ms,period_turns,period_expanded_nodes,period_generated_candidates,period_selected_nodes,"
-               "period_pruned_by_width,period_pruned_by_hash,period_duplicate_by_hash,period_best_updates,"
-               "expand_per_sec,generate_per_sec,select_per_sec,width_prune_rate,hash_prune_rate,"
-               "move_forward_count,move_backward_count,period_move_forward_count,period_move_backward_count,"
-               "move_forward_per_sec,move_backward_per_sec\n";
-        // 前回記録行との差分を出力時に計算し、同じ統計を二重に保持しない。
-        auto rate = [](auto numerator, auto denominator) {
-            return denominator > 0 ? static_cast<double>(numerator) / static_cast<double>(denominator) : 0.0;
-        };
-        auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
-        for (std::size_t i = 0; i < rows.size(); ++i) {
-            const auto& r = rows[i];
-            const auto& prev = rows[i == 0 ? 0 : i - 1];
-            const double period_ms = ms(r.elapsed_us) - ms(prev.elapsed_us);
-            auto cells = [&](const auto&... values) { ((out << ',' << +values), ...); };
-            out << r.event;
-            cells(ms(r.elapsed_us), r.turn, r.param.max_turn,
-                  r.param.beam_width, r.param.hash_capacity, r.active_width,
-                  r.selected_width, r.candidate_count, r.expanded_nodes,
-                  r.terminal_candidates, r.answer_only_candidates, r.param.continue_on_timeout,
-                  r.param.expand_answers, r.generated_candidates, r.selected_nodes,
-                  r.pruned_by_width, r.pruned_by_hash, r.duplicate_by_hash,
-                  r.invalid_candidates, r.hash_table_full, r.used_nodes,
-                  r.reserved_nodes, r.pending_candidates, r.max_used_nodes,
-                  r.max_pending_candidates, r.param.time_limit_ms, r.time_remaining_ms,
-                  r.param.use_turn_time_limit, (r.turn_start_us < 0 ? -1.0 : ms(r.turn_start_us)), (r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us)),
-                  (r.turn_deadline_us < 0 ? -1.0 : ms(r.turn_deadline_us - r.turn_start_us)), ms(r.turn_elapsed_us), r.turn_time_limit_reached,
-                  r.found);
-            out << ','; if (r.found) out << +r.best_cost;
-            out << ','; if (r.found) out << +r.best_turn;
-            cells(r.best_update_count, r.time_limit_reached, period_ms,
-                  (r.turn - prev.turn), (r.expanded_nodes - prev.expanded_nodes), (r.generated_candidates - prev.generated_candidates),
-                  (r.selected_nodes - prev.selected_nodes), (r.pruned_by_width - prev.pruned_by_width), (r.pruned_by_hash - prev.pruned_by_hash),
-                  (r.duplicate_by_hash - prev.duplicate_by_hash), (r.best_update_count - prev.best_update_count), rate(static_cast<double>(r.expanded_nodes - prev.expanded_nodes) * 1000.0, period_ms),
-                  rate(static_cast<double>(r.generated_candidates - prev.generated_candidates) * 1000.0, period_ms), rate(static_cast<double>(r.selected_nodes - prev.selected_nodes) * 1000.0, period_ms), rate((r.pruned_by_width - prev.pruned_by_width), (r.generated_candidates - prev.generated_candidates)),
-                  rate((r.pruned_by_hash - prev.pruned_by_hash), (r.generated_candidates - prev.generated_candidates)), r.move_forward_count, r.move_backward_count,
-                  (r.move_forward_count - prev.move_forward_count), (r.move_backward_count - prev.move_backward_count), rate(static_cast<double>(r.move_forward_count - prev.move_forward_count) * 1000.0, period_ms),
-                  rate(static_cast<double>(r.move_backward_count - prev.move_backward_count) * 1000.0, period_ms));
-            out << '\n';
+    private:
+        static const char* event_name(EventType e) {
+            switch(e) {
+            case EventType::RunStart: return "RunStart";
+            case EventType::TurnEnd: return "TurnEnd";
+            case EventType::SearchEnd: return "SearchEnd";
+            case EventType::RunEnd: return "RunEnd";
+            }
+            return "";
         }
-        out.close();
-        if (!out) std::cerr << "[bs] warning: failed to write csv file: " << filename << '\n';
-    }
+        static const char* reason_name(StopReason r) {
+            switch(r) {
+            case StopReason::None: return "None";
+            case StopReason::Completed: return "Completed";
+            case StopReason::Exhausted: return "Exhausted";
+            case StopReason::TimeLimit: return "TimeLimit";
+            case StopReason::SweepLimit: return "SweepLimit";
+            case StopReason::InvalidInitial: return "InvalidInitial";
+            }
+            return "";
+        }
+        static const char* flags(unsigned f) {
+            return f == 0 ? "" : f == 1 ? "HashCapacityExceeded" : f == 2 ? "RemovalQueueOverflow" : "HashCapacityExceeded|RemovalQueueOverflow";
+        }
+        void write() const {
+            std::ofstream out(filename, std::ios::binary | std::ios::trunc);
+            if (!out) throw std::runtime_error("CSV file could not be opened: " + filename);
+            out.imbue(std::locale::classic());
+            out << std::setprecision(std::numeric_limits<long double>::max_digits10);
+            bool first = true;
+            auto cell = [&](const auto& value) {
+                if (!first) out << ',';
+                first = false;
+                if constexpr (std::integral<std::remove_cvref_t<decltype(value)>>) out << +value;
+                else out << value;
+            };
+            auto end = [&] { out << '\n'; first = true; };
+            auto opt = [&](bool valid, const auto& value) { if (valid) cell(value); else cell(""); };
+            auto ratio = [&](long double n, long double d, int scale) {
+                if (d > 0) cell(n / d * scale); else cell("");
+            };
+            auto optional_ratio = [&](bool valid, long double n, long double d, int scale) {
+                if (valid) ratio(n, d, scale); else cell("");
+            };
+            auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
+            auto write_selection = [&](const SelectionStats& a, const SelectionStats& b) {
+                const auto attempts = a.attempts() - b.attempts();
+                ratio((a.rejected_by_width - b.rejected_by_width) + (a.replaced_by_width - b.replaced_by_width), attempts, 100);
+                ratio((a.rejected_by_hash - b.rejected_by_hash) + (a.replaced_by_hash - b.replaced_by_hash), attempts, 100);
+                cell(attempts);
+            };
+            for (const char* name : {
+                // 経過・観測位置
+                "elapsed_ms", "time_used_pct", "period_ms", "event",
+                "scope", "turn",
+                // 解の品質・改善
+                "best_cost", "best_gain", "best_updates", "best_unchanged_ms",
+                "found", "best_turn", "answer_candidates", "first_solution_ms",
+                "first_solution_budget_pct",
+                // 層のcost・充足・進行
+                "layer_size", "layer_cost_min", "layer_cost_mean", "layer_cost_max",
+                "layer_cost_stddev", "frontier_fill_pct", "frontier_done_pct", "frontier_limit",
+                // 探索量・速度
+                "expand_per_sec", "expanded_nodes", "candidates_per_expand", "generated_candidates",
+                "invalid_candidates",
+                // 幅・Hashによる選別
+                "width_discard_pct", "hash_discard_pct", "selection_attempts",
+                // 残候補・方式別の負荷
+                "pending_candidates", "peak_pending_candidates", "moves_per_expand", "peak_node_capacity",
+                // 終了・時間切れ・異常
+                "stop_reason", "completed_max_turn", "time_limit_reached", "overrun_ms",
+                "finalize_ms", "turn_budget_used_pct", "turn_budget_ms", "turn_time_limit_reached",
+                "turns_cut_by_time", "expanded_after_timeout", "diagnostic_flags",
+                // 設定
+                "beam_width", "max_turn", "time_limit_ms", "use_turn_time_limit",
+                "time_check_interval", "continue_on_timeout", "use_hash_dedup", "hash_table_capacity",
+                "max_turn_is_answer", "expand_answers", "apply_best_on_return",
+                // 方式・スキーマの識別
+                "algorithm", "state_mode", "turn_mode", "schema_version"
+            }) cell(name);
+            end();
+            DebugRuntime zero{};
+            const DebugRuntime* previous = &zero;
+            const DebugRuntime* search_end = nullptr;
+
+            for (const auto& row : rows) {
+                const auto& r = row.runtime;
+                if (row.event == EventType::SearchEnd) search_end = &r;
+
+                const bool total = row.event == EventType::RunEnd;
+                const bool local = row.event == EventType::TurnEnd ;
+                const bool frontier = row.event == EventType::TurnEnd;
+                const auto& s = total && search_end ? *search_end : r;
+                const auto& p = total ? zero : *previous;
+                const auto dt = s.elapsed_us - p.elapsed_us;
+                const auto expanded = s.expanded_nodes - p.expanded_nodes;
+                const auto generated = s.generated_candidates - p.generated_candidates;
+                cell(ms(r.elapsed_us));
+                ratio(ms(r.elapsed_us), r.param.time_limit_ms, 100);
+                cell(ms(dt));
+                cell(event_name(row.event));
+                cell(total ? "search_total" : "interval");
+                opt(local, r.turn);
+                opt(r.found, r.best_cost);
+                opt(s.found && p.found, (p.best_cost == s.best_cost ? 0.0L : static_cast<long double>(p.best_cost) - static_cast<long double>(s.best_cost)));
+                cell(s.best_update_count - p.best_update_count);
+                opt(s.found, ms(s.elapsed_us - s.last_best_update_us));
+                cell(r.found);
+                opt(r.found, r.best_turn);
+                cell(s.answer_candidates - p.answer_candidates);
+                opt(s.first_solution_us >= 0, ms(s.first_solution_us));
+                optional_ratio(s.first_solution_us >= 0, ms(s.first_solution_us), r.param.time_limit_ms, 100);
+                opt(frontier, r.layer_size);
+                opt(frontier && r.layer_size != 0, r.layer_cost_min);
+                opt(frontier && r.layer_size != 0 && std::isfinite(r.layer_cost_mean), r.layer_cost_mean);
+                opt(frontier && r.layer_size != 0, r.layer_cost_max);
+                opt(frontier && r.layer_size != 0 && std::isfinite(r.layer_cost_stddev), r.layer_cost_stddev);
+                optional_ratio(frontier, r.frontier_size, r.frontier_limit, 100);
+                optional_ratio(frontier, r.frontier_expanded, r.frontier_size, 100);
+                opt(frontier, r.frontier_limit);
+                ratio(expanded * 1000000.0L, dt, 1);
+                cell(expanded);
+                ratio(generated, expanded, 1);
+                cell(generated);
+                cell(s.invalid_candidates - p.invalid_candidates);
+                write_selection(s.selection, p.selection);
+                cell(s.pending_candidates);
+                cell(s.peak_pending_candidates);
+                ratio((s.forward_calls - p.forward_calls) + (s.backward_calls - p.backward_calls), expanded, 1);
+                cell(s.peak_node_capacity);
+                cell(reason_name(r.stop_reason));
+                cell(r.completed_max_turn);
+                cell(r.time_limit_reached);
+                opt(total && r.param.time_limit_ms > 0, std::max(0.0, ms(r.elapsed_us) - r.param.time_limit_ms));
+                opt(total && search_end, ms(r.elapsed_us - s.elapsed_us));
+                optional_ratio(local && r.turn_deadline_us >= 0, r.turn_elapsed_us, r.turn_deadline_us - r.turn_start_us, 100);
+                opt(local && r.turn_deadline_us >= 0, ms(r.turn_deadline_us - r.turn_start_us));
+                opt(local, r.turn_time_limit_reached);
+                cell(s.turns_cut_by_time - p.turns_cut_by_time);
+                cell(s.expanded_after_timeout - p.expanded_after_timeout);
+                cell(flags(r.diagnostic_flags));
+                cell(r.param.beam_width);
+                cell(r.param.max_turn);
+                cell(r.param.time_limit_ms);
+                cell(r.param.use_turn_time_limit);
+                cell(r.param.time_check_interval);
+                cell(r.param.continue_on_timeout);
+                cell(r.param.use_hash_dedup);
+                cell(r.hash_table_capacity);
+                cell(r.param.max_turn_is_answer);
+                cell(r.param.expand_answers);
+                cell(r.param.apply_best_on_return);
+                cell("beam");
+                cell("delta");
+                cell("single");
+                cell(6);
+                end();
+                previous = &r;
+            }
+            out.close();
+            if (!out) throw std::runtime_error("CSV write failed: " + filename);
+        }
 #else
-    explicit CsvStatHook(std::string = "beam_stat.csv", double = 50.0) {}
-    void operator()(EventType, const Runtime&) {}
+        explicit CsvStatHook(std::string = "beam_stat.csv", double = 50) {}
+        void operator()(EventType, const Runtime&) const noexcept {}
 #endif
-};
+    };
+
 
 // 探索結果。
 template<class Action>
@@ -314,13 +413,12 @@ struct Result {
 };
 
 // expand に渡す候補追加器。
-// 公開型なので、expand関数の引数型として明示できる。
+// 診断設定は外側のBeam型で決まり、Emitterの型引数には含めない。
 // push の戻り値 true は、この呼び出し時点で候補がSelectorに入ったことを表す。
 // 後続候補に置換される可能性があるため、最終結果に残る保証ではない。
 // 有効解は幅・Hashの選別前に保存する。falseを返しても最良解を更新する場合がある。
 // is_answer=true は解候補フラグ。expand_answers=falseなら保存だけを行う。
-template<class Action>
-class Emitter {
+template<class Action> class Emitter {
 public:
     // action, cost のみを渡すと、現在ノードの hash を引き継ぐ。
     template<class U>
@@ -385,14 +483,10 @@ static void call_expand(Expand& expand, const NodeView& now, Runtime& rt, Emitte
     // Runtime はライブラリ管理情報なので、ユーザー側から変更できないよう const 参照だけを渡す。
     if constexpr (std::is_invocable_v<Expand&, const NodeView&, const Runtime&, Emitter<Action>&>) {
         expand(now, static_cast<const Runtime&>(rt), emit);
-    } else if constexpr (std::is_invocable_v<Expand&, const NodeView&, Emitter<Action>&>) {
-        expand(now, emit);
     } else {
-        static_assert(
-            std::is_invocable_v<Expand&, const NodeView&, const Runtime&, Emitter<Action>&> ||
-            std::is_invocable_v<Expand&, const NodeView&, Emitter<Action>&>,
-            "expand must accept (const NodeView&, const Runtime&, Emitter&) or (const NodeView&, Emitter&). Runtime must be const."
-        );
+        static_assert(std::is_invocable_v<Expand&, const NodeView&, Emitter<Action>&>,
+                      "expand must accept (const NodeView&, const Runtime&, Emitter&) or (const NodeView&, Emitter&). Runtime must be const.");
+        expand(now, emit);
     }
 }
 
@@ -456,31 +550,21 @@ private:
     std::vector<int> values_;
     std::vector<std::uint32_t> used_;
 
-    int bucket(Hash key) const { return static_cast<int>(detail::mix64(detail::hash_to_u64(key))) & mask_; }
+    int bucket(Hash key) const { return static_cast<int>(detail::mix64(key)) & mask_; }
 };
 
 // ============================================================
 // ビームサーチ本体
 // ============================================================
 
-template<class Action>
-class Engine {
-    // 空の組み込みHookでは、通知用の集計・時計取得も行わない。
-    template<class Hook>
-    static constexpr bool has_debug_hook =
-        !std::same_as<std::remove_cvref_t<Hook>, NoOp>
-#ifndef LOCAL
-        && !std::same_as<std::remove_cvref_t<Hook>, CsvStatHook>
-#endif
-        ;
+template<class Action> class Engine {
+    // 診断無効時は、通知用の集計・時計取得も行わない。
     friend class Emitter<Action>;
 
     static_assert(std::default_initializable<Action>,
                   "Action must be default initializable because the root node stores a dummy action");
     static_assert(std::copy_constructible<Action>,
                   "Action must be copy constructible because candidates and paths store actions");
-    static_assert(std::move_constructible<Action>,
-                  "Action must be move constructible");
     static_assert(std::assignable_from<Action&, Action>,
                   "Action must be assignable because selectors replace candidates in-place");
 
@@ -499,7 +583,6 @@ class Engine {
         Hash hash{};
         int turn = 0;
         int parent = -1;
-
     };
 
     template<class T>
@@ -512,7 +595,6 @@ class Engine {
         void init(int beam_width, int hash_capacity, bool use_hash) {
             beam_width_ = beam_width;
             use_hash_ = use_hash;
-            candidates_.clear();
             candidates_.reserve(beam_width_);
             costs_.resize(beam_width_);
             seg_n_ = 1;
@@ -619,72 +701,85 @@ class Engine {
 
 public:
     Engine(Param param_, Cost initial_cost_, Hash initial_hash_)
-        : rt{normalize(param_)},
+        : rt{},
           initial_cost(initial_cost_),
-          initial_hash(initial_hash_) {
+          initial_hash(initial_hash_) { rt.param = normalize(param_);
+        if constexpr (diagnostics_enabled) rt.hash_table_capacity = rt.param.use_hash_dedup ?
+            detail::ceil_pow2(std::max(4, rt.param.hash_capacity)) : 0;
     }
 
     template<class Expand, class MoveForward, class MoveBackward, class DebugHook>
     Result<Action> run(Expand&& expand, MoveForward&& move_forward, MoveBackward&& move_backward, DebugHook&& debug_hook) {
-
         start_clock_us = detail::now_microseconds();
         limit_us = detail::time_limit_to_microseconds(rt.param.time_limit_ms);
         use_time_limit = (limit_us > 0);
 
-        initialize_search();
-
         const bool valid_initial = detail::is_valid_cost(initial_cost);
+        if (valid_initial && rt.param.max_turn > 0) initialize_search();
         rt.best_cost = initial_cost;
         rt.best_turn = 0;
 
         update_time();
         if (use_time_limit && rt.elapsed_us >= limit_us) rt.time_limit_reached = true;
-        emit_hook(EventType::RunStart, debug_hook);
         if (valid_initial && rt.param.max_turn == 0 && rt.param.max_turn_is_answer) {
             set_best(initial_cost, 0);
         }
 
         bool minimal_mode = rt.time_limit_reached;
-        completed_max_turn = valid_initial && rt.param.max_turn == 0;
+        rt.completed_max_turn = valid_initial && rt.param.max_turn == 0;
 
-        if (!valid_initial) frontier_size = 0;
+        if constexpr (diagnostics_enabled) if (rt.found) rt.first_solution_us = rt.last_best_update_us = 0;
+        begin_frontier(valid_initial && rt.param.max_turn > 0 ? 1 : 0, rt.param.beam_width);
+        rt.stop_reason = !valid_initial ? StopReason::InvalidInitial :
+            rt.param.max_turn == 0 ? StopReason::Completed : StopReason::None;
+        emit_hook(EventType::RunStart, debug_hook);
         for (int turn = 0; valid_initial && turn < rt.param.max_turn; ++turn) {
             rt.turn = turn;
-            rt.active_width = 0;
-            rt.selected_width = 0;
-            rt.candidate_count = 0;
-            selector.clear();
+
             if (mark_time_limit_if_elapsed()) minimal_mode = true;
             begin_turn_time();
+            if constexpr (diagnostics_enabled) begin_frontier(static_cast<std::size_t>(frontier_size), minimal_mode ? 1 : static_cast<std::size_t>(rt.param.beam_width));
+            if constexpr (diagnostics_enabled) sample_layer_costs([&](const auto& add) {
+                for (int i = 0; i < frontier_size; ++i) add(nodes[frontier_first + i].cost);
+            });
             if (stop_on_timeout()) break;
 
             if (use_time_limit) minimal_mode = expand_turn_time_checked(minimal_mode, expand, move_forward, move_backward);
             else expand_turn_full(expand, move_forward, move_backward);
-            if (stop_on_timeout()) break;
+            if (stop_on_timeout()) { end_visit(debug_hook); break; }
             materialize_arrival(turn + 1, minimal_mode);
-            refresh_runtime_usage();
             if (mark_time_limit_if_elapsed()) minimal_mode = true;
-            turn_timing_active = false;
-            emit_hook(EventType::TurnEnd, debug_hook);
+            end_visit(debug_hook);
 
-            if (completed_max_turn) break;
+            if (rt.completed_max_turn) break;
             if (rt.time_limit_reached) minimal_mode = true;
             if (frontier_size == 0) break;
         }
 
-        // ライブラリ呼び出し後は、外部状態を初期状態へ戻す。
         turn_timing_active = false;
-        move_to_node(root, move_forward, move_backward);
-        finalize_runtime_for_result();
-        emit_hook(EventType::RunEnd, debug_hook);
+        rt.stop_reason = !valid_initial ? StopReason::InvalidInitial :
+            stop_on_timeout() ? StopReason::TimeLimit :
+            rt.completed_max_turn ? StopReason::Completed : StopReason::Exhausted;
+        emit_hook(EventType::SearchEnd, debug_hook);
 
+        // 初期状態へ戻し、必要な場合だけ返却用の最良経路を再生する。
+        move_to_node(root, move_forward, move_backward);
         auto res = build_result();
+        if (rt.param.apply_best_on_return && rt.found) {
+            for (const auto& action : res.path) {
+                call_move(move_forward, action);
+                if constexpr (diagnostics_enabled) ++rt.forward_calls;
+            }
+        }
+        finish(res, debug_hook);
+
         print_result_warnings(res);
         return res;
     }
 
 private:
-    Runtime rt;
+    using ActiveRuntime = std::conditional_t<diagnostics_enabled, DebugRuntime, Runtime>;
+    ActiveRuntime rt;
     Cost initial_cost{};
     Hash initial_hash{};
     std::int64_t start_clock_us = 0;
@@ -709,7 +804,6 @@ private:
     // 解として保存する末尾はビーム幅・ノード容量を消費しない。
     int best_parent = -1;
     std::optional<Action> best_action;
-    bool completed_max_turn = false;
 
     std::size_t reclaim_at = 4096;
 
@@ -771,15 +865,6 @@ private:
         selector.init(rt.param.beam_width, rt.param.hash_capacity, rt.param.use_hash_dedup);
 
         nodes.push_back(Node{Action{}, initial_cost, initial_hash, 0, -1});
-        rt.reserved_nodes = nodes.capacity();
-        refresh_runtime_usage();
-    }
-
-    void refresh_runtime_usage() {
-        rt.used_nodes = static_cast<int>(nodes.size());
-        rt.pending_candidates = selector.size();
-        rt.max_used_nodes = std::max(rt.max_used_nodes, rt.used_nodes);
-        rt.max_pending_candidates = std::max(rt.max_pending_candidates, rt.pending_candidates);
     }
 
     void update_time() {
@@ -788,26 +873,13 @@ private:
             rt.turn_elapsed_us = rt.elapsed_us - rt.turn_start_us;
             rt.turn_time_limit_reached |= rt.elapsed_us >= rt.turn_deadline_us;
         }
-        rt.time_remaining_ms = use_time_limit
-            ? std::max(0.0, static_cast<double>(limit_us - rt.elapsed_us) * 0.001)
-            : -1.0;
-    }
-
-    void finalize_runtime_for_result() {
-        refresh_runtime_usage();
-        update_time();
     }
 
     template<class DebugHook>
     void emit_hook(EventType event_type, DebugHook& debug_hook) {
-        // 空の組み込みHookでは、通知用の時刻・統計更新を省略する。
-        // RunEndの最終Runtimeは、呼び出し元でfinalize_runtime_for_result()により整える。
-        if constexpr (has_debug_hook<DebugHook>) {
-            if (event_type != EventType::RunEnd) {
-                refresh_runtime_usage();
-                update_time();
-            }
-            debug_hook(event_type, static_cast<const Runtime&>(rt));
+        if constexpr (diagnostics_enabled) {
+            update_time(); snapshot();
+            debug_hook(event_type, static_cast<const DebugRuntime&>(rt));
         }
     }
 
@@ -844,44 +916,52 @@ private:
 
     template<class U>
     bool push_candidate(int parent, U&& action, Cost cost, Hash hash, bool has_hash, bool is_answer) {
-        ++rt.generated_candidates;
+        if constexpr (diagnostics_enabled) ++rt.generated_candidates;
         if (!detail::is_valid_cost(cost)) {
-            ++rt.invalid_candidates;
+            if constexpr (diagnostics_enabled) ++rt.invalid_candidates;
             return false;
         }
 
         const int arrival = nodes[parent].turn + 1;
-        if (arrival == rt.param.max_turn) { completed_max_turn = true; ++rt.terminal_candidates; }
+        if (arrival == rt.param.max_turn) { rt.completed_max_turn = true; }
         if (is_answer || (rt.param.max_turn_is_answer && arrival == rt.param.max_turn)) {
+            if constexpr (diagnostics_enabled) ++rt.answer_candidates;
             if (!rt.found || cost < rt.best_cost) {
                 best_action.emplace(action);
                 best_parent = parent;
                 set_best(cost, arrival);
             }
             if (!rt.param.expand_answers && arrival < rt.param.max_turn) {
-                ++rt.answer_only_candidates;
                 return false;
             }
         }
         if (arrival == rt.param.max_turn) return false;
         if (selector.rejects_by_width(cost)) {
-            ++rt.pruned_by_width;
+            if constexpr (diagnostics_enabled) ++rt.selection.rejected_by_width;
             return false;
         }
 
         const int before = selector.size();
+        if constexpr (diagnostics_enabled) rt.selection.hash_checked += rt.param.use_hash_dedup && has_hash;
         const auto choice = selector.choose(cost, hash, has_hash);
-        if (choice.duplicate) ++rt.duplicate_by_hash;
+
         // 幅による棄却はchooseの前に済んでいる。ここでの不採用はhashによるもの。
         if (choice.slot < 0) {
-            ++rt.pruned_by_hash;
-            if (!choice.duplicate) ++rt.hash_table_full;
+            if constexpr (diagnostics_enabled) {
+                if (choice.duplicate) ++rt.selection.rejected_by_hash;
+                else ++rt.selection.rejected_by_capacity;
+            }
+            if (!choice.duplicate) rt.diagnostic_flags |= 1u;
             return false;
+        }
+        if constexpr (diagnostics_enabled) {
+            ++rt.selection.accepted;
+            if (choice.duplicate) ++rt.selection.replaced_by_hash;
+            else if (choice.slot < before) ++rt.selection.replaced_by_width;
         }
         selector.put(choice, Candidate{std::forward<U>(action), cost, hash, parent, has_hash});
         if (selector.size() > before) {
-            rt.pending_candidates = selector.size();
-            rt.max_pending_candidates = std::max(rt.max_pending_candidates, rt.pending_candidates);
+            peak();
         }
         return true;
     }
@@ -904,7 +984,7 @@ private:
         forward_stack.clear();
         auto back = [&] {
             call_move(move_backward, nodes[current_node].action);
-            ++rt.move_backward_count;
+            if constexpr (diagnostics_enabled) ++rt.backward_calls;
             current_node = nodes[current_node].parent;
         };
         while (nodes[current_node].turn > nodes[target].turn) back();
@@ -916,7 +996,8 @@ private:
         }
         for (auto it = forward_stack.rbegin(); it != forward_stack.rend(); ++it) {
             call_move(move_forward, nodes[*it].action);
-            ++rt.move_forward_count; current_node = *it;
+            if constexpr (diagnostics_enabled) ++rt.forward_calls;
+            current_node = *it;
         }
     }
 
@@ -928,16 +1009,10 @@ private:
         NodeView now{node.turn, node.cost, node.hash};
         Emitter<Action> emit(*this, id, node.hash);
 
-        ++rt.active_width;
-
-        if constexpr (std::is_invocable_v<Expand&, const NodeView&,
-                                           const Runtime&, Emitter<Action>&>) {
-            // Runtime付きexpandには保持量だけを最新化して渡す。
-            // elapsed_usはtime limit判定・Hook・RunEndで更新し、expandごとの時刻取得を避ける。
-            refresh_runtime_usage();
-        }
+        begin_expansion();
         call_expand(expand, now, rt, emit);
         ++rt.expanded_nodes;
+        observe_best_update();
     }
 
     // time_limit_ms==0用の通常探索ホットパス。縮退探索用の分岐を混ぜない。
@@ -958,7 +1033,7 @@ private:
         int next_index = 0;
         if (!minimal_mode) {
             for (; next_index < frontier_size; ++next_index) {
-                if (rt.turn_time_limit_reached && (selector.size() != 0 || completed_max_turn)) break;
+                if (rt.turn_time_limit_reached && (selector.size() != 0 || rt.completed_max_turn)) break;
                 expand_node(frontier_first + next_index, expand, move_forward, move_backward);
                 if (need_switch_to_minimal_by_time()) {
                     minimal_mode = true;
@@ -976,8 +1051,7 @@ private:
     // 通常時はfrontierの親順bucketで次turnを作り、次turn展開時のLCA移動距離を短くする。
     // 縮退探索時は最良候補1本だけを追加する。
     void materialize_arrival(int arrival_turn, bool minimal) {
-        rt.candidate_count = selector.size();
-        if (selector.empty()) { frontier_size = 0; return; }
+        if (selector.empty()) { frontier_size = 0; if constexpr (diagnostics_enabled) rt.pending_frontier_ = 0; return; }
         auto& cands = selector.selected();
         order.resize(minimal ? 1 : cands.size());
         if (minimal) {
@@ -1002,19 +1076,18 @@ private:
             auto& cand = cands[i];
             nodes.push_back(Node{std::move(cand.action), cand.cost, cand.hash, arrival_turn, cand.parent});
             ++frontier_size;
-            ++rt.selected_width;
-            ++rt.selected_nodes;
         }
-        rt.reserved_nodes = nodes.capacity();
+
         selector.clear();
-        refresh_runtime_usage();
+
+        if constexpr (diagnostics_enabled) rt.pending_frontier_ = static_cast<std::size_t>(frontier_size);
     }
 
     void set_best(Cost cost, int turn) {
         rt.found = true;
         rt.best_cost = cost;
         rt.best_turn = turn;
-        ++rt.best_update_count;
+        if constexpr (diagnostics_enabled) { ++rt.best_update_count; rt.last_best_update_us = -1; }
     }
 
     std::vector<Action> build_path(int node_id) const {
@@ -1032,28 +1105,118 @@ private:
         if (!rt.param.print_warnings) return;
         if (res.hash_table_full) {
             std::cerr << "[bs] warning: hash_table_full; hash_capacity="
-                      << res.runtime.param.hash_capacity << ", beam_width=" << rt.param.beam_width << '\n';
+                      << rt.param.hash_capacity << ", beam_width=" << rt.param.beam_width << '\n';
         }
     }
 
     Result<Action> build_result() {
         Result<Action> res;
         res.found = rt.found;
-        res.time_limit_reached = rt.time_limit_reached;
-        res.completed_max_turn = completed_max_turn;
-        res.hash_table_full = (rt.hash_table_full > 0);
+        res.completed_max_turn = rt.completed_max_turn;
+        res.hash_table_full = ((rt.diagnostic_flags & 1u) != 0);
         res.best_cost = rt.best_cost;
         res.best_turn = rt.best_turn;
         res.path = build_path(best_parent);
         if (best_action) res.path.push_back(*best_action);
-        res.runtime = rt;
         return res;
     }
+
+    private:
+    void peak() {
+        if constexpr (diagnostics_enabled) {
+            rt.pending_candidates = static_cast<std::size_t>(selector.size()) + rt.pending_frontier_;
+            rt.peak_pending_candidates = std::max(rt.peak_pending_candidates, rt.pending_candidates);
+        }
+    }
+    void snapshot() {
+        if constexpr (diagnostics_enabled) {
+            peak();
+            rt.peak_node_capacity = nodes.capacity();
+        }
+    }
+
+    private:
+        // 選別後・展開前のcostを2回走査。基準値との差で平均・母分散を安定に求める。
+        template<class Visit> void sample_layer_costs(Visit visit) {
+            if constexpr (diagnostics_enabled) {
+                rt.layer_size = 0;
+                rt.layer_cost_mean = rt.layer_cost_stddev = 0;
+                long double origin = 0, sum = 0;
+                bool finite = true;
+                visit([&](Cost cost) {
+                    if (rt.layer_size++ == 0) rt.layer_cost_min = rt.layer_cost_max = cost;
+                    else {
+                        rt.layer_cost_min = std::min(rt.layer_cost_min, cost);
+                        rt.layer_cost_max = std::max(rt.layer_cost_max, cost);
+                    }
+                    const long double value = static_cast<long double>(cost);
+                    if (!std::isfinite(value)) { finite = false; return; }
+                    if (rt.layer_size == 1) origin = value;
+                    sum += value - origin;
+                });
+                if (rt.layer_size == 0) return;
+                const long double mean = sum / static_cast<long double>(rt.layer_size);
+                if (!finite || !std::isfinite(mean)) {
+                    rt.layer_cost_mean = rt.layer_cost_stddev = std::numeric_limits<long double>::quiet_NaN();
+                    return;
+                }
+                long double variance = 0;
+                visit([&](Cost cost) {
+                    const long double diff = (static_cast<long double>(cost) - origin) - mean;
+                    variance += diff * diff;
+                });
+                rt.layer_cost_mean = origin + mean;
+                rt.layer_cost_stddev = std::sqrt(variance / static_cast<long double>(rt.layer_size));
+            }
+        }
+        void begin_frontier(std::size_t size, std::size_t limit) {
+            if constexpr (diagnostics_enabled) {
+                rt.frontier_size = std::min(size, limit);
+                rt.frontier_limit = limit;
+                rt.frontier_expanded = 0;
+                rt.pending_frontier_ = size;
+            }
+        }
+        void begin_expansion() {
+            if constexpr (diagnostics_enabled) {
+                ++rt.frontier_expanded;
+                --rt.pending_frontier_;
+                rt.expanded_after_timeout += rt.time_limit_reached;
+            }
+        }
+        void observe_best_update() {
+            if constexpr (diagnostics_enabled) {
+                if (rt.found && rt.last_best_update_us < 0) {
+                    if (rt.first_solution_us < 0) {
+                        update_time();
+                        rt.first_solution_us = rt.last_best_update_us = rt.elapsed_us;
+                    } else rt.last_best_update_us = detail::now_microseconds() - start_clock_us;
+                }
+            }
+        }
+    public:
+        template<class ResultType, class Hook>
+        void finish(ResultType& result, Hook& hook) {
+            update_time();
+            if (limit_us > 0 && rt.elapsed_us >= limit_us) rt.time_limit_reached = true;
+            if constexpr (diagnostics_enabled) { snapshot(); hook(EventType::RunEnd, static_cast<const DebugRuntime&>(rt)); }
+            result.runtime = rt; result.time_limit_reached = rt.time_limit_reached;
+        }
+
+    private:
+        template<class Hook> void end_visit(Hook& hook) {
+            turn_timing_active = false;
+            if constexpr (diagnostics_enabled) {
+                if (rt.frontier_expanded < rt.frontier_size && (rt.time_limit_reached || rt.turn_time_limit_reached)) ++rt.turns_cut_by_time;
+                emit_hook(EventType::TurnEnd, hook);
+            }
+        }
 };
 
 public:
     // 探索実行API。
     // Action型では外部状態を move_forward / move_backward で管理する。
+    // 正常返却時は初期状態。apply_best_on_return=trueかつ解ありなら最良経路の到達状態。
     // initial_hash はNodeView.hashと差分Hash計算の起点。省略時はHash{0}。
     template<
         class Action,
@@ -1089,564 +1252,313 @@ public:
                            std::forward<MoveForward>(move_forward), std::forward<MoveBackward>(move_backward),
                            std::forward<DebugHook>(debug_hook));
     }
-
 };
 
 // ============================================================
 // Emitter 内部push定義
 // ============================================================
 // Engine本体の定義後に置くことで、公開型のまま内部pushへ直接転送する。
-template<CostType Cost, HashType Hash>
+template<CostType Cost, HashType Hash, bool EnableDiagnostics>
 template<class Action>
 template<class U>
-bool Beam<Cost, Hash>::Emitter<Action>::push_impl(U&& action, Cost cost, Hash hash, bool has_hash, bool is_answer) {
+bool Beam<Cost, Hash, EnableDiagnostics>::Emitter<Action>::push_impl(U&& action, Cost cost, Hash hash, bool has_hash, bool is_answer) {
     return engine_.push_candidate(parent_, std::forward<U>(action), cost, hash, has_hash, is_answer);
 }
-
 }  // namespace bs
 
+
 #if __INCLUDE_LEVEL__ == 0
-
+#define RUNTIME_TEST_BEAM bs::Beam
+#define RUNTIME_TEST_CLOCK bs::detail::TestClock
+#define RUNTIME_TEST_DELTA 1
+#define RUNTIME_TEST_MULTI 0
+#define RUNTIME_TEST_SUB 0
+#define RUNTIME_TEST_CHOKU 0
 #include <cstdlib>
-#include <fstream>
-#include <thread>
-
-namespace {
-
-struct Act {
-    int add = 0;
-    std::uint64_t token = 0;
-};
-
-template<class BeamType>
-concept HasCandidateAlias = requires { typename BeamType::template Candidate<Act>; };
-
-template<class ResultType>
-concept HasReachedTurn = requires(ResultType r) { r.reached_turn; };
-
-static_assert(bs::HashType<std::uint64_t>);
-static_assert(bs::HashType<std::uint32_t>);
-static_assert(!bs::HashType<int>);
-static_assert(!bs::CompatibleHashArg<int, std::uint64_t>);
-static_assert(bs::CompatibleHashArg<std::uint32_t, std::uint64_t>);
-static_assert(!std::default_initializable<bs::Beam<int>::Emitter<Act>>);
-static_assert(!HasCandidateAlias<bs::Beam<int>>);
-static_assert(!HasReachedTurn<bs::Beam<int>::Result<Act>>);
-
-void require(bool cond, const std::string& msg) {
-    if (!cond) {
-        std::cerr << "[test] failed: " << msg << '\n';
-        std::exit(1);
-    }
-}
-
-void check(bool cond, const std::string& msg) {
-    require(cond, msg);
-    std::cout << "[test] ok: " << msg << '\n';
-}
-
-std::uint64_t smix(std::uint64_t x) {
-    x += 0x9e3779b97f4a7c15ULL;
-    x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    x = (x ^ (x >> 27)) * 0x94d049bb133111ebULL;
-    return x ^ (x >> 31);
-}
-
-// 多数のテストを少数のfunctor型で実行し、O2でも自己テストを短時間でコンパイルできるようにする。
-struct IntWorld {
-    int mode = 0;
-    int sum = 0;
-    std::uint64_t hash = 0;
-    std::vector<Act> stack;
-    std::uint64_t seed = 0;
-    int turn1_expanded = 0;
-    int expanded_after_root = 0;
-
-    void reset(int m) {
-        mode = m;
-        sum = 0;
-        hash = 0;
-        stack.clear();
-        seed = smix(0xC0FFEEULL + static_cast<std::uint64_t>(m));
-        turn1_expanded = 0;
-        expanded_after_root = 0;
-    }
-};
-
-struct IntExpand {
-    IntWorld* w = nullptr;
-
-    template<class Emit>
-    void operator()(bs::Beam<int>::NodeView now, Emit& emit) {
-        switch (w->mode) {
-            case 0: {  // emitなし。rootや異常パラメータの確認用。
-                return;
-            }
-            case 1: {  // 小さな固定木。状態・hash・path復元を確認する。
-                require(now.cost == w->sum && now.hash == w->hash, "NodeView matches external state");
-                if (now.turn == 0) {
-                    emit.push(Act{5, 11}, 5, static_cast<std::uint64_t>(smix(11)));
-                    emit.push(Act{1, 22}, 1, static_cast<std::uint64_t>(smix(22)));
-                    emit.push(Act{9, 33}, 9, static_cast<std::uint64_t>(smix(33)));
-                } else if (now.turn == 1) {
-                    emit.push(Act{-5, 44}, now.cost - 5, static_cast<std::uint64_t>(w->hash ^ smix(44)));
-                    emit.push(Act{4, 55}, now.cost + 4, static_cast<std::uint64_t>(w->hash ^ smix(55)));
-                } else if (now.turn == 2) {
-                    emit.push(Act{1, 66}, now.cost + 1, static_cast<std::uint64_t>(w->hash ^ smix(66)));
-                }
-                return;
-            }
-            case 2: {  // 一本道。LCA climbのmove回数を確認する。
-                require(now.turn == w->sum && now.cost == w->sum, "line state matches");
-                emit.push(Act{1, 1}, now.cost + 1, static_cast<std::uint64_t>(now.turn + 1));
-                return;
-            }
-            case 3: {  // shallow/wide。満杯後の早期幅枝刈りを確認する。
-                if (now.turn == 0) {
-                    for (int i = 0; i <= 1000; ++i) {
-                        emit.push(Act{i, static_cast<std::uint64_t>(i)}, i, static_cast<std::uint64_t>(i), true);
-                    }
-                }
-                return;
-            }
-            case 4: {  // hash重複。改善は置換し、悪化は棄却する。
-                if (now.turn != 0) return;
-                emit.push(Act{1, 1}, 10, static_cast<std::uint64_t>(999), true);
-                emit.push(Act{2, 2}, 3, static_cast<std::uint64_t>(999), true);
-                emit.push(Act{3, 3}, 7, static_cast<std::uint64_t>(999), true);
-                return;
-            }
-            case 5: {  // 複数is_answer。生成順ではなく最良costを選ぶ。
-                emit.push(Act{100, 1}, 100, static_cast<std::uint64_t>(100), true);
-                emit.push(Act{1, 2}, 1, static_cast<std::uint64_t>(1), true);
-                return;
-            }
-            case 6: {  // is_answerなし。max_turn_is_answer=falseなら解なし。
-                emit.push(Act{1, 1}, -1);
-                return;
-            }
-            case 7: {  // node capacity overflow。
-                emit.push(Act{1, 1}, 1, static_cast<std::uint64_t>(1));
-                emit.push(Act{2, 2}, 2, static_cast<std::uint64_t>(2));
-                return;
-            }
-            case 8: {  // 小規模ランダムstress。状態復元とpath再生可能性を見る。
-                require(now.cost == w->sum, "random state matches");
-                std::uint64_t local = smix(w->seed ^ w->hash ^ static_cast<std::uint64_t>(w->sum + now.turn * 1009));
-                int branch = static_cast<int>(local % 7);
-                if ((local >> 8) % 17 == 0) branch = 0;
-                for (int k = 0; k < branch; ++k) {
-                    local = smix(local + static_cast<std::uint64_t>(k + 1));
-                    const int add = static_cast<int>((local >> 8) % 41) - 15;
-                    const std::uint64_t token = smix(local ^ 0xABCDEF1234567890ULL);
-                    const bool is_answer = (now.turn + 1 >= 8) || (((local >> 16) & 31ULL) == 0);
-                    emit.push(Act{add, token}, w->sum + add, static_cast<std::uint64_t>(w->hash ^ smix(token)), is_answer);
-                }
-                return;
-            }
-            case 9: {  // time limit検出後、同じturnの未展開候補から最良1本を追加展開する。
-                if (now.turn == 1) {
-                    ++w->turn1_expanded;
-                    bs::detail::TestClock::value += 8000;
-                }
-                if (now.turn > 0) ++w->expanded_after_root;
-                for (int k = 0; k < 4; ++k) {
-                    emit.push(Act{k, static_cast<std::uint64_t>(now.turn * 100 + k + 1)},
-                              now.cost + k,
-                              static_cast<std::uint64_t>(now.turn * 100 + k + 1),
-                              false);
-                }
-                return;
-            }
-        }
-    }
-};
-
-struct IntForward {
-    IntWorld* w = nullptr;
-    void operator()(const Act& a) {
-        w->sum += a.add;
-        w->hash ^= smix(a.token);
-        w->stack.push_back(a);
-    }
-};
-
-struct IntBackward {
-    IntWorld* w = nullptr;
-    void operator()(const Act& a) {
-        require(!w->stack.empty() && w->stack.back().token == a.token, "move_backward is LIFO");
-        w->stack.pop_back();
-        w->hash ^= smix(a.token);
-        w->sum -= a.add;
-    }
-};
-
-struct DoubleExpand {
-    template<class Emit>
-    void operator()(bs::Beam<double>::NodeView, Emit& emit) const {
-        emit.push(Act{1, 1}, std::numeric_limits<double>::quiet_NaN());
-        emit.push(Act{2, 2}, 2.5, true);
-    }
-};
-
-// 公開Emitter型と32bit Hashを明示指定できることを確認する。
-struct U32TypedExpand {
-    void operator()(const bs::Beam<int, std::uint32_t>::NodeView& now,
-                    bs::Beam<int, std::uint32_t>::Emitter<Act>& emit) const {
-        require(now.hash == std::uint32_t{0}, "typed NodeView hash is uint32_t");
-        emit.push(Act{4, 4}, 4, std::uint32_t{4});
-        emit.push(Act{2, 2}, 2, std::uint32_t{2});
-    }
-};
-
-void run_unit_tests() {
-    using BS = bs::Beam<int>;
-    using BSD = bs::Beam<double>;
-    using BSU32 = bs::Beam<int, std::uint32_t>;
-    static_assert(std::same_as<decltype(BS::Param{}.time_limit_ms), double>);
-    static_assert(std::same_as<decltype(BS::Runtime{}.param.time_limit_ms), double>);
-    using Param = BS::Param;
-    static_assert(!std::is_default_constructible_v<BS::Emitter<Act>>);
-    IntWorld world;
-    IntExpand expand{&world};
-    IntForward mf{&world};
-    IntBackward mb{&world};
-
-    // max_turn=0、max_turn_is_answer=false、異常パラメータ正規化。
-    {
-        world.reset(0);
-        Param p;
-        p.max_turn = 0;
-        p.beam_width = 3;
-        auto res = BS::run<Act>(p, 7, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == 7 && res.path.empty(), "root answer at max_turn zero");
-        check(world.sum == 0 && world.hash == 0 && world.stack.empty(), "root state restored");
-    }
-    {
-        world.reset(0);
-        Param p;
-        p.max_turn = 0;
-        p.max_turn_is_answer = false;
-        auto res = BS::run<Act>(p, 7, 0ULL, expand, mf, mb);
-        check(!res.found && res.path.empty(), "root is not answer when disabled");
-    }
-    {
-        world.reset(0);
-        Param p;
-        p.max_turn = -5;
-        p.beam_width = 0;
-        auto res = BS::run<Act>(p, 3, 0ULL, expand, mf, mb);
-        check(res.found && res.runtime.param.max_turn == 0 && res.runtime.param.beam_width == 1,
-              "invalid params are normalized");
-    }
-
-    // LCA差分移動、bucket materialize、path復元、root復元。
-    {
-        world.reset(1);
-        Param p;
-        p.max_turn = 3;
-        p.beam_width = 2;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == -3 && res.best_turn == 3, "basic tree best cost");
-        check(res.path.size() == 3 && res.path[0].add == 1 && res.path[1].add == -5 && res.path[2].add == 1,
-              "basic tree path restored");
-        check(world.sum == 0 && world.hash == 0 && world.stack.empty(), "state restored to root after run");
-    }
-    {
-        world.reset(2);
-        Param p;
-        p.max_turn = 100;
-        p.beam_width = 1;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == 100 && world.sum == 0, "line search succeeds");
-        check(res.runtime.move_forward_count == 99 && res.runtime.move_backward_count == 99,
-              "LCA climb move count is optimized");
-    }
-
-    // Candidate構築前の早期幅枝刈り。
-    {
-        world.reset(3);
-        Param p;
-        p.max_turn = 2;
-        p.beam_width = 1;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == 0 && res.runtime.pruned_by_width >= 1000,
-              "early width prune works");
-    }
-
-    // hash重複、is_answer、max_turn_is_answer=false、容量不足。
-    {
-        world.reset(4);
-        Param p;
-        p.max_turn = 2;
-        p.beam_width = 4;
-        p.use_hash_dedup = true;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == 3 && res.path[0].add == 2, "hash duplicate replacement");
-        check(res.runtime.duplicate_by_hash == 2 && res.runtime.pruned_by_hash == 1, "hash stats counted");
-    }
-    {
-        world.reset(5);
-        Param p;
-        p.max_turn = 1;
-        p.beam_width = 4;
-        p.max_turn_is_answer = false;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.best_cost == 1 && res.path[0].add == 1, "best is_answer candidate is selected");
-    }
-    {
-        world.reset(6);
-        Param p;
-        p.max_turn = 1;
-        p.beam_width = 2;
-        p.max_turn_is_answer = false;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(!res.found, "no is_answer no answer when max-turn answer disabled");
-    }
-    {
-        world.reset(7);
-        Param p;
-        p.max_turn = 2;
-        p.beam_width = 3;
-        p.print_warnings = false;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.found && res.completed_max_turn, "automatic nodes reach max_turn");
-    }
-
-    // time limit 検出後、同じturnの未展開候補から最良1本を追加展開する。
-    {
-        world.reset(9);
-        Param p;
-        p.max_turn = 4;
-        p.beam_width = 4;
-        p.time_limit_ms = 5;
-        p.time_check_interval = 1;
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-        check(res.time_limit_reached && res.completed_max_turn && res.found && res.best_turn == 4,
-              "soft time limit completes by minimal path");
-        check(world.turn1_expanded == 2 && world.expanded_after_root == 4,
-              "soft time limit expands best remaining node in same turn");
-        check(world.sum == 0 && world.hash == 0 && world.stack.empty(),
-              "soft time limit restores state");
-    }
-
-    // NaNとCSV Hook。
-    {
-        BSD::Param p;
-        p.max_turn = 1;
-        p.beam_width = 2;
-        auto noop = [](const Act&) {};
-        auto res = BSD::run<Act>(p, 0.0, 0ULL, DoubleExpand{}, noop, noop);
-        check(res.found && res.best_cost == 2.5 && res.runtime.invalid_candidates == 1, "NaN rejected");
-    }
-    {
-        BSU32::Param p;
-        p.max_turn = 1;
-        p.beam_width = 2;
-        auto noop = [](const Act&) {};
-        auto res = BSU32::run<Act>(p, 0, std::uint32_t{0}, U32TypedExpand{}, noop, noop);
-        check(res.found && res.best_cost == 2 && res.path[0].token == 2,
-              "public Emitter and uint32_t hash work");
-    }
-#ifdef LOCAL
-    {
-        world.reset(2);
-        const std::string csv_file = "beam_delta_single_v46_stat.csv";
-        std::remove(csv_file.c_str());
-        Param p;
-        p.max_turn = 2;
-        p.beam_width = 2;
-        BS::CsvStatHook csv_hook(csv_file, 0.0);
-        auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb, csv_hook);
-        std::ifstream ifs(csv_file);
-        std::string line;
-        bool has_header = false, has_restored_cols = false, has_run_end = false;
-        while (std::getline(ifs, line)) {
-            const bool has_move = line.find("move_forward_count") != std::string::npos;
-            const bool has_period = line.find("period_ms") != std::string::npos;
-            const bool has_rates = line.find("expand_per_sec") != std::string::npos;
-            const bool has_caps = line.find("reserved_nodes") != std::string::npos;
-            has_header |= has_move;
-            has_restored_cols |= has_period && has_rates && has_caps;
-            has_run_end |= line.find("RunEnd") != std::string::npos;
-        }
-        check(res.found && has_header && has_restored_cols && has_run_end, "CsvStatHook writes restored stats");
-        std::remove(csv_file.c_str());
-    }
-#endif
-
-    // 小規模ランダムstress。
-    {
-        long long expanded = 0;
-        long long generated = 0;
-        for (int tc = 0; tc < 40; ++tc) {
-            world.reset(8);
-            world.seed = smix(0xC0FFEEULL + static_cast<std::uint64_t>(tc) * 1000003ULL);
-            Param p;
-            p.max_turn = 8;
-            p.beam_width = 1 + (tc % 6);
-            p.use_hash_dedup = (tc % 2) == 0;
-            p.print_warnings = false;
-            auto res = BS::run<Act>(p, 0, 0ULL, expand, mf, mb);
-            require(world.sum == 0 && world.hash == 0 && world.stack.empty(), "random state restored");
-            if (res.found) {
-                int replay_cost = 0;
-                for (const Act& a : res.path) replay_cost += a.add;
-                require(replay_cost == res.best_cost, "random path replay cost");
-                require(static_cast<int>(res.path.size()) == res.best_turn, "random path replay turn");
-            }
-            expanded += res.runtime.expanded_nodes;
-            generated += res.runtime.generated_candidates;
-        }
-        std::cout << "[random] cases=40 expanded=" << expanded << " generated=" << generated << '\n';
-        check(expanded > 0 && generated > 0, "random stress completed");
-    }
-}
-
-}  // namespace
-
-// 共通方針の境界テスト。実時間のsleepに依存せず、仮想時計で再現する。
-namespace policy_test {
-using Lib = bs::Beam<>;
-using Clock = bs::detail::TestClock;
-struct State { int id = 0; };
+#include <sstream>
+namespace runtime_test {
+using B = RUNTIME_TEST_BEAM<double, std::uint64_t>;
+using Clock = RUNTIME_TEST_CLOCK;
+using E = B::EventType;
+using R = B::StopReason;
 struct Action { int from = 0, to = 0; };
-struct Edge {
-    int to; long long cost; bool answer = false;
-    int step = 1; bool sub = false; std::uint64_t hash = 7;
-};
-using Graph = std::vector<std::vector<Edge>>;
-void require(bool condition, const char* message) {
-    if (!condition) throw std::runtime_error(std::string("policy: ")+message);
+void check(bool value, const char* text) {
+    if (!value) { std::cerr << "runtime regression: " << text << '\n'; std::abort(); }
 }
-struct Options {
-    int slow_node = -1;
-    bool expire_at_start = false, eager = false;
-};
-struct Outcome {
-    bool found = false, completed = false;
-    long long cost = 0;
-    int id = -1, turn = 0;
-    std::uint64_t makers = 0;
-    std::vector<int> visited, path;
+template<class T> concept HasDiagnosticCounters = requires(T t) { t.generated_candidates; };
+static_assert(!HasDiagnosticCounters<B::Runtime>);
+static_assert(HasDiagnosticCounters<B::DebugRuntime>);
+static_assert(sizeof(B::Runtime) < sizeof(B::DebugRuntime));
+static_assert(!RUNTIME_TEST_BEAM<double, std::uint64_t, false>::diagnostics_enabled);
+#ifdef LOCAL
+static_assert(B::diagnostics_enabled);
+#else
+static_assert(!B::diagnostics_enabled);
+#endif
+void reset_clock() { Clock::enabled = true; Clock::value = 0; }
+B::Param parameters() {
+    B::Param p; p.max_turn = 2; p.beam_width = 2; p.expand_answers = false;
+#if RUNTIME_TEST_CHOKU
+    p.sweep_width = 2; p.first_sweep_width = 2; p.max_sweeps = 1;
+#endif
+#if RUNTIME_TEST_MULTI
+    p.max_step = 2;
+#endif
+    return p;
+}
+struct Harness {
+    int world = 0;
+    std::uint64_t forward_calls = 0, backward_calls = 0;
     std::vector<bool> accepted;
-    std::vector<std::size_t> offsets;
-    Lib::Runtime rt;
+    template<class Emit> bool push(Emit& emit, int child, double cost, std::uint64_t hash, bool answer = false) {
+#if RUNTIME_TEST_DELTA
+        Action item{world, child};
+#else
+        int item = child;
+#endif
+#if RUNTIME_TEST_MULTI
+        bool ok = emit.push(item, cost, hash, 1, answer);
+#else
+        bool ok = emit.push(item, cost, hash, answer);
+#endif
+        accepted.push_back(ok); return ok;
+    }
+    template<class Expand, class Hook>
+    auto run(B::Param p, double cost, Expand&& expand, Hook&& hook) {
+#if RUNTIME_TEST_DELTA
+        return B::run<Action>(p, cost, expand,
+            [&](const Action& a) { check(world == a.from, "forward origin"); world = a.to; ++forward_calls; },
+            [&](const Action& a) { check(world == a.to, "backward origin"); world = a.from; ++backward_calls; }, hook);
+#else
+        return B::run<int>(p, 0, cost, expand, hook);
+#endif
+    }
 };
-template<bool History>
-Outcome run(Lib::Param p, const Graph& graph, Options options = {}) {
-    Clock::enabled = true; Clock::value = 0;
-    Outcome out;
-    int world=0;
+void counts() {
+    reset_clock(); Harness h; auto p = parameters();
+#if RUNTIME_TEST_DELTA
+    p.apply_best_on_return = true;
+#endif
+    B::DebugRuntime search{}, end{};
+    std::vector<E> events;
+    B::CsvStatHook csv("runtime_counts.csv", 0);
     auto expand = [&](const auto& now, auto& emit) {
-        (void)now;
-        const int from = world;
-        out.visited.push_back(from);
-
-        for (const auto& edge : graph.at(static_cast<std::size_t>(from))) {
-            const Action action{from,edge.to};
-            bool accepted;
-            accepted=emit.push(action,edge.cost,edge.hash, edge.answer);
-            out.accepted.push_back(accepted);
+        if (now.turn == 0) {
+            h.push(emit, 1, 10, 1); h.push(emit, 2, 5, 2); h.push(emit, 3, 12, 3);
+            h.push(emit, 4, 9, 1); h.push(emit, 5, 8, 3); h.push(emit, 6, 4, 2);
+            h.push(emit, 7, 4.5, 2); h.push(emit, 8, std::numeric_limits<double>::quiet_NaN(), 8);
+            h.push(emit, 9, -100, 9, true); h.push(emit, 10, -99, 9, true);
+        } else h.push(emit, 100, -101, 100);
+        Clock::value += 1000;
+    };
+    auto hook = [&](E event, const B::DebugRuntime& rt) {
+        events.push_back(event);
+#if RUNTIME_TEST_SUB
+        const bool layer_event = event == E::SubStepEnd;
+#else
+        const bool layer_event = event == E::TurnEnd;
+#endif
+        if (layer_event && rt.turn == 0)
+            check(rt.layer_size == 1 && rt.layer_cost_min == 0 && rt.layer_cost_max == 0 &&
+                  rt.layer_cost_mean == 0 && rt.layer_cost_stddev == 0, "initial layer snapshot");
+        if (layer_event && rt.turn == 1)
+            check(rt.layer_size == 2 && rt.layer_cost_min == 4 && rt.layer_cost_max == 8 &&
+                  rt.layer_cost_mean == 6 && rt.layer_cost_stddev == 2, "selected input layer moments");
+        if (event == E::SearchEnd) {
+            search = rt;
+#if RUNTIME_TEST_DELTA
+            check(rt.forward_calls == h.forward_calls && rt.backward_calls == h.backward_calls, "all search moves counted");
+#endif
         }
-        if (from == options.slow_node) Clock::value += 1000;
+        if (event == E::RunEnd) {
+            end = rt;
+#if RUNTIME_TEST_DELTA
+            check(h.world == 100, "RunEnd after replay");
+            check(rt.forward_calls == h.forward_calls && rt.backward_calls == h.backward_calls, "all final moves counted");
+#endif
+        }
+        csv(event, rt);
     };
-    auto hook = [&](Lib::EventType event, const Lib::Runtime&) {
-        if (event == Lib::EventType::RunStart && options.expire_at_start) Clock::value += 1000;
+    auto result = h.run(p, 0, expand, hook);
+    check(result.found && result.best_cost == -101 && result.best_turn == 2, "best solution");
+    check(search.generated_candidates == 12 && search.invalid_candidates == 1, "generation and invalid count");
+    check(search.answer_candidates == 4 && search.best_update_count == 2, "answers before selection; strict best updates");
+    check(search.expanded_nodes == 3 && search.first_solution_us == 1000, "first solution after first callback");
+    check(search.last_best_update_us == 2000, "last improvement time is expand end");
+    check(search.frontier_size == 2 && search.frontier_expanded == 2 && search.frontier_limit == 2, "frontier progress");
+    check(search.pending_candidates == 0 && search.peak_pending_candidates == 2, "pending excludes current and archive");
+#if RUNTIME_TEST_SUB
+    const auto& s = search.turn_selection;
+    check(search.sub_selection.attempts() == 0 && search.sub_expanded_nodes == 0, "sub counters separated");
+#else
+    const auto& s = search.selection;
+#endif
+    check(s.attempts() == 7 && s.accepted == 5, "selection attempts and admissions");
+    check(s.rejected_by_width == 1 && s.replaced_by_width == 1, "width rejection and displacement");
+    check(s.rejected_by_hash == 1 && s.replaced_by_hash == 2 && s.hash_checked == 6, "actual hash checks and matches");
+#if RUNTIME_TEST_MULTI
+    check(search.generated_step_sum == 11 && search.generated_step_max == 1 && search.expanded_step_sum == 2, "generated and expanded step stats");
+#endif
+    check(result.runtime.elapsed_us == end.elapsed_us && result.runtime.expanded_nodes == end.expanded_nodes, "RunEnd equals returned Runtime");
+    check(events.front() == E::RunStart && events.back() == E::RunEnd && events[events.size()-2] == E::SearchEnd, "event ordering");
+    auto accepted = h.accepted;
+    h = Harness{}; reset_clock();
+    auto no_hook = h.run(p, 0, expand, B::NoOp{});
+    check(no_hook.best_cost == result.best_cost && no_hook.runtime.expanded_nodes == search.expanded_nodes && h.accepted == accepted, "NoOp behavior equals hook behavior");
+}
+void boundaries() {
+    reset_clock(); Harness h; auto p = parameters();
+    auto never = [&](const auto&, auto&) { check(false, "unexpected expansion"); };
+    B::DebugRuntime end{};
+    auto capture = [&](E event, const B::DebugRuntime& rt) { if (event == E::RunEnd) end = rt; };
+    p.max_turn = 0;
+    auto root = h.run(p, -3, never, capture);
+    check(root.found && root.best_cost == -3 && end.best_update_count == 1 && end.first_solution_us == 0 && end.last_best_update_us == 0 && end.answer_candidates == 0, "root is not a pushed candidate");
+    check(end.stop_reason == R::Completed && end.completed_max_turn && end.pending_candidates == 0, "zero-turn completion");
+    p.max_turn = 3; reset_clock();
+    auto invalid = h.run(p, std::numeric_limits<double>::quiet_NaN(), never, capture);
+    check(!invalid.found && end.last_best_update_us == -1 && end.stop_reason == R::InvalidInitial && end.generated_candidates == 0, "invalid initial state");
+    p.time_limit_ms = 1.5; p.time_check_interval = 1; p.continue_on_timeout = false;
+    p.expand_answers = true; p.beam_width = 4;
+#if RUNTIME_TEST_CHOKU
+    p.first_sweep_width = 2; p.sweep_width = 1; p.max_sweeps = 0;
+#endif
+    reset_clock(); h = Harness{};
+    B::CsvStatHook csv("runtime_timeout.csv", 100000);
+    bool partial = false;
+    auto timed = [&](const auto& now, auto& emit) {
+        for (int i = 0; i < 4; ++i) h.push(emit, now.turn * 10 + i + 1, i, static_cast<std::uint64_t>(i));
+        Clock::value += 1000;
     };
-            auto forward=[&](const auto& edge){const auto& a=edge;require(world==a.from,"forward state");world=a.to;};
-        auto backward=[&](const auto& edge){const auto& a=edge;require(world==a.to,"backward state");world=a.from;};
-        auto result=Lib::run<Action>(p,0LL,std::uint64_t{0},expand,forward,backward,hook);
-        require(world==0,"external state restored");
-    out.found = result.found; out.completed = result.completed_max_turn;
-    out.cost = result.best_cost; out.turn = result.best_turn; out.rt = result.runtime;
-    int id=0;
-        for(const auto& item:result.path){const auto& a=item;require(a.from==id,"path continuity");id=a.to;out.path.push_back(id);}
-    if(result.found) out.id=out.path.empty()?0:out.path.back();
-    return out;
+    auto timed_hook = [&](E event, const B::DebugRuntime& rt) {
+        if (event == E::RunEnd) end = rt;
+#if RUNTIME_TEST_CHOKU
+        if (event == E::SweepEnd && rt.sweep == 1) partial = !rt.sweep_completed;
+#else
+        if (event == E::TurnEnd) partial |= rt.frontier_expanded < rt.frontier_size;
+#endif
+        csv(event, rt);
+    };
+    auto timeout = h.run(p, 0, timed, timed_hook);
+    check(timeout.time_limit_reached && end.stop_reason == R::TimeLimit && partial, "partial unit reported on timeout");
+    check(end.expanded_nodes == 2, "time check interval");
+    reset_clock(); h = Harness{};
+    auto slow_start = [&](E e, const B::DebugRuntime&) { if (e == E::RunStart) Clock::value += 10000; };
+    auto stopped = h.run(p, 0, never, slow_start);
+    check(stopped.time_limit_reached && stopped.runtime.expanded_nodes == 0, "detect RunStart hook time before expanding");
 }
-template<bool History>
-void cases() {
-    Lib::Param p;
-    require(p.continue_on_timeout && p.expand_answers, "common defaults");
-    p.max_turn = 5; p.max_turn_is_answer = false; p.beam_width = 1;
-    p.expand_answers = false; p.time_check_interval = 1;
-    Graph graph(8);
-    graph[0] = {{1,-10,true},{2,5,true},{3,0,false}};
-    graph[1] = {{5,-100,true}};
-    graph[3] = {{4,-20,true}};
-    for (bool eager : {false,true}) {
-        auto r = run<History>(p,graph,{-1,false,eager});
-        require(r.found && r.cost == -20 && r.id == 4, "answer retained outside beam/hash selection");
-        require(r.visited == std::vector<int>({0,3}), "answers do not consume width or expand");
-        require(r.accepted == std::vector<bool>({false,false,true,false}), "push bool means search acceptance");
-        require(r.rt.answer_only_candidates == 3 && r.rt.terminal_candidates == 0, "separate answer-only counter");
+#if RUNTIME_TEST_CHOKU
+void refinement() {
+    reset_clock(); Harness h; auto p = parameters();
+    p.beam_width = 4; p.first_sweep_width = 1; p.sweep_width = 1; p.max_sweeps = 0;
+    B::CsvStatHook csv("runtime_refinement.csv", 100000);
+    B::DebugRuntime first{}, search{};
+    auto expand = [&](const auto& now, auto& emit) {
+        if (now.turn == 0) for (int i = 1; i <= 4; ++i) h.push(emit, i, i, static_cast<std::uint64_t>(i));
+        else h.push(emit, 100, -now.state, 100);
+        Clock::value += 1000;
+    };
+    auto result = h.run(p, 0, expand, [&](E e, const B::DebugRuntime& rt) {
+        if (e == E::SweepEnd && rt.sweep == 1) first = rt;
+        if (e == E::SearchEnd) search = rt;
+        csv(e, rt);
+    });
+    check(first.sweep_completed && first.found && first.best_cost == -1, "first sweep baseline");
+    check(result.best_cost == -4 && search.completed_sweeps == 4, "refinement gains");
+}
+#endif
+}
 
-        require(r.path==std::vector<int>({3,4}), "saved action path survives queue removal");
+namespace runtime_test {
+template<bool Enabled>
+void diagnostic_mode() {
+    using T = RUNTIME_TEST_BEAM<double, std::uint64_t, Enabled>;
+#ifdef LOCAL
+    static_assert(T::diagnostics_enabled == Enabled);
+#else
+    static_assert(!T::diagnostics_enabled);
+#endif
+    typename T::Param p;
+    p.max_turn = 2;
+    p.beam_width = 2;
+#if RUNTIME_TEST_CHOKU
+    p.max_sweeps = 1;
+#endif
+    reset_clock();
+    int calls = 0;
+#if RUNTIME_TEST_DELTA
+    int world = 0;
+#endif
+    typename T::DebugRuntime last{};
+#if RUNTIME_TEST_DELTA
+    using View = typename T::NodeView;
+    using Emit = typename T::template Emitter<Action>;
+    p.apply_best_on_return = true;
+#else
+    using View = typename T::template StateView<int>;
+    using Emit = typename T::template Emitter<int>;
+#endif
+    auto expand = [&](const View& now, const typename T::Runtime& rt, Emit& emit) {
+        check(rt.param.max_turn == 2 && now.turn < 2, "typed Runtime and Emitter");
+#if RUNTIME_TEST_DELTA
+        Action child{world, world + 1};
+#else
+        int child = now.state + 1;
+#endif
+#if RUNTIME_TEST_MULTI
+        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1), 1);
+#else
+        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1));
+#endif
+    };
+    auto hook = [&](typename T::EventType event, const typename T::DebugRuntime& rt) {
+        ++calls;
+        if (event == T::EventType::RunEnd) last = rt;
+    };
+    auto run = [&](auto&& callback) {
+#if RUNTIME_TEST_DELTA
+        world = 0;
+        return T::template run<Action>(p, 0, expand,
+            [&](const Action& a) { check(world == a.from, "typed forward"); world = a.to; },
+            [&](const Action& a) { check(world == a.to, "typed backward"); world = a.from; }, callback);
+#else
+        return T::template run<int>(p, 0, 0, expand, callback);
+#endif
+    };
+    const auto result = run(hook);
+    check(result.found && result.best_cost == -2 && result.best_turn == 2, "mode best solution");
+    check(result.runtime.expanded_nodes == 2 && result.runtime.completed_max_turn, "mode core Runtime");
+#if RUNTIME_TEST_DELTA
+    check(world == 2 && result.path.size() == 2, "mode best State replay");
+#else
+    check(result.best_state && *result.best_state == 2, "mode final State");
+#endif
+    if constexpr (T::diagnostics_enabled) {
+        check(calls > 0 && last.generated_candidates == 2 && last.best_update_count == 1,
+              "enabled diagnostic counters and custom hook");
+    } else check(calls == 0, "disabled custom hook is not invoked");
+    typename T::NoOp empty;
+    const auto no_hook = run(empty);
+    check(no_hook.best_cost == result.best_cost && no_hook.runtime.expanded_nodes == 2,
+          "NoOp does not affect the search");
+    if constexpr (!T::diagnostics_enabled) {
+        // The disabled path must not even instantiate a hook call.
+        struct Uncallable {} uncallable;
+        check(run(uncallable).best_cost == -2, "disabled hook call is discarded");
     }
-    p.expand_answers = true;
-    auto continued = run<History>(p,graph);
-    require(continued.found && continued.cost == -100 && continued.id == 5, "answers may remain expandable");
-    require(continued.rt.answer_only_candidates == 0, "no answer exclusions when enabled");
-    // An expired search with no solution must either stop or complete the remaining path.
-    graph = Graph(8); graph[0]={{1,0}}; graph[1]={{2,0}}; graph[2]={{3,-4,true}};
-    graph[3]={{4,-100,true}};
-    for (bool allow : {false,true}) for (bool expand_answers : {false,true}) {
-        p.continue_on_timeout=allow; p.expand_answers=expand_answers; p.time_limit_ms=1;
-        auto r=run<History>(p,graph,{0});
-        require(r.rt.time_limit_reached && r.found==allow, "timeout without answer");
-        require(r.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>({0})), "stop immediately after answer/callback");
-        if (allow) require(r.cost==-4 && r.id==3, "rescue preserves the first available answer");
-        auto at_start=run<History>(p,graph,{-1,true});
-        require(at_start.found==allow, "initialization/hook timeout policy");
-        require(at_start.visited == (allow ? std::vector<int>({0,1,2}) : std::vector<int>{}), "RunStart deadline detected before expansion");
-        // Save all improving answers in the current callback, even when none can enter the beam.
-        Graph goals(8);goals[0]={{1,-100},{2,20,true},{3,10,true}};goals[1]={{4,-200,true}};
-        auto saved=run<History>(p,goals,{0});
-        require(saved.found && saved.cost==10 && saved.id==3 && saved.visited==std::vector<int>({0}), "saved answer ends overtime regardless of continuation flag");
-        // The best solution may predate the callback that reaches the time limit.
-        goals=Graph(8);goals[0]={{1,-100},{2,20,true}};goals[1]={{3,-200},{4,10,true}};
-        auto later=run<History>(p,goals,{1});
-        require(later.found && later.cost==10 && later.visited==std::vector<int>({0,1}), "existing answer stops after a later deadline");
-        // The continuation policy is inactive without an overall time limit.
-        p.time_limit_ms=0;
-        auto unlimited=run<History>(p,graph,{0});
-        require(unlimited.found && unlimited.cost==(expand_answers?-100:-4), "no limit means no early timeout stop");
-    }
-    p.continue_on_timeout=true;p.expand_answers=false;p.time_limit_ms=1;
-    Graph dead(2);dead[0]={{1,0}};
-    auto exhausted=run<History>(p,dead,{0});
-    require(!exhausted.found && exhausted.visited==std::vector<int>({0,1}), "finite dead-end rescue");
-    // Final-turn states stay terminal even when they are not answers.
-    p.time_limit_ms=0;p.max_turn=1;p.expand_answers=true;
-    Graph end(3);end[0]={{1,4,true},{2,0,false}};
-    auto terminal=run<History>(p,end);
-    require(terminal.found && terminal.cost==4 && terminal.completed, "explicit final-turn answer");
-    require(terminal.rt.terminal_candidates==2 && terminal.rt.answer_only_candidates==0 && terminal.visited.size()==1, "final-turn counters and no expansion");
-    p.max_turn_is_answer=true;
-    auto automatic=run<History>(p,end);
-    require(automatic.found && automatic.cost==0 && automatic.id==2, "implicit final-turn answer");
-    p.max_turn=0;
-    auto root=run<History>(p,end);
-    require(root.found && root.completed && root.visited.empty(), "zero-turn solution");
-
 }
-void all() {
-    const bool enabled=Clock::enabled;
-    const auto value=Clock::value;
-    cases<false>();
-
-    Clock::enabled=enabled;Clock::value=value;
 }
-} // namespace policy_test
 
 int main() {
-    policy_test::all();
-    bs::detail::TestClock::enabled = true;
-    run_unit_tests();
-    std::cout << "[test] all beam_delta_single_v46 tests passed\n";
-    return 0;
+#ifdef LOCAL
+    runtime_test::counts(); runtime_test::boundaries();
+#if RUNTIME_TEST_CHOKU
+    runtime_test::refinement();
+#endif
+#endif
+    runtime_test::diagnostic_mode<true>();
+    runtime_test::diagnostic_mode<false>();
+    std::cout << "runtime diagnostics tests passed\n";
 }
 
 #endif
-
