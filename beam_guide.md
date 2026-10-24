@@ -6,15 +6,15 @@
 
 | ライブラリファイル | 型 | 状態の保持方法 | 1回の遷移 |
 | --- | --- | --- | --- |
-| `beam_copy_single_v51.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
-| `beam_delta_single_v57.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
-| `beam_copy_multi_v55.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
-| `beam_delta_multi_v81.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
-| `chokudai_copy_single_v26.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
-| `chokudai_copy_multi_v28.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
-| `beam_copy_sub_v23.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
-| `beam_delta_sub_v24.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
-| `chokudai_copy_sub_v24.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
+| `beam_copy_single_v52.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
+| `beam_delta_single_v58.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
+| `beam_copy_multi_v56.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
+| `beam_delta_multi_v82.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
+| `chokudai_copy_single_v27.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
+| `chokudai_copy_multi_v29.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
+| `beam_copy_sub_v24.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
+| `beam_delta_sub_v25.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
+| `chokudai_copy_sub_v25.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
 
 以下では、`beam_`で始まる6種類を「通常ビーム」、`chokudai_`で始まる3種類を「chokudai」と呼びます。`Cost`の既定型は`long long`、`Hash`の既定型は`std::uint64_t`です。
 
@@ -419,7 +419,7 @@ CSVは`-DLOCAL`と`EnableDiagnostics=true`で、`BS::CsvStatHook("search.csv", 5
 
 `SearchEnd`は最終復元・返却用path構築・`apply_best_on_return`の再生より前、`RunEnd`は返却結果の構築後です。CSVの`moves_per_expand`には探索後の復元・再生を混ぜず、その時間を`finalize_ms`に分けます。`elapsed_ms`と`overrun_ms`は最終処理を含みます。RunEnd通知以後のCSV書出し・残った領域の解放・利用側の出力は計測外なので、別に時間を残してください。途中のhook・記録処理の時間は実行時間に含まれるため、本番速度はLOCAL未定義、またはEnableDiagnostics=falseで測ってください。NoOpへ差し替えるだけでは診断カウンタを停止しません。
 
-`CsvStatHook::rows`は`{event, runtime}`の配列で、`runtime`は`DebugRuntime`です。CSVはRunEndで一括出力し、同名ファイルを上書きします。書出し失敗は`std::runtime_error`です。CSV列の全一覧・各分母・AHCでの読み方は第13章を参照してください。
+`CsvStatHook::rows`の各要素は`event`と`runtime`（`DebugRuntime`）を持ちます。sub系だけは`expanded_sub_step_max`も持ち、記録区間内で実際に展開したsub深さの最大値を保存します。未展開は-1でCSVでは空欄、RunEndでは探索全体の最大値です。CSVはRunEndで一括出力し、同名ファイルを上書きします。書出し失敗は`std::runtime_error`です。CSV列の全一覧・各分母・AHCでの読み方は第13章を参照してください。
 
 ### 2.10 copyの操作履歴を参照する
 
@@ -444,7 +444,7 @@ Viewは当該`expand`内だけ有効です。View自体は`push`・`push_lazy`�
 
 singleの`path`はAction列、multiは`Edge<Action>`列です。multiのAction参照では時刻情報は自動で付かないため、expand内の判断に必要ならActionへ必要な値を含めてください。subの`turn_offsets[0]`は0で、各Turn遷移の直後の位置が追加されます。途中Sub状態が最良解なら最後の区間は未完了turnで、`path.size()`が最後のoffsetより大きくなる場合があります。
 
-## 3. beam_copy_single_v51.hpp
+## 3. beam_copy_single_v52.hpp
 
 ### 例01：仕事の割当表を最終Stateから受け取る
 
@@ -458,7 +458,7 @@ singleの`path`はAction列、multiは`Edge<Action>`列です。multiのAction�
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_single_v51.hpp"
+#include "beam_copy_single_v52.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -544,7 +544,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "beam_copy_single_v51.hpp"
+#include "beam_copy_single_v52.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -628,7 +628,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 4. beam_delta_single_v57.hpp
+## 4. beam_delta_single_v58.hpp
 
 ### 例03：割当を外部状態へ差分適用し、Action列を返す
 
@@ -642,7 +642,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_single_v57.hpp"
+#include "beam_delta_single_v58.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -732,7 +732,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "beam_delta_single_v57.hpp"
+#include "beam_delta_single_v58.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -820,7 +820,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 5. beam_copy_multi_v55.hpp
+## 5. beam_copy_multi_v56.hpp
 
 ### 例05：時間内に行う作業の集合を選ぶ
 
@@ -834,7 +834,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_multi_v55.hpp"
+#include "beam_copy_multi_v56.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -906,7 +906,7 @@ multiの`path`の要素は`Edge<Action>`です。`edge.action`が選んだ道路
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_multi_v55.hpp"
+#include "beam_copy_multi_v56.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -975,7 +975,7 @@ toll=4 arrival=5 roads=1 4 6
 
 5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
 
-## 6. beam_delta_multi_v81.hpp
+## 6. beam_delta_multi_v82.hpp
 
 ### 例07：時刻に依存する生産をEdge付きcallbackで扱う
 
@@ -989,7 +989,7 @@ Actionは生産方式の番号だけを持ち、出発時刻と所要時間はEd
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v81.hpp"
+#include "beam_delta_multi_v82.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1070,7 +1070,7 @@ callbackがAction型でも、返る`path`は`Edge<Action>`列です。`apply_bes
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v81.hpp"
+#include "beam_delta_multi_v82.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1133,7 +1133,7 @@ profit=14 hours=5 jobs=0 1
 
 出力は選んだ仕事の集合です。実行順による段取り費用がないため、仕事番号順に表示しています。
 
-## 7. chokudai_copy_single_v26.hpp
+## 7. chokudai_copy_single_v27.hpp
 
 ### 例09：割当の未展開候補を残し、時間内に別案も探索する
 
@@ -1147,7 +1147,7 @@ Hashと遅延コピーの使い方は通常copy singleと同じです。展開�
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_single_v26.hpp"
+#include "chokudai_copy_single_v27.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1235,7 +1235,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "chokudai_copy_single_v26.hpp"
+#include "chokudai_copy_single_v27.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1322,7 +1322,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 8. chokudai_copy_multi_v28.hpp
+## 8. chokudai_copy_multi_v29.hpp
 
 ### 例11：時間内の作業選択を複数スイープで改善する
 
@@ -1336,7 +1336,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_multi_v28.hpp"
+#include "chokudai_copy_multi_v29.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1411,7 +1411,7 @@ profit=14 hours=5 jobs=0 1
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_multi_v28.hpp"
+#include "chokudai_copy_multi_v29.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1483,7 +1483,7 @@ toll=4 arrival=5 roads=1 4 6
 
 5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
 
-## 9. beam_copy_sub_v23.hpp
+## 9. beam_copy_sub_v24.hpp
 
 ### 例13：各期の前処理回数を選び、完成した計画表を返す
 
@@ -1497,7 +1497,7 @@ toll=4 arrival=5 roads=1 4 6
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_sub_v23.hpp"
+#include "beam_copy_sub_v24.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1590,7 +1590,7 @@ profit=42 level=4 upgrades=3 0 0
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "beam_copy_sub_v23.hpp"
+#include "beam_copy_sub_v24.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1680,7 +1680,7 @@ day=2 deliver:3 deliver:4
 
 1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-## 10. beam_delta_sub_v24.hpp
+## 10. beam_delta_sub_v25.hpp
 
 ### 例15：期内の操作を差分適用し、期ごとのAction区間を返す
 
@@ -1694,7 +1694,7 @@ day=2 deliver:3 deliver:4
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_sub_v24.hpp"
+#include "beam_delta_sub_v25.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1791,7 +1791,7 @@ period=3 commands=P
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "beam_delta_sub_v24.hpp"
+#include "beam_delta_sub_v25.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1903,7 +1903,7 @@ day=2 deliver:3 deliver:4
 
 1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-## 11. chokudai_copy_sub_v24.hpp
+## 11. chokudai_copy_sub_v25.hpp
 
 ### 例17：期の開始候補を残し、期内の増強回数を探索する
 
@@ -1917,7 +1917,7 @@ day=2 deliver:3 deliver:4
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_sub_v24.hpp"
+#include "chokudai_copy_sub_v25.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -2012,7 +2012,7 @@ profit=42 level=4 upgrades=3 0 0
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "chokudai_copy_sub_v24.hpp"
+#include "chokudai_copy_sub_v25.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -2123,13 +2123,13 @@ Hashには、以降の合法手や目的値への影響を変える情報を含�
 | --- | --- | --- |
 | CM | beam_copy_multi | 63 |
 | CS | beam_copy_single | 58 |
-| CB | beam_copy_sub | 65 |
+| CB | beam_copy_sub | 66 |
 | DM | beam_delta_multi | 66 |
 | DS | beam_delta_single | 61 |
-| DB | beam_delta_sub | 68 |
+| DB | beam_delta_sub | 69 |
 | KM | chokudai_copy_multi | 61 |
 | KS | chokudai_copy_single | 56 |
-| KB | chokudai_copy_sub | 72 |
+| KB | chokudai_copy_sub | 73 |
 
 ### 13.1 本番用Runtime
 
@@ -2141,7 +2141,7 @@ Hashには、以降の合法手や目的値への影響を変える情報を含�
 | `turn` | int | 全9種類 | 現在処理中の展開元turn。開始前は0。multiのbest_turnはこれより先になる場合がある。 |
 | `elapsed_us` | int64_t | 全9種類 | run開始から最後の時計確認まで。expand中に自動更新されない。RunEnd/Resultは最終処理後。 |
 | `expanded_nodes` | uint64_t | 全9種類 | 正常に終了したexpandの累計。実行中の1件は含まない。時間確認にも使用。 |
-| `time_limit_reached` | bool | 全9種類 | 全体期限到達を検出済みか。一度trueなら戻らない。 |
+| `time_limit_reached` | bool | 全9種類 | 全体期限到達を検出済みか。一度trueなら戻らない。RunEndでは返却準備中に初めて到達した場合も含む。 |
 | `found` | bool | 全9種類 | 有効解を保存したか。 |
 | `best_cost` | Cost | 全9種類 | 保存済み最良解の評価値。found=falseなら解値として使わない。 |
 | `best_turn` | int | 全9種類 | 保存済み最良解の到着turn。found=falseなら無効。 |
@@ -2247,7 +2247,7 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 | 2 | 解の品質・改善 | best_cost、best_gain、best_updates、best_unchanged_ms |
 | 3 | 層のcost・充足・進行 | layer_size、layer_cost_min / mean / max / stddev、frontier_fill_pct |
 | 4 | 探索量・速度 | expand_per_sec、expanded_nodes、candidates_per_expand |
-| 5 | 幅・Hashによる選別 | width_discard_pct、hash_discard_pct。subはsub / turnごとに同じ並び |
+| 5 | Hash照会・除外と選別量 | hash_checked_pct、hash_discard_pct。subはsub / turnごとに同じ並び |
 | 6 | 残候補・方式別の負荷 | pending_candidates、multiのstep、subの展開割合、deltaの移動負荷 |
 | 7 | スイープの完了・初回と追加探索 | sweep_completed、初回の消費時間、追加探索の改善量 |
 | 8 | 終了・時間切れ・異常 | stop_reason、時間超過、turn別予算、diagnostic_flags |
@@ -2262,27 +2262,27 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 | `time_used_pct` | 全9種類 | 経過時間 ÷ 全体予算 × 100。無制限は空欄。 |
 | `period_ms` | 全9種類 | 差分・速度計算の対象時間。search_totalでは探索時間。 |
 | `event` | 全9種類 | 観測イベント。 |
-| `scope` | 全9種類 | intervalは前回記録からの差分。間引いた場合は複数turn・sweepを含む。search_totalは探索開始からSearchEndまで。 |
+| `scope` | 全9種類 | intervalの件数・率・最大深さは前回記録からの集計。間引いた場合は複数turn・sweepを含む。search_totalは探索開始からSearchEndまで。最良解・座標・pending・peak・設定は時点値。 |
 | `sweep` | KM・KS・KB | そのイベントまでに開始したスイープ数。 |
 | `turn` | CM・CS・CB・DM・DS・DB・KB | 現在の展開元turn。TurnEnd/SubStepEnd以外は空欄。 |
 | `sub_step` | CB・DB・KB | 現在のsub層。TurnEnd/SubStepEnd以外は空欄。 |
 | `best_cost` | 全9種類 | その時点の最良解。未発見は空欄。 |
-| `best_gain` | 全9種類 | 期間前のbest_cost − 期間後のbest_cost。両端で解ありのときだけ出力。 |
-| `best_updates` | 全9種類 | 対象期間の最良解更新数。同じ候補集合でも生成順で変わるため、解品質の代理にはせず、改善量・停滞時間と併読する。 |
+| `best_gain` | 全9種類 | intervalの期間前best_cost − 期間後best_cost。両端で解ありのときだけ出力。初解を得た区間とsearch_totalでは空欄。初解から最終解までの改善量ではない。 |
+| `best_updates` | 全9種類 | 対象期間の初解保存・厳密なcost改善回数。正常な初期解も1回。同じ候補集合でも生成順で変わるため、解品質の代理にはせず、改善量・停滞時間と併読する。period_msの異なる行の件数をそのまま更新頻度として比較しない。 |
 | `best_unchanged_ms` | 全9種類 | 最後に最良解を改善したexpandの終了からの時間。CSVの記録間隔に依存しない。初期解は時刻0、未発見は空欄。search_totalはSearchEnd基準で、最終復元・再生時間を含めない。 |
 | `found` | 全9種類 | 有効解の有無。 |
 | `best_turn` | 全9種類 | 最良解の到着turn。未発見は空欄。 |
 | `best_sub_step` | CB・DB・KB | 最良解のsub層。未発見は空欄。 |
 | `best_depth` | CB・DB・KB | 最良解までの全遷移数。未発見は空欄。 |
-| `answer_candidates` | 全9種類 | 対象期間の有効解候補数。重複・非改善も含む。 |
+| `answer_candidates` | 全9種類 | 対象期間の有効解候補数。重複・非改善も含む。初期解は含まないためfound=1でも0になり得る。 |
 | `first_solution_ms` | 全9種類 | 初解を生成したexpandの終了時刻。初期解0、未発見は空欄。 |
 | `first_solution_budget_pct` | 全9種類 | 初解時刻 ÷ 全体予算 × 100。未発見・無制限は空欄。 |
-| `layer_size` | CM・CS・CB・DM・DS・DB・KB | 展開開始直前の1層の候補数。single/multiはTurnEnd、subはSubStepEndのみ。空集合は0。他イベント・search_totalは空欄。 |
+| `layer_size` | CM・CS・CB・DM・DS・DB・KB | 展開開始直前の1層の候補数。single/multiはTurnEnd、subはSubStepEndのみ。KBのsub_step=0は取出し前キュー全体。空集合は0。他イベント・search_totalは空欄。 |
 | `layer_cost_min` | CM・CS・CB・DM・DS・DB・KB | layer_sizeで数えた候補の最小cost。同じ層の行だけ出力し、0件は空欄。 |
 | `layer_cost_mean` | CM・CS・CB・DM・DS・DB・KB | 同じ候補集合の平均cost。同じ層の行だけ出力し、0件・非有限値は空欄。 |
 | `layer_cost_max` | CM・CS・CB・DM・DS・DB・KB | 同じ候補集合の最大cost。同じ層の行だけ出力し、0件は空欄。 |
 | `layer_cost_stddev` | CM・CS・CB・DM・DS・DB・KB | 同じ候補集合の母標準偏差。同じ層の行だけ出力し、有限値1件は0。0件・非有限値は空欄。 |
-| `frontier_fill_pct` | CM・CS・CB・DM・DS・DB・KB | 処理予定候補数 ÷ 適用幅 × 100。frontier_limitと同じ行のみ。 |
+| `frontier_fill_pct` | CM・CS・CB・DM・DS・DB・KB | 処理予定候補数 ÷ 適用幅 × 100。frontier_limitと同じ行のみ。低ければ候補不足を調べるが、100%だけで幅不足とは判断しない。 |
 | `frontier_done_pct` | CM・CS・CB・DM・DS・DB・KB | 実行した展開数 ÷ 処理予定候補数 × 100。同じ行のみ。 |
 | `frontier_limit` | CM・CS・CB・DM・DS・DB・KB | その展開単位の適用幅。通常single/multiはTurnEnd、subはSubStepEndのみ。 |
 | `expand_per_sec` | 全9種類 | 対象期間の1秒あたりexpand数。 |
@@ -2290,25 +2290,26 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 | `candidates_per_expand` | 全9種類 | 生成候補数 ÷ 展開数。 |
 | `generated_candidates` | 全9種類 | 対象期間の全生成候補数。 |
 | `invalid_candidates` | 全9種類 | 対象期間の不正候補数。 |
-| `width_discard_pct` | CM・CS・DM・DS・KM・KS | 全選別。(幅棄却 + 幅置換) ÷ 選別対象数 × 100。追い出された既存候補も数える。 |
-| `hash_discard_pct` | CM・CS・DM・DS・KM・KS | 全選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。同じ対象の幅除外率と分母を揃える。対象0は空欄、対象があり除外0なら0。未検査候補に潜む重複率ではない。 |
+| `hash_checked_pct` | CM・CS・DM・DS・KM・KS | 全選別。実際にHash照会した候補数 ÷ 選別対象数 × 100。幅で先に落ちた候補、Hashなしpush、Hash無効時は照会しない。対象0は空欄、対象があり照会0なら0。 |
+| `hash_discard_pct` | CM・CS・DM・DS・KM・KS | 全選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。hash_checked_pctと同じ母数。対象0は空欄、対象があり除外0なら0。未検査候補や過去の全生成候補の真の重複率ではない。 |
 | `selection_attempts` | CM・CS・DM・DS・KM・KS | 全選別。一時採用 + 幅棄却 + Hash棄却 + 容量異常棄却。終端・解だけの保存・不正候補を除く。 |
-| `sub_width_discard_pct` | CB・DB・KB | Next::Subの選別。(幅棄却 + 幅置換) ÷ 選別対象数 × 100。追い出された既存候補も数える。 |
-| `sub_hash_discard_pct` | CB・DB・KB | Next::Subの選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。同じ対象の幅除外率と分母を揃える。対象0は空欄、対象があり除外0なら0。未検査候補に潜む重複率ではない。 |
+| `sub_hash_checked_pct` | CB・DB・KB | Next::Subの選別。実際にHash照会した候補数 ÷ 選別対象数 × 100。幅で先に落ちた候補、Hashなしpush、Hash無効時は照会しない。対象0は空欄、対象があり照会0なら0。 |
+| `sub_hash_discard_pct` | CB・DB・KB | Next::Subの選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。sub_hash_checked_pctと同じ母数。対象0は空欄、対象があり除外0なら0。未検査候補や過去の全生成候補の真の重複率ではない。 |
 | `sub_selection_attempts` | CB・DB・KB | Next::Subの選別。一時採用 + 幅棄却 + Hash棄却 + 容量異常棄却。終端・解だけの保存・不正候補を除く。 |
-| `turn_width_discard_pct` | CB・DB・KB | Next::Turnの選別。(幅棄却 + 幅置換) ÷ 選別対象数 × 100。追い出された既存候補も数える。 |
-| `turn_hash_discard_pct` | CB・DB・KB | Next::Turnの選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。同じ対象の幅除外率と分母を揃える。対象0は空欄、対象があり除外0なら0。未検査候補に潜む重複率ではない。 |
+| `turn_hash_checked_pct` | CB・DB・KB | Next::Turnの選別。実際にHash照会した候補数 ÷ 選別対象数 × 100。幅で先に落ちた候補、Hashなしpush、Hash無効時は照会しない。対象0は空欄、対象があり照会0なら0。 |
+| `turn_hash_discard_pct` | CB・DB・KB | Next::Turnの選別。(Hash棄却 + Hash置換) ÷ 選別対象数 × 100。turn_hash_checked_pctと同じ母数。対象0は空欄、対象があり除外0なら0。未検査候補や過去の全生成候補の真の重複率ではない。 |
 | `turn_selection_attempts` | CB・DB・KB | Next::Turnの選別。一時採用 + 幅棄却 + Hash棄却 + 容量異常棄却。終端・解だけの保存・不正候補を除く。 |
 | `pending_candidates` | 全9種類 | 未展開候補のスナップショット。search_totalではSearchEnd時点。 |
 | `peak_pending_candidates` | 全9種類 | 探索中の未展開候補数の最大値。 |
 | `pending_turns` | CM・DM・KM | 未展開候補の残る到着turn数。実体化済みの次frontierも含む。 |
-| `full_pending_turn_pct` | CM・DM・KM | 幅上限に達した未展開turn数 ÷ 未展開候補の残るturn数 × 100。時点値であり期間平均ではない。 |
+| `full_pending_turn_pct` | CM・DM・KM | 幅上限に達した未展開turn数 ÷ 未展開候補の残るturn数 × 100。保持状況を表す時点値であり期間平均ではない。高いだけで幅不足・品質損失とは判断しない。 |
 | `generated_step_avg` | CM・DM・KM | 不正でない生成候補のstep平均。選別前の生成分布。 |
 | `expanded_step_avg` | CM・DM・KM | 対象期間に実際に展開したノードへの直前遷移stepの平均。初期ノードを除く。対象0は空欄。生成step平均とは母集団が異なり、最良解の経路平均でもない。 |
-| `sub_expand_pct` | CB・DB・KB | sub_step>0の展開数 ÷ 全展開数 × 100。時間の割合ではない。 |
+| `sub_expand_pct` | CB・DB・KB | sub_step>0の展開数 ÷ 全展開数 × 100。時間割合や深さではなく、expanded_sub_step_maxと併読する。 |
+| `expanded_sub_step_max` | CB・DB・KB | 対象期間に実際に1件以上展開した層の最大sub_step。間引いた層も含む。展開なしは空欄、sub_step=0だけなら0。search_totalは探索全体の最大値。生成しただけの層・最良経路だけの深さではない。 |
 | `moves_per_expand` | DM・DS・DB | 探索中のforward+backward回数 ÷ 展開数。最終復元・再生を除く。 |
 | `peak_node_capacity` | DM・DS・DB | Nodeの確保済みスロット数の最大値。 |
-| `sweep_completed` | KM・KS・KB | 記録した最後のスイープを予定どおり完了したか。SweepEnd行のみ。区間全体の完了率ではない。 |
+| `sweep_completed` | KM・KS・KB | 最後に開始したスイープの予定処理を完了したか。SweepEndとsearch_totalで出力。スイープ未開始は空欄。区間全体の完了率ではない。 |
 | `completed_sweeps` | KM・KS・KB | 対象期間に完了したスイープ数。 |
 | `first_sweep_completed` | KM・KS・KB | 初回の予定処理を完了したか。この列からbest_gain_after_first_sweepまでの6列はsearch_totalのみ、未開始は空欄。 |
 | `first_sweep_found` | KM・KS・KB | 初回SweepEndまでに有効解を保存したか。 |
@@ -2316,16 +2317,16 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 | `first_sweep_budget_pct` | KM・KS・KB | 初回SweepEndまでの時間 ÷ 全体予算 × 100。 |
 | `refinement_ms` | KM・KS・KB | 初回完了後からSearchEndまでの時間。初回未完了なら空欄。 |
 | `best_gain_after_first_sweep` | KM・KS・KB | 初回のbest_cost − SearchEndのbest_cost。初回完了かつ初回から解ありのときだけ出力。 |
-| `stop_reason` | 全9種類 | 終了理由。 |
-| `completed_max_turn` | 全9種類 | 最大turnへ有効候補を生成できた事実。 |
-| `time_limit_reached` | 全9種類 | 全体期限の到達を検出したか。 |
+| `stop_reason` | 全9種類 | 探索の終了理由。返却準備で初めて期限を超えても探索時の理由を維持する。解の有無はfound、最終超過はoverrun_msも確認する。 |
+| `completed_max_turn` | 全9種類 | 最大turnへ有効な入力形式の候補を生成できた事実。全幅展開完了や有効解発見を保証しない。 |
+| `time_limit_reached` | 全9種類 | その記録時点までに全体期限到達を検出したか。RunEndでは返却準備中の到達も含む。探索終了時点の状態はSearchEnd行で読む。 |
 | `overrun_ms` | 全9種類 | 全体予算を超えた最終処理込みの時間。超過なし0、無制限は空欄。ジャッジのプロセス総時間とは異なる。 |
-| `finalize_ms` | 全9種類 | RunEnd通知直前 − SearchEnd。最終復元、最良path再生、返却用結果構築の時間。通知後の領域解放・CSV書出しは含まない。search_totalのみ。 |
+| `finalize_ms` | 全9種類 | RunEnd通知直前 − SearchEnd。最終復元、最良path再生、返却用結果構築の時間。SearchEnd通知後のhook時間も含み得る。RunEnd通知後の領域解放・CSV書出しは含まない。search_totalのみ。 |
 | `turn_budget_used_pct` | CM・CS・CB・DM・DS・DB | turn経過時間 ÷ turn予算 × 100。予算0・配分無効は空欄。 |
 | `turn_budget_ms` | CM・CS・CB・DM・DS・DB | そのturnに配分した予算。配分無効・展開単位以外は空欄。 |
 | `turn_time_limit_reached` | CM・CS・CB・DM・DS・DB | そのturnの期限を検出したか。展開単位以外は空欄。 |
 | `turns_cut_by_time` | CM・CS・CB・DM・DS・DB | 対象期間に、時間で候補を残して切り上げたturn訪問数。 |
-| `expanded_after_timeout` | 全9種類 | 対象期間に、全体時間切れ検出後に開始したexpand数。 |
+| `expanded_after_timeout` | 全9種類 | 対象期間に、全体期限到達を検出済みで開始したexpand数。時計確認までの検出遅れがあるため、実時刻超過後の全展開数とは異なる。 |
 | `diagnostic_flags` | 全9種類 | HashCapacityExceeded / RemovalQueueOverflow。複数は縦線区切り。異常なしは空欄。 |
 | `beam_width` | 全9種類 | 設定param.beam_width。各到着turnの保持幅。1以上。 |
 | `sub_beam_width` | CB・DB・KB | 設定param.sub_beam_width。sub層の保持幅。0以下ならbeam_width。 |
@@ -2346,7 +2347,11 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 | `algorithm` | 全9種類 | beam / chokudai。 |
 | `state_mode` | 全9種類 | copy / delta。 |
 | `turn_mode` | 全9種類 | single / multi / sub。 |
-| `schema_version` | 全9種類 | CSVスキーマ番号。全9種類とも6。 |
+| `schema_version` | 全9種類 | CSVスキーマ番号。全9種類とも7。 |
+
+Hash照会率とHash除外率は、対応するselection_attemptsと同じ期間・同じ選別領域を分母に使います。照会率が低い場合、除外0でも重複が少ないとは判断できません。Hash照会済みの集合も偏り得るため、除外率の分母を照会数に読み替えないでください。sub/turnの3列はそれぞれ別の母集団です。
+
+expanded_sub_step_maxはCsvStatHookがSubStepEndを受けた時に、実際に展開した層だけを、間引き判定より前に集計します。記録した行のsub_stepが空欄でも、区間内に展開があれば最大値を出します。区間最大は実際の記録ごとに区切り、全探索最大は別に保持します。best_sub_stepやbest_depthには最良解に残らない深い行き止まりが現れないため、探索全体の深さはこの列で確認します。
 
 割合・平均の分母が0の場合は空欄です。multiの展開step平均の分母は、対象期間の展開数から、その期間に含まれる初期ノードの展開1回だけを引いた数です。初期ノードは最初に最大1回だけ展開され、到着turnが正のノードは根圧縮後も対象に含めます。
 
@@ -2362,7 +2367,7 @@ KM・KSでは、例えばsweep 1の次にsweep 4の終了を記録した場合�
 
 stddev=0はcostの同点を表し、State・経路の多様性の消失や評価関数の誤りを証明しません。異なるturn間のcost増減を改善とみなせるかも、評価関数の定義によります。空集合ではlayer_size=0、4統計は空欄。無限大を含む場合はmin/maxを記録しmean/stddevを空欄にし、有限値だけへ母集団を変更しません。平均・分散はlong doubleで、基準値との差を使う2回の走査で集計し、算術結果が非有限の場合も空欄にします。
 
-新しい集計は層境界で保存済みcostを読む処理で、候補pushやexpandごとの更新、Stateのコピー・復元・再評価を増やしません。診断無効時は集計コードと保持領域を除去します。診断有効時は保持領域を走査する負荷があり、delta multiでは既存の未展開葉の走査も使います。chokudai subで保持幅が大きく取出し幅が小さい場合は、その負荷が相対的に大きくなります。CSVの間引きはこの集計頻度を下げないため、本番速度の測定には診断無効を使ってください。
+層costの集計は層境界で保存済みcostを読む処理で、候補pushやexpandごとの更新、Stateのコピー・復元・再評価を増やしません。診断無効時は集計コードと保持領域を除去します。診断有効時は保持領域を走査する負荷があり、delta multiでは既存の未展開葉の走査も使います。chokudai subで保持幅が大きく取出し幅が小さい場合は、その負荷が相対的に大きくなります。CSVの間引きはこの集計頻度を下げないため、本番速度の測定には診断無効を使ってください。
 
 ### 13.5 イベントと停止理由
 
@@ -2395,17 +2400,20 @@ stddev=0はcostの同点を表し、State・経路の多様性の消失や評価
 | --- | --- |
 | `found=0`、`invalid_candidates>0` | NaN評価、step/Next、最大turn超過を候補生成側で確認。まず不正候補の発生を直す。 |
 | `found=0`、`Exhausted`、`frontier_fill_pct`が低い | 遷移の行き止まり、過度な制約、Hashへ必要情報を入れ忘れていないかを確認。幅だけ増やしても候補生成不足は解消しない。 |
-| `width_discard_pct`が高く、`frontier_done_pct=100` | 幅制限が多い。時間に余裕があれば幅を増やし、評価関数・候補生成順の改善も同じ予算で比較する。棄却が多いだけで解品質が悪いとは断定しない。 |
+| `hash_checked_pct`が低く、`hash_discard_pct=0` | Hash未検査が多い。use_hash_dedup、Hashなしpush、幅で先に落ちる候補を確認する。重複が少ないとは判断しない。 |
 | `frontier_done_pct`が低く、`turns_cut_by_time`が増える | 幅を使い切れていない。幅・分岐数を減らす、生成/評価/状態更新を軽くする、turn配分を調整する。 |
-| `hash_discard_pct`が高い | 同等候補の生成を減らせるか確認。Hashで候補が置換される場合も含む。幅で先に棄却されHash未検査の候補まで重複と推測しない。subはsub/turn各列を読む。 |
-| `best_updates=0`が続き、`best_unchanged_ms`が長い | 改善が止まっている。評価関数、候補の多様性、幅、chokudaiの取出し幅を変更して比較する。停滞時間は記録間隔を変えても同じ定義で、改善したexpandの終了を基準にする。 |
+| `hash_discard_pct`が高い | 同じHashの再生成を減らせるか確認する。良い候補へのHash置換も含むため、全て無駄とは扱わない。照会率と選別対象数を併読し、未検査の重複を推測しない。subはsub/turn別に読む。 |
+| 解発見後に`best_updates=0`が続き、`best_unchanged_ms`が長い | 改善が止まっている。評価関数、候補の多様性、幅、chokudaiの取出し幅を同じ予算で比較する。初解前の更新0は異常ではない。更新回数は生成順にも依存するため改善量と併読する。 |
 | `first_solution_budget_pct`が高い、`expanded_after_timeout>0` | 初解確保が遅い。初回幅を減らす、早く完成できる候補を残す、別途初期解を用意する。救済に頼る場合はoverrunも確認。 |
 | `finalize_ms`が大きい、`overrun_ms>0` | 探索後のpath構築・復元・再生の予算を確保。`apply_best_on_return`が本当に必要か、Actionコピーや適用処理の費用を確認。 |
 | deltaの`moves_per_expand`が大きい | 遠い枝の往復が多い。Action適用/取消を軽くする、幅を減らす、Stateが小さければcopyとの比較を行う。この値自体は移動時間ではない。 |
-| subの`sub_expand_pct`が高い | turn内の展開が多い。sub_beam_width、Sub終了条件、Turnへ進む候補の生成頻度を調整する。sub/turn各選別率で、どちらの幅が制約か見分ける。 |
+| subの`sub_expand_pct`が高い | turn内の展開が多い。expanded_sub_step_maxが想定した深さかを確認し、sub_beam_width、Sub終了条件、Turnへ進む候補の生成頻度を比較する。展開割合を時間割合とは扱わない。 |
+| subの`expanded_sub_step_max`が想定より大きい | 最良解に残らない枝も含め、Sub終了条件・ループ相当の遷移・枝刈りを確認する。深いこと自体が悪いとは限らない。 |
+| subの選別投入が多く、turnの選別投入が少ない | sub_selection_attemptsとturn_selection_attemptsを確認し、Turnへ進む候補を生成できているか調べる。終端や解保存だけの候補は選別母数に含まれないためanswer_candidatesも見る。 |
 | multiで`generated_step_avg`が小さく、`pending_turns`も少ない | 長いstep候補を生成しているかを確認。設定のmax_stepも合わせて読む。 |
 | multiで生成step平均は大きいが`expanded_step_avg`が小さい | 長い遷移を生成しても展開に使われていない。評価値、到着turn別の幅、終端への直行、時間切れで未展開の候補を確認する。両平均の母集団は異なるため、値の一致を目標にはしない。 |
-| multiで`pending_turns`が多く、`full_pending_turn_pct`も高い | 複数の到着turnで幅が埋まっている。生成stepの範囲、幅、評価値の意味、メモリと時間の配分を比較する。割合は時点値であり、全探索の平均ではない。 |
+| multiで`pending_turns`が多く、`full_pending_turn_pct`も高い | 複数の到着turnへ候補を保持している。pending_candidates・peakも見て、生成stepの範囲とメモリ・時間配分を比較する。満杯の割合だけで幅不足とは判断しない。 |
+| chokudaiのsearch_totalで`sweep_completed=0` | 最後のsweepは途中終了。completed_sweepsは完了分だけを数える。初回の成否と後続の改善量も見て、初回幅・後続幅・予算配分を比較する。 |
 | chokudaiで`first_sweep_completed=0` | 初回が制限内に終わっていない。first_sweep_widthや分岐数を減らす。 |
 | chokudaiで`first_sweep_budget_pct`が高く、`refinement_ms`が短い | 初回へ時間を使い過ぎている。first_sweep_widthを下げ、後続スイープの時間を確保する。 |
 | chokudaiで初回完了、`refinement_ms>0`、`best_gain_after_first_sweep=0` | 後続探索が解改善に寄与していない。sweep_width、評価関数、保持幅、通常ビームとの配分を比較する。初回未完了・未発見の空欄を「改善0」と混同しない。 |
@@ -2414,15 +2422,19 @@ stddev=0はcostの同点を表し、State・経路の多様性の消失や評価
 | layer_sizeが小さく、frontier_fill_pctも低い | 評価値のばらつきの前に候補不足を確認する。合法手・枝刈り・Hash除外率を調べ、幅を増やす効果があるか判断する。 |
 | `diagnostic_flags`が空欄でない | 通常の幅・Hash棄却と別の容量異常。設定と再現ケースを確認する。 |
 
+frontier_fill_pctが100%でも幅不足とは限りません。幅を変える比較では、同じ入力・時間予算でbest_cost、展開量、初解時刻、完走状況を合わせて読みます。best_gainの空欄を改善0と扱わず、全体行ではbest_costと、chokudaiなら初回以降の改善量を確認します。
+
+SearchEndでtime_limit_reached=0、RunEndで1なら返却準備中に期限へ到達しています。stop_reasonは探索時の理由のままなので、Completedとoverrun_ms>0は両立します。返却準備の予算はfinalize_msで確認してください。
+
 `interval_ms=0`なら、KM・KSでは毎sweepの終了、他方式では全イベントを追えます。記録が多い場合はメモリも消費します。探索品質の比較では同一入力・同一時間予算を揃え、複数seedで比較してください。診断の有無や記録量で実行時間が変わるため、提出用の速度・時間超過はLOCAL未定義のビルドで確認します。LOCALありのまま計測する場合はEnableDiagnostics=falseを指定してください。
 
 ### 13.7 検証範囲
 
-GCC 13.3.0・C++20で、全9ヘッダの単体実行をLOCALあり・なしの18構成、ガイドの18例、スケルトンの18構成でコンパイル・実行しています。CSVの全89列名・方式別の列構成を本章の一覧と照合しています。
+GCC 13.3.0・C++20で、全9ヘッダの単体実行をLOCALあり・なしの18構成、ガイドの18例をLOCALあり・なしの36構成、スケルトンを18構成でコンパイル・実行しています。CSVの全90列名・方式別の列構成を本章の一覧と照合しています。
 
-全9種類・468ケース、11,076行のCSVで探索結果と診断値を検証しています。評価関数・幅・Hash有無・同点・不正候補・途中解・間引き・時間切れ・救済・turn別予算・deltaの最終復元と再生を含みます。複数turn先への遷移を含む救済、Hashあり/なし候補の混在、明示した小容量Hash表も確認しています。仮想時計を用い、簡素化前後で探索結果・全列の順序と値が一致しています。
+全9種類・604ケース、15,102行のCSVを出力しています。577ケースは再現可能な仮想時計、27ケースは実時計です。評価関数・幅・Hash有無・同点・不正候補・途中解・間引き・時間切れ・救済・turn別予算・deltaの最終復元と再生を含みます。複数turn先への遷移を含む救済、Hashあり/なし候補の混在、明示した小容量Hash表も確認しています。仮想時計の577ケースでは、修正前後の探索結果と、変更対象外のCSV値942,607セルが一致しています。
 
-層統計は7種類・74ケースで、保持候補のcostを利用側の生成・展開履歴から追跡して確認しています。全層と間引き、幅・Hash選別、同点、候補枯渇、1件、max_turn=0、時間切れ、無限大、大きな整数cost、multiの異なる到着turnと空の途中turn、chokudai subの持越しを含みます。
+Hash照会率・除外率の各区間と全体集計を、hookで別途保存した既存カウンタと照合しています。sub深さは実際のexpand呼出しから別に追跡し、間引かれた深い行き止まりも検出できることを確認しています。同じCsvStatHookを再利用する追加9実行では、最大深さ4・0・未展開が正しく切り替わり、前の実行の値が残らないことを確認しています。
 
 診断用の保持・更新・hook通知は、LOCAL未定義またはEnableDiagnostics=falseの場合にコンパイル時に除去されます。LOCAL未定義時のCsvStatHookは空実装です。
 

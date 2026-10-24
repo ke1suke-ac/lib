@@ -281,7 +281,7 @@ struct NoOp {
             auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
             auto write_selection = [&](const SelectionStats& a, const SelectionStats& b) {
                 const auto attempts = a.attempts() - b.attempts();
-                ratio((a.rejected_by_width - b.rejected_by_width) + (a.replaced_by_width - b.replaced_by_width), attempts, 100);
+                ratio(a.hash_checked - b.hash_checked, attempts, 100);
                 ratio((a.rejected_by_hash - b.rejected_by_hash) + (a.replaced_by_hash - b.replaced_by_hash), attempts, 100);
                 cell(attempts);
             };
@@ -299,8 +299,8 @@ struct NoOp {
                 // 探索量・速度
                 "expand_per_sec", "expanded_nodes", "candidates_per_expand", "generated_candidates",
                 "invalid_candidates",
-                // 幅・Hashによる選別
-                "width_discard_pct", "hash_discard_pct", "selection_attempts",
+                // Hash照会・除外と選別量
+                "hash_checked_pct", "hash_discard_pct", "selection_attempts",
                 // 残候補・方式別の負荷
                 "pending_candidates", "peak_pending_candidates", "pending_turns", "full_pending_turn_pct",
                 "generated_step_avg", "expanded_step_avg", "moves_per_expand", "peak_node_capacity",
@@ -396,7 +396,7 @@ struct NoOp {
                 cell("beam");
                 cell("delta");
                 cell("multi");
-                cell(6);
+                cell(7);
                 end();
                 previous = &r;
             }

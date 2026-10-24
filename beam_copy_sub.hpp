@@ -209,21 +209,32 @@ public:
         // 診断の有効・無効は外側の diagnostics_enabled で決まる。
     struct CsvStatHook {
 #ifdef LOCAL
-        struct Row { EventType event; DebugRuntime runtime; };
+        struct Row { EventType event; DebugRuntime runtime; std::int64_t expanded_sub_step_max = -1; };
         std::string filename;
-        std::int64_t interval_us;
+        std::int64_t interval_us, interval_sub_step_max = -1, total_sub_step_max = -1;
         std::vector<Row> rows;
         explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
             : filename(std::move(path)), interval_us(sub_detail::to_us(interval_ms)) {}
         void operator()(EventType event, const DebugRuntime& rt) {
-            if (event == EventType::RunStart) rows.clear();
+            if (event == EventType::RunStart) {
+                rows.clear();
+                interval_sub_step_max = total_sub_step_max = -1;
+            }
+            // 間引く層も含め、実際に展開した深さを記録前に集計する。
+            if (event == EventType::SubStepEnd && rt.frontier_expanded > 0) {
+                interval_sub_step_max = std::max(interval_sub_step_max, rt.sub_step);
+                total_sub_step_max = std::max(total_sub_step_max, rt.sub_step);
+            }
             const bool mandatory = event == EventType::RunStart || event == EventType::SearchEnd ||
                 event == EventType::RunEnd ;
             const bool changed = !rows.empty() &&
                 (rt.diagnostic_flags != rows.back().runtime.diagnostic_flags ||
                  (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) || rt.turns_cut_by_time > rows.back().runtime.turns_cut_by_time);
             if (mandatory || changed || rows.empty() || interval_us == 0 ||
-                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.push_back({event, rt});
+                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) {
+                rows.push_back({event, rt, event == EventType::RunEnd ? total_sub_step_max : interval_sub_step_max});
+                if (event != EventType::RunEnd) interval_sub_step_max = -1;
+            }
             if (event == EventType::RunEnd) write();
         }
     private:
@@ -274,7 +285,7 @@ public:
             auto ms = [](std::int64_t us) { return static_cast<double>(us) * 0.001; };
             auto write_selection = [&](const SelectionStats& a, const SelectionStats& b) {
                 const auto attempts = a.attempts() - b.attempts();
-                ratio((a.rejected_by_width - b.rejected_by_width) + (a.replaced_by_width - b.replaced_by_width), attempts, 100);
+                ratio(a.hash_checked - b.hash_checked, attempts, 100);
                 ratio((a.rejected_by_hash - b.rejected_by_hash) + (a.replaced_by_hash - b.replaced_by_hash), attempts, 100);
                 cell(attempts);
             };
@@ -292,11 +303,11 @@ public:
                 // 探索量・速度
                 "expand_per_sec", "expanded_nodes", "candidates_per_expand", "generated_candidates",
                 "invalid_candidates",
-                // 幅・Hashによる選別
-                "sub_width_discard_pct", "sub_hash_discard_pct", "sub_selection_attempts", "turn_width_discard_pct",
+                // Hash照会・除外と選別量
+                "sub_hash_checked_pct", "sub_hash_discard_pct", "sub_selection_attempts", "turn_hash_checked_pct",
                 "turn_hash_discard_pct", "turn_selection_attempts",
                 // 残候補・方式別の負荷
-                "pending_candidates", "peak_pending_candidates", "sub_expand_pct",
+                "pending_candidates", "peak_pending_candidates", "sub_expand_pct", "expanded_sub_step_max",
                 // 終了・時間切れ・異常
                 "stop_reason", "completed_max_turn", "time_limit_reached", "overrun_ms",
                 "finalize_ms", "turn_budget_used_pct", "turn_budget_ms", "turn_time_limit_reached",
@@ -361,6 +372,7 @@ public:
                 cell(s.pending_candidates);
                 cell(s.peak_pending_candidates);
                 ratio(s.sub_expanded_nodes - p.sub_expanded_nodes, expanded, 100);
+                opt(row.expanded_sub_step_max >= 0, row.expanded_sub_step_max);
                 cell(reason_name(r.stop_reason));
                 cell(r.completed_max_turn);
                 cell(r.time_limit_reached);
@@ -385,7 +397,7 @@ public:
                 cell("beam");
                 cell("copy");
                 cell("sub");
-                cell(6);
+                cell(7);
                 end();
                 previous = &r;
             }

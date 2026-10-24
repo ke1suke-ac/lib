@@ -1,23 +1,23 @@
-// beam_skelton_v43.cpp
+// beam_skelton_v44.cpp
 //
 // ビームサーチ6種類とchokudaiサーチ3種類を、1ファイル内で切り替えて試すためのスケルトンです。
 // 使うライブラリは BEAM_SKELTON_KIND で選びます。
 //
-//   1: beam_delta_multi_v81.hpp       turn + Action保持型
-//   2: beam_delta_single_v57.hpp      turn統一 + Action保持型。各手は必ず +1 turn
-//   3: beam_copy_multi_v55.hpp        turn + State保持型
-//   4: beam_copy_single_v51.hpp       turn統一 + State保持型。各手は必ず +1 turn
-//   5: chokudai_copy_multi_v28.hpp    chokudai + State保持型。各手のstepを指定
-//   6: chokudai_copy_single_v26.hpp   chokudai + State保持型。各手は必ず +1 turn
-//   7: beam_delta_sub_v24.hpp        turn内sub探索 + Action保持型
-//   8: beam_copy_sub_v23.hpp         turn内sub探索 + State保持型
-//   9: chokudai_copy_sub_v24.hpp     chokudai + turn内sub探索 + State保持型
+//   1: beam_delta_multi_v82.hpp       turn + Action保持型
+//   2: beam_delta_single_v58.hpp      turn統一 + Action保持型。各手は必ず +1 turn
+//   3: beam_copy_multi_v56.hpp        turn + State保持型
+//   4: beam_copy_single_v52.hpp       turn統一 + State保持型。各手は必ず +1 turn
+//   5: chokudai_copy_multi_v29.hpp    chokudai + State保持型。各手のstepを指定
+//   6: chokudai_copy_single_v27.hpp   chokudai + State保持型。各手は必ず +1 turn
+//   7: beam_delta_sub_v25.hpp        turn内sub探索 + Action保持型
+//   8: beam_copy_sub_v24.hpp         turn内sub探索 + State保持型
+//   9: chokudai_copy_sub_v25.hpp     chokudai + turn内sub探索 + State保持型
 //
 // 例:
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v43.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v43.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v43.cpp
-//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v43.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v44.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v44.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v44.cpp
+//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v44.cpp
 //
 // 注意:
 //   使うヘッダをこのファイルと同じディレクトリに置くか、コンパイル時に -I で場所を指定してください。
@@ -119,7 +119,12 @@
 //   subはSubStepEnd、chokudaiはSweepStart / SweepEndも通知します。CSVは共通列と方式固有列です。
 //   列順は経過・座標、最良解、層cost、探索量・選別、詳細診断、設定、方式識別です。
 //   全9種類で共通列の相対順序を揃え、方式固有列は関連項目のまとまりに入れています。
-//   CSVのschema_versionは6です。全列の出力順はガイド13.4を参照してください。
+//   CSVのschema_versionは7です。全列の出力順はガイド13.4を参照してください。
+//   Hash照会率・Hash除外率・選別対象数を同じ母集団で並べます。除外0は重複なしとは限りません。
+//   subのexpanded_sub_step_maxは記録区間内で実際に展開した最大sub_stepです。間引いた層も含みます。
+//   search_totalのsweep_completedは最後のsweepの完了状態、未開始なら空欄です。
+//   best_gainは区間両端に解がある場合のみ。search_totalでは空欄です。
+//   time_limit_reachedはRunEndでは返却準備中の期限到達も含みます。
 //   chokudai single/multiのCSVはSweepEnd単位です。RunStart / SearchEnd / RunEndも記録します。
 //   初回・未完了のSweepEndは間隔によらず記録し、TurnEnd / SweepStartは記録しません。
 //   診断はBSの第3テンプレート引数EnableDiagnostics（既定true）で切り替えます。
@@ -142,7 +147,7 @@
 #include <iostream>
 
 #if BEAM_SKELTON_KIND == 1
-#include "beam_delta_multi_v81.hpp"
+#include "beam_delta_multi_v82.hpp"
 
 namespace {
 
@@ -242,7 +247,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 2
-#include "beam_delta_single_v57.hpp"
+#include "beam_delta_single_v58.hpp"
 
 namespace {
 
@@ -335,7 +340,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 3
-#include "beam_copy_multi_v55.hpp"
+#include "beam_copy_multi_v56.hpp"
 
 namespace {
 
@@ -446,7 +451,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 4
-#include "beam_copy_single_v51.hpp"
+#include "beam_copy_single_v52.hpp"
 
 namespace {
 
@@ -554,7 +559,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 5
-#include "chokudai_copy_multi_v28.hpp"
+#include "chokudai_copy_multi_v29.hpp"
 
 namespace {
 
@@ -671,7 +676,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 6
-#include "chokudai_copy_single_v26.hpp"
+#include "chokudai_copy_single_v27.hpp"
 
 namespace {
 
@@ -785,7 +790,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 7
-#include "beam_delta_sub_v24.hpp"
+#include "beam_delta_sub_v25.hpp"
 
 namespace {
 
@@ -889,7 +894,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 8
-#include "beam_copy_sub_v23.hpp"
+#include "beam_copy_sub_v24.hpp"
 
 namespace {
 
@@ -1000,7 +1005,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 9
-#include "chokudai_copy_sub_v24.hpp"
+#include "chokudai_copy_sub_v25.hpp"
 
 namespace {
 
