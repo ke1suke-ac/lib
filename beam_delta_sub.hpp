@@ -1,7 +1,7 @@
 #pragma once
 #include <bits/stdc++.h>
 
-// beam_delta_sub_v24.hpp : ターン境界で比較をそろえる sub 探索。cost は小さいほど良い。
+// 差分型beam : ターン境界で比較をそろえる sub 探索。cost は小さいほど良い。
 // W=境界幅、U=sub幅、G=生成数、E=展開数、D=経路長。利用側の処理費用は別途加算。
 namespace bs {
 template<class T>
@@ -141,7 +141,7 @@ public:
         struct Row { EventType event; DebugRuntime runtime; std::int64_t expanded_sub_step_max = -1; };
         std::string filename;
         std::int64_t interval_us, interval_sub_step_max = -1, total_sub_step_max = -1;
-        std::vector<Row> rows;
+        std::deque<Row> rows; // 追記時に既存行をコピーしない。
         explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
             : filename(std::move(path)), interval_us(sub_detail::to_us(interval_ms)) {}
         void operator()(EventType event, const DebugRuntime& rt) {
@@ -161,7 +161,7 @@ public:
                  (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) || rt.turns_cut_by_time > rows.back().runtime.turns_cut_by_time);
             if (mandatory || changed || rows.empty() || interval_us == 0 ||
                 rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) {
-                rows.push_back({event, rt, event == EventType::RunEnd ? total_sub_step_max : interval_sub_step_max});
+                rows.emplace_back(event, rt, event == EventType::RunEnd ? total_sub_step_max : interval_sub_step_max);
                 if (event != EventType::RunEnd) interval_sub_step_max = -1;
             }
             if (event == EventType::RunEnd) write();
@@ -357,22 +357,22 @@ public:
     public:
         // 候補を追加する。期待償却O(log(2+幅)+保存費用)。trueは探索候補への一時保存。最良解だけ保存した場合はfalse。
         template<class U> requires ActionArg<U, Value>
-        bool push(U&& value, Cost cost, Next next = Next::Turn) {
+        bool push(Cost cost, Next next, U&& value) {
             return push_value(std::forward<U>(value), cost, hash_, false, false, next);
         }
         // 有効解の印を指定する。同じ計算量。expand_answers=falseなら保存だけを行い、展開対象へ登録しない。
         template<class U, class B> requires ActionArg<U, Value> && BoolArg<B>
-        bool push(U&& value, Cost cost, B is_answer, Next next = Next::Turn) {
+        bool push(Cost cost, Next next, B is_answer, U&& value) {
             return push_value(std::forward<U>(value), cost, hash_, false, is_answer, next);
         }
         // Hashを明示する。同じ計算量。同じ保存先内だけで重複排除する。
         template<class U, class H> requires ActionArg<U, Value> && CompatibleHashArg<H, Hash>
-        bool push(U&& value, Cost cost, H hash, Next next = Next::Turn) {
+        bool push(Cost cost, Next next, H hash, U&& value) {
             return push_value(std::forward<U>(value), cost, static_cast<Hash>(hash), true, false, next);
         }
         // Hashと有効解の印を指定する。同じ計算量。
         template<class U, class H, class B> requires ActionArg<U, Value> && CompatibleHashArg<H, Hash> && BoolArg<B>
-        bool push(U&& value, Cost cost, H hash, B is_answer, Next next = Next::Turn) {
+        bool push(Cost cost, Next next, H hash, B is_answer, U&& value) {
             return push_value(std::forward<U>(value), cost, static_cast<Hash>(hash), true, is_answer, next);
         }
 
@@ -569,7 +569,7 @@ private:
             if constexpr (diagnostics_enabled) {
                 tick(true); snapshot();
                 hook(event, static_cast<const DebugRuntime&>(rt_));
-                tick();
+                if (limit_us_ > 0) tick();
             }
         }
         bool destination(Next next, Cost cost, int& arrival, SelectionStats*& stats) {
@@ -797,8 +797,7 @@ private:
         }
         template<class Expand, class Forward, class Backward, class Hook>
         Result<Value> run(Expand&& expand, Forward&& forward, Backward&& backward, Hook&& hook) {
-            observe_time_ = diagnostics_enabled ||
-                std::is_invocable_v<Expand&, const NodeView&, const Runtime&, Emitter<Value>&>;
+            observe_time_ = std::is_invocable_v<Expand&, const NodeView&, const Runtime&, Emitter<Value>&>;
             tick(true);
             if constexpr (diagnostics_enabled) if (rt_.found) rt_.first_solution_us = rt_.last_best_update_us = 0;
             notify(EventType::RunStart, hook);
@@ -834,7 +833,7 @@ private:
 
                         after_expand();
                     }
-                    tick();
+                    if constexpr (!diagnostics_enabled) tick();
                     notify(EventType::SubStepEnd, hook);
                     if (stop_on_timeout()) break;
                     if ((rt_.time_limit_reached || rt_.turn_time_limit_reached) && next_exists()) {
@@ -1017,9 +1016,9 @@ struct Harness {
         int item = child;
 #endif
 #if RUNTIME_TEST_MULTI
-        bool ok = emit.push(item, cost, hash, 1, answer);
+        bool ok = emit.push(cost, 1, hash, answer, item);
 #else
-        bool ok = emit.push(item, cost, hash, answer);
+        bool ok = emit.push(cost, B::Next::Turn, hash, answer, item);
 #endif
         accepted.push_back(ok); return ok;
     }
@@ -1229,9 +1228,9 @@ void diagnostic_mode() {
         int child = now.state + 1;
 #endif
 #if RUNTIME_TEST_MULTI
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1), 1);
+        emit.push(-double(now.turn + 1), 1, std::uint64_t(now.turn + 1), child);
 #else
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1));
+        emit.push(-double(now.turn + 1), T::Next::Turn, std::uint64_t(now.turn + 1), child);
 #endif
     };
     auto hook = [&](typename T::EventType event, const typename T::DebugRuntime& rt) {

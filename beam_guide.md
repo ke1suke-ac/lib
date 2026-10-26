@@ -6,15 +6,15 @@
 
 | ライブラリファイル | 型 | 状態の保持方法 | 1回の遷移 |
 | --- | --- | --- | --- |
-| `beam_copy_single_v52.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
-| `beam_delta_single_v58.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
-| `beam_copy_multi_v56.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
-| `beam_delta_multi_v82.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
-| `chokudai_copy_single_v27.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
-| `chokudai_copy_multi_v29.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
-| `beam_copy_sub_v24.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
-| `beam_delta_sub_v25.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
-| `chokudai_copy_sub_v25.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
+| `beam_copy_single_v54.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 必ず次のturnへ |
+| `beam_delta_single_v59.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 必ず次のturnへ |
+| `beam_copy_multi_v58.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 指定した`step`だけturnを進める |
+| `beam_delta_multi_v83.hpp` | `bs::Beam<Cost, Hash>` | Actionと時刻情報を保存し、外部状態を更新 | 指定した`step`だけturnを進める |
+| `chokudai_copy_single_v29.hpp` | `cs::ChokudaiCopySingle<Cost, Hash>` | Stateと未展開候補を保存 | 必ず次のturnへ |
+| `chokudai_copy_multi_v31.hpp` | `cs::ChokudaiCopyMulti<Cost, Hash>` | Stateと未展開候補を保存 | 指定した`step`だけturnを進める |
+| `beam_copy_sub_v26.hpp` | `bs::Beam<Cost, Hash>` | Stateを保存 | 同turnの次sub層、または次turnへ |
+| `beam_delta_sub_v26.hpp` | `bs::Beam<Cost, Hash>` | Actionを保存し、外部状態を更新 | 同turnの次sub層、または次turnへ |
+| `chokudai_copy_sub_v27.hpp` | `cs::ChokudaiCopySub<Cost, Hash>` | turn開始候補を持ち越し、turn内は通常ビーム | 同turnの次sub層、または次turnへ |
 
 以下では、`beam_`で始まる6種類を「通常ビーム」、`chokudai_`で始まる3種類を「chokudai」と呼びます。`Cost`の既定型は`long long`、`Hash`の既定型は`std::uint64_t`です。
 
@@ -237,37 +237,81 @@ auto result = BS::run<State, Action>(param, initial_state, initial_cost, initial
 
 ### 2.5 pushとpush_lazyの引数
 
-`value`はcopy型では`State`、delta型では`Action`です。`hash`と`is_answer`は任意ですが、multiの`step`は必須です。次の表は全項目を指定する形です。
+全9種類で、引数は「cost、遷移情報、hash、is_answer、Action、State」の順です。`push_lazy`はAction・Stateの位置へそれぞれのmakerを渡します。通常beamとchokudaiで同じ書式を使います。
 
-| 系統 | `push`の最大引数形 | copy型の`push_lazy`の最大引数形 |
-| --- | --- | --- |
-| single | `push(value, cost, hash, is_answer)` | `push_lazy(cost, hash, is_answer, maker)` |
-| multi | `push(value, cost, hash, step, is_answer)` | `push_lazy(cost, hash, step, is_answer, maker)` |
-| sub | `push(value, cost, hash, is_answer, next)` | `push_lazy(cost, hash, is_answer, maker, next)` |
+次の表の`P`は説明用の記号です。実際には、singleでは`cost`、multiでは`cost, step`、subでは`cost, next`と書きます。multiの`step`とsubの`next`は必須です。
 
-subの`next`は省略すると`BS::Next::Turn`です。`push_lazy`では`maker`の後に置きます。delta型には`push_lazy`はありません。
+| 用途 | 全項目を指定する形 |
+| --- | --- |
+| copy・履歴なし | `push(P, hash, is_answer, state)` |
+| copy・履歴あり | `push(P, hash, is_answer, action, state)` |
+| delta | `push(P, hash, is_answer, action)` |
+| copy・履歴なしの遅延生成 | `push_lazy(P, hash, is_answer, make_state)` |
+| copy・既存ActionとState遅延生成 | `push_lazy(P, hash, is_answer, action, make_state)` |
+| copy・ActionとStateの遅延生成 | `push_lazy(P, hash, is_answer, make_action, make_state)` |
 
-`step`は`int`型で、1以上かつ`max_step`以下です。到着turnが`max_turn`を超える候補は受理されません。multiの`step=0`を、subの代わりに使うことはできません。
+`hash`と`is_answer`は、それぞれ独立に省略できます。たとえばsingleの履歴ありcopyでは次の4形です。`push_lazy`も同じ省略規則です。
 
-Hash引数はbool以外の符号なし整数で、`Hash`型以下の幅が必要です。たとえば`Hash{123}`を使います。`is_answer`には`true`または`false`などのboolを渡し、整数の0や1で代用しないでください。StateやActionは指定した型そのものを渡します。
+```cpp
+emit.push(cost,                  action, state);
+emit.push(cost, hash,            action, state);
+emit.push(cost,       is_answer, action, state);
+emit.push(cost, hash, is_answer, action, state);
+```
 
-`push_lazy`は、保存する必要があると判断されたときにだけ、引数なしの`maker()`からStateを作ります。makerの戻り値は、Stateを直接構築できる型であれば利用できます（明示コンストラクタによる変換も含みます）。makerは同期的に呼ばれ、後で実行するために保存されません。このためサンプルの`[&now, ...]`は有効です。候補を棄却するために必要なcostやHashはmakerより前に計算する必要があります。makerの中だけで計算して外部へ渡す設計にはできません。
+Hash省略時はその候補を重複排除しません。`Hash{0}`の明示とは異なります。`is_answer`省略時は`false`です。`max_turn_is_answer`による最大turnでの解判定は別に行います。delta型には`push_lazy`はありません。
 
-Stateコピーを遅らせたい場合、先に巨大な`State next`を作ってそれをラムダへコピーすると利点を失います。小さな変更情報をキャプチャし、maker内で親Stateをコピーして変更します。
+`step`は`int`型で、1以上かつ`max_step`以下です。到着turnが`max_turn`を超える候補は受理されません。multiの`step=0`を、subの代わりに使うことはできません。subの`next`は`BS::Next::Sub`または`BS::Next::Turn`をcostの直後へ必ず指定します。
+
+Hash引数はbool以外の符号なし整数で、`Hash`型以下の幅が必要です。たとえば`Hash{123}`を使います。`is_answer`には`true`または`false`などのboolを渡し、整数の0や1で代用しないでください。StateやActionの値は指定した型そのものを渡します。
+
+copyで操作履歴も保持する場合は、`Emitter<State, Action>`を使います。Actionはコピー構築可能にしてください。デフォルト構築・代入は不要です。生成済みActionを渡す場合も、保存が必要な場合だけ履歴ノードへコピーまたはムーブします。Stateには評価・遷移に必要な情報を残し、出力だけの履歴を分離するとコピーを軽くできます。
+
+makerの引数は次のようになります。
+
+| maker | 呼び出し方 |
+| --- | --- |
+| 履歴なしのState生成 | `make_state()` |
+| 履歴ありのAction生成 | `make_action()`。正確に`Action`を値で返す |
+| 履歴ありのState生成 | `make_state(const Action&)`。既存Actionを渡す場合も同じ |
+
+State makerの戻り値は、Stateを直接構築できる型であれば利用できます。明示コンストラクタによる変換も含みます。Actionの位置へAction型そのものを渡すと値として扱い、それ以外でActionを返す呼び出し可能な型を渡すとmakerとして扱います。Action型自体に`operator()`があっても、値として扱います。
+
+```cpp
+// multi・履歴あり。既存ActionからStateだけを遅延生成します。
+emit.push_lazy(
+    cost, step, hash, is_answer,
+    action,
+    [&](const Action& a) -> State {
+        return make_next_state(now.state, a);
+    }
+);
+
+// sub・履歴あり。ActionとStateを遅延生成します。
+emit.push_lazy(
+    cost, BS::Next::Sub, hash, is_answer,
+    [&]() -> Action {
+        return make_action(candidate);
+    },
+    [&](const Action& a) -> State {
+        return make_next_state(now.state, a);
+    }
+);
+```
 
 全9種類で、`push`と`push_lazy`の戻り値は「その呼び出し時点で継続探索用の候補群へ入ったか」です。trueでも後の候補に置換される可能性があります。最良有効解だけを保存する場合はfalseです。最大turnに到達した候補は展開しないので、候補群へ入れずfalseを返し、必要なら最良解として保存します。解の有無は`result.found`で確認します。
 
-copy6種類の`push_lazy`は、探索候補への保存、または最良有効解の更新に必要な場合にmakerを呼びます。両方に使う場合でも1回だけです。幅・Hashで棄却され、かつ最良解を更新しない場合や、NaN・到着turn超過などの不正候補では呼びません。makerの呼び出し回数を、探索候補の採用数と同一視しないでください。
+copy6種類の`push_lazy`は、探索候補への保存、または最良有効解の更新に必要な場合にだけmakerを呼びます。両方に使う場合でも各makerは1回だけです。幅・Hashで棄却され、かつ最良解を更新しない場合や、NaN・到着turn超過などの不正候補では呼びません。makerの呼び出し回数を、探索候補の採用数と同一視しないでください。
 
-copyで操作履歴も保持する場合は、`Emitter<State, Action>`を使い、`push`のStateの直後、`push_lazy`の先頭へActionを追加します。Hashと`is_answer`の省略規則は同じです。
+- ActionとStateを生成する場合は、`make_action`、`make_state`の順で同期的に各1回呼びます。保存不要ならどちらも呼びません。
+- makerは後で実行するために保存されません。`now`などを参照キャプチャできます。
+- `make_state`が受け取るAction参照は、その呼び出し中だけ有効です。参照やポインタをStateへ残さず、必要な値をコピーしてください。
+- maker内で`emit.push`や`emit.push_lazy`を再度呼ばないでください。makerは、提示した候補1個の生成だけを行います。
+- cost・遷移情報・Hash・有効解判定はmakerの前に用意します。makerの中だけで計算して外部へ渡す設計にはできません。
+- コピーや生成を省きたい巨大なState・配列・vectorを、先に作ったりラムダのキャプチャ初期化時に生成したりすると利点を失います。小さな変更情報をキャプチャし、生成処理はmakerの本体へ置きます。
+- makerが例外を投げた場合は探索を中断して呼出元へ伝播します。生成済みの一時Actionなどは破棄しますが、利用側の外部変数への書き込みは巻き戻しません。
 
-| 系統 | 履歴あり`push` | 履歴あり`push_lazy` |
-| --- | --- | --- |
-| single | `push(state, action, cost, hash, is_answer)` | `push_lazy(action, cost, hash, is_answer, maker)` |
-| multi | `push(state, action, cost, hash, step, is_answer)` | `push_lazy(action, cost, hash, step, is_answer, maker)` |
-| sub | `push(state, action, cost, hash, is_answer, next)` | `push_lazy(action, cost, hash, is_answer, maker, next)` |
-
-Actionはコピー構築可能にしてください。デフォルト構築・代入は不要です。Actionはmakerの外で指定しますが、保存が必要な場合だけ履歴ノードへコピーまたはムーブされます。Stateには評価・遷移に必要な情報を残し、出力だけの履歴を分離するとコピーを軽くできます。
+Actionの生成が軽い場合や採用される候補が多い場合は、既存Actionを渡す形式も比較してください。2 maker形式が常に高速になるとは限りません。例02・06・10・12・14・18とスケルトンに、型を明記した使い方を掲載しています。
 
 ### 2.6 候補の選別・同点処理・Hash重複排除
 
@@ -413,11 +457,13 @@ CSVは`-DLOCAL`と`EnableDiagnostics=true`で、`BS::CsvStatHook("search.csv", 5
 
 通常beamとchokudai subには、選別後の1層全体の候補数とcostのmin/mean/max/stddevを出す`layer_*`列があります。全層の推移を見たい場合は記録間隔を0にします。層をまたいだ区間平均にはしません。集計対象と読み方は13.4を参照してください。
 
-全体期限・診断フラグの変化は次の記録対象イベントで記録し、通常beamでは実際のturn打ち切りも記録します。記録間隔はカウンタ更新や独自hookの通知頻度を変えません。chokudai single/multiでも独自hookには`TurnEnd`・`SweepStart`を通知します。
+全体期限・診断フラグの変化は次の記録対象イベントで記録し、通常beamでは実際のturn打ち切りも記録します。記録間隔はカウンタ更新や独自hookの通知頻度を変えません。chokudai multiの残候補ターン数・満杯ターン数は、キューが空・満杯の境界を跨ぐときに更新し、通知ごとの全ターン走査を行いません。chokudai single/multiでも独自hookには`TurnEnd`・`SweepStart`を通知します。
 
 各行は設定を含む自己完結した形式です。`scope=interval`は直前の記録行からの差分、最終`RunEnd`行の`scope=search_total`は探索開始から`SearchEnd`までの集計です。割合・速度・1展開あたり生成数・停滞時間を計算済みで出します。時間はms、割合は0〜100基準で、時間予算の使用率は100を超えます。分母0、未発見、適用外は空欄、実測0は0です。
 
 `SearchEnd`は最終復元・返却用path構築・`apply_best_on_return`の再生より前、`RunEnd`は返却結果の構築後です。CSVの`moves_per_expand`には探索後の復元・再生を混ぜず、その時間を`finalize_ms`に分けます。`elapsed_ms`と`overrun_ms`は最終処理を含みます。RunEnd通知以後のCSV書出し・残った領域の解放・利用側の出力は計測外なので、別に時間を残してください。途中のhook・記録処理の時間は実行時間に含まれるため、本番速度はLOCAL未定義、またはEnableDiagnostics=falseで測ってください。NoOpへ差し替えるだけでは診断カウンタを停止しません。
+
+`CsvStatHook::rows`は`std::deque<Row>`です。追記時に既存行をコピーせず、全イベント記録で大量の既存行を移し替える負荷を避けます。`size()`・添字アクセス・範囲forで参照できます。連続領域ではなく、`vector`専用の`reserve()`・`capacity()`・`data()`は使えません。
 
 `CsvStatHook::rows`の各要素は`event`と`runtime`（`DebugRuntime`）を持ちます。sub系だけは`expanded_sub_step_max`も持ち、記録区間内で実際に展開したsub深さの最大値を保存します。未展開は-1でCSVでは空欄、RunEndでは探索全体の最大値です。CSVはRunEndで一括出力し、同名ファイルを上書きします。書出し失敗は`std::runtime_error`です。CSV列の全一覧・各分母・AHCでの読み方は第13章を参照してください。
 
@@ -444,7 +490,7 @@ Viewは当該`expand`内だけ有効です。View自体は`push`・`push_lazy`�
 
 singleの`path`はAction列、multiは`Edge<Action>`列です。multiのAction参照では時刻情報は自動で付かないため、expand内の判断に必要ならActionへ必要な値を含めてください。subの`turn_offsets[0]`は0で、各Turn遷移の直後の位置が追加されます。途中Sub状態が最良解なら最後の区間は未完了turnで、`path.size()`が最後のoffsetより大きくなる場合があります。
 
-## 3. beam_copy_single_v52.hpp
+## 3. beam_copy_single_v54.hpp
 
 ### 例01：仕事の割当表を最終Stateから受け取る
 
@@ -458,7 +504,7 @@ singleの`path`はAction列、multiは`Edge<Action>`列です。multiのAction�
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_single_v52.hpp"
+#include "beam_copy_single_v54.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -496,12 +542,16 @@ int main() {
             // 同turn・同使用集合なら、安い方を残してよい問題です。
             // 割当表が大きくなる場合に備え、必要な候補だけStateをコピーします。
             // makerはこのpush_lazy中に高々1回呼ばれ、後で呼ばれることはありません。
-            emit.push_lazy(cost, static_cast<Hash>(used), [&now, job, used] {
+            emit.push_lazy(
+                cost,
+                static_cast<Hash>(used),
+                [&now, job, used] {
                 State next = now.state;
                 next.used = used;
                 next.job_for_worker[now.turn] = job;
                 return next;
-            });
+            }
+            );
         }
     };
 
@@ -544,7 +594,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "beam_copy_single_v52.hpp"
+#include "beam_copy_single_v54.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -600,8 +650,17 @@ int main() {
             if (board[row][col] == '#') continue;
             const bool goal = row == GOAL_ROW && col == GOAL_COL;
             const long long cost = now.turn + 1LL + distance_to_goal(row, col);
-            // 履歴ありpushはStateの直後にActionを渡します。
-            emit.push(State{row, col}, Action{dir}, cost, state_hash(row, col, dir), goal);
+            // 保存が必要な候補だけでActionを生成し、そのActionからStateを作ります。
+            emit.push_lazy(
+                cost,
+                state_hash(row, col, dir),
+                goal,
+                [dir]() -> Action { return Action{dir}; },
+                [&now](const Action& action) -> State {
+                    return State{now.state.row + dr[action.direction],
+                                 now.state.col + dc[action.direction]};
+                }
+            );
         }
     };
     // 第2テンプレート引数Actionを指定すると、最終Stateと操作列を両方受け取れます。
@@ -628,7 +687,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 4. beam_delta_single_v58.hpp
+## 4. beam_delta_single_v59.hpp
 
 ### 例03：割当を外部状態へ差分適用し、Action列を返す
 
@@ -642,7 +701,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_single_v58.hpp"
+#include "beam_delta_single_v59.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -677,7 +736,7 @@ int main() {
             const Hash hash = static_cast<Hash>(used | (1U << job));
             // 同turn・同使用集合なら将来条件は同じ。安い割当だけを残せます。
             // pushは候補を登録するだけで、ここでusedを子状態に変えません。
-            emit.push(Action{job}, now.cost + fee[now.turn][job], hash);
+            emit.push(now.cost + fee[now.turn][job], hash, Action{job});
         }
     };
     auto forward = [&](const Action& action) {
@@ -732,7 +791,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "beam_delta_single_v58.hpp"
+#include "beam_delta_single_v59.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -783,7 +842,7 @@ int main() {
             const bool goal = row == GOAL_ROW && col == GOAL_COL;
             const long long cost = now.turn + 1LL + distance_to_goal(row, col);
             // is_answer=trueで解として保存し、expand_answers=falseにより次のビームへは登録しません。
-            emit.push(Action{dir, world.previous}, cost, state_hash(row, col, dir), goal);
+            emit.push(cost, state_hash(row, col, dir), goal, Action{dir, world.previous});
         }
     };
     // 返却後の手動再生は不要なので、移動ラムダをrunへ直接渡せます。
@@ -820,7 +879,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 5. beam_copy_multi_v56.hpp
+## 5. beam_copy_multi_v58.hpp
 
 ### 例05：時間内に行う作業の集合を選ぶ
 
@@ -834,7 +893,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_multi_v56.hpp"
+#include "beam_copy_multi_v58.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -867,7 +926,7 @@ int main() {
             next.profit += reward[job];
             // 同じ到着turn・使用集合なら将来の選択肢も利益も同じです。
             // 途中で停止してもよいので、各作業の終了状態を有効解にします。
-            emit.push(next, -next.profit, static_cast<Hash>(next.used), step, true);
+            emit.push(-next.profit, step, static_cast<Hash>(next.used), true, next);
         }
     };
     const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand);
@@ -906,7 +965,7 @@ multiの`path`の要素は`Edge<Action>`です。`edge.action`が選んだ道路
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_multi_v56.hpp"
+#include "beam_copy_multi_v58.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -942,8 +1001,16 @@ int main() {
             const bool goal = road.to == goal_city;
             // 同じ到着時刻・都市なら将来条件が同じ。安い通行料の経路を残します。
             // costは通行料、stepは所要時間であり、両者は別の量です。
-            emit.push(State{road.to}, Action{id}, now.cost + road.toll,
-                      static_cast<Hash>(road.to), road.minutes, goal);
+            emit.push_lazy(
+                now.cost + road.toll,
+                road.minutes,
+                static_cast<Hash>(road.to),
+                goal,
+                [id]() -> Action { return Action{id}; },
+                [&roads](const Action& action) -> State {
+                    return State{roads[action.road].to};
+                }
+            );
         }
     };
     const auto result = BS::run<State, Action>(param, State{}, 0LL, Hash{0}, expand);
@@ -975,7 +1042,7 @@ toll=4 arrival=5 roads=1 4 6
 
 5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
 
-## 6. beam_delta_multi_v82.hpp
+## 6. beam_delta_multi_v83.hpp
 
 ### 例07：時刻に依存する生産をEdge付きcallbackで扱う
 
@@ -989,7 +1056,7 @@ Actionは生産方式の番号だけを持ち、出発時刻と所要時間はEd
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v82.hpp"
+#include "beam_delta_multi_v83.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1025,7 +1092,7 @@ int main() {
             if (step > param.max_turn - now.turn) continue;
             // hoursはcallbackがnow.turnと一致するように復元しています。
             const long long next_profit = profit + income(recipe, hours + step);
-            emit.push(Action{recipe}, -next_profit, step);
+            emit.push(-next_profit, step, Action{recipe});
         }
     };
     // callbackがEdgeを受け取ると、Actionだけでなく出発・到着時刻も使えます。
@@ -1070,7 +1137,7 @@ callbackがAction型でも、返る`path`は`Edge<Action>`列です。`apply_bes
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_multi_v82.hpp"
+#include "beam_delta_multi_v83.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1104,7 +1171,7 @@ int main() {
             const Hash hash = static_cast<Hash>(used | (1U << job));
             // 仕事を終えるたびに停止できるので、どの到着状態も有効解です。
             // is_answer=trueでも、そこへ仕事を追加する探索は続けられます。
-            emit.push(Action{job}, -(profit + reward[job]), hash, step, true);
+            emit.push(-(profit + reward[job]), step, hash, true, Action{job});
         }
     };
     // 時刻は外部状態へ持たないので、callbackはEdgeでなくActionを受け取ります。
@@ -1133,7 +1200,7 @@ profit=14 hours=5 jobs=0 1
 
 出力は選んだ仕事の集合です。実行順による段取り費用がないため、仕事番号順に表示しています。
 
-## 7. chokudai_copy_single_v27.hpp
+## 7. chokudai_copy_single_v29.hpp
 
 ### 例09：割当の未展開候補を残し、時間内に別案も探索する
 
@@ -1147,7 +1214,7 @@ Hashと遅延コピーの使い方は通常copy singleと同じです。展開�
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_single_v27.hpp"
+#include "chokudai_copy_single_v29.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1187,12 +1254,16 @@ int main() {
             // 同turn・同使用集合なら、安い方を残してよい問題です。
             // 割当表が大きくなる場合に備え、必要な候補だけStateをコピーします。
             // makerはこのpush_lazy中に高々1回呼ばれ、後で呼ばれることはありません。
-            emit.push_lazy(cost, static_cast<Hash>(used), [&now, job, used] {
+            emit.push_lazy(
+                cost,
+                static_cast<Hash>(used),
+                [&now, job, used] {
                 State next = now.state;
                 next.used = used;
                 next.job_for_worker[now.turn] = job;
                 return next;
-            });
+            }
+            );
         }
     };
 
@@ -1235,7 +1306,7 @@ cost=13 jobs=1 0 2 3
 #include <cstdlib>
 #include <iostream>
 #include <string_view>
-#include "chokudai_copy_single_v27.hpp"
+#include "chokudai_copy_single_v29.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1294,8 +1365,17 @@ int main() {
             if (board[row][col] == '#') continue;
             const bool goal = row == GOAL_ROW && col == GOAL_COL;
             const long long cost = now.turn + 1LL + distance_to_goal(row, col);
-            // 履歴ありpushはStateの直後にActionを渡します。
-            emit.push(State{row, col}, Action{dir}, cost, state_hash(row, col, dir), goal);
+            // 保存が必要な候補だけでActionを生成し、そのActionからStateを作ります。
+            emit.push_lazy(
+                cost,
+                state_hash(row, col, dir),
+                goal,
+                [dir]() -> Action { return Action{dir}; },
+                [&now](const Action& action) -> State {
+                    return State{now.state.row + dr[action.direction],
+                                 now.state.col + dc[action.direction]};
+                }
+            );
         }
     };
     // 第2テンプレート引数Actionを指定すると、最終Stateと操作列を両方受け取れます。
@@ -1322,7 +1402,7 @@ steps=7 cost=7 moves=RRDRRDD
 
 同じ手数の経路が複数ある場合、コマンド列の形は1通りとは限りません。
 
-## 8. chokudai_copy_multi_v29.hpp
+## 8. chokudai_copy_multi_v31.hpp
 
 ### 例11：時間内の作業選択を複数スイープで改善する
 
@@ -1336,7 +1416,7 @@ steps=7 cost=7 moves=RRDRRDD
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_multi_v29.hpp"
+#include "chokudai_copy_multi_v31.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1372,7 +1452,7 @@ int main() {
             next.profit += reward[job];
             // 同じ到着turn・使用集合なら将来の選択肢も利益も同じです。
             // 途中で停止してもよいので、各作業の終了状態を有効解にします。
-            emit.push(next, -next.profit, static_cast<Hash>(next.used), step, true);
+            emit.push(-next.profit, step, static_cast<Hash>(next.used), true, next);
         }
     };
     const auto result = BS::run<State>(param, State{}, 0LL, Hash{0}, expand);
@@ -1411,7 +1491,7 @@ profit=14 hours=5 jobs=0 1
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_multi_v29.hpp"
+#include "chokudai_copy_multi_v31.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1450,8 +1530,16 @@ int main() {
             const bool goal = road.to == goal_city;
             // 同じ到着時刻・都市なら将来条件が同じ。安い通行料の経路を残します。
             // costは通行料、stepは所要時間であり、両者は別の量です。
-            emit.push(State{road.to}, Action{id}, now.cost + road.toll,
-                      static_cast<Hash>(road.to), road.minutes, goal);
+            emit.push_lazy(
+                now.cost + road.toll,
+                road.minutes,
+                static_cast<Hash>(road.to),
+                goal,
+                [id]() -> Action { return Action{id}; },
+                [&roads](const Action& action) -> State {
+                    return State{roads[action.road].to};
+                }
+            );
         }
     };
     const auto result = BS::run<State, Action>(param, State{}, 0LL, Hash{0}, expand);
@@ -1483,7 +1571,7 @@ toll=4 arrival=5 roads=1 4 6
 
 5分目に到着した有効解です。時間上限の6分まで、待機操作を追加する必要はありません。
 
-## 9. beam_copy_sub_v24.hpp
+## 9. beam_copy_sub_v26.hpp
 
 ### 例13：各期の前処理回数を選び、完成した計画表を返す
 
@@ -1497,7 +1585,7 @@ toll=4 arrival=5 roads=1 4 6
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_copy_sub_v24.hpp"
+#include "beam_copy_sub_v26.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1529,24 +1617,34 @@ int main() {
 
     auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         const long long profit = now.state.profit + INCOME_PER_LEVEL * now.state.level;
-        // makerは保存が必要なときだけ実行されます。末尾のNextが保存先を決めます。
-        emit.push_lazy(-profit, static_cast<Hash>(now.state.level), false,
+        // makerは保存が必要なときだけ実行されます。cost直後のNextが保存先を決めます。
+        emit.push_lazy(
+            -profit,
+            BS::Next::Turn,
+            static_cast<Hash>(now.state.level),
+            false,
             [&now, profit] {
                 State next = now.state;
                 next.profit = profit;
                 return next;
-            }, BS::Next::Turn);
+            }
+        );
         if (now.state.level < MAX_LEVEL) {
             const int level = now.state.level + 1;
             const long long next_profit = now.state.profit - UPGRADE_COST;
-            emit.push_lazy(-next_profit, static_cast<Hash>(level), false,
+            emit.push_lazy(
+                -next_profit,
+                BS::Next::Sub,
+                static_cast<Hash>(level),
+                false,
                 [&now, level, next_profit] {
                     State next = now.state;
                     next.level = level;
                     next.profit = next_profit;
                     ++next.upgrades[now.turn];
                     return next;
-                }, BS::Next::Sub);
+                }
+            );
         }
         // level上限により、どの経路のSub遷移も有限です。
         // 同じ保存先・levelなら将来条件は同じで、利益が大きい計画を残せます。
@@ -1590,7 +1688,7 @@ profit=42 level=4 upgrades=3 0 0
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "beam_copy_sub_v24.hpp"
+#include "beam_copy_sub_v26.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1630,16 +1728,33 @@ int main() {
             const int distance = std::abs(position[to] - position[now.state.at]);
             if (distance > now.state.fuel) continue;
             const State next{now.state.done | bit, to, now.state.fuel - distance};
-            // 履歴ありpushはStateの直後にActionを置き、Nextは最後に指定します。
-            emit.push(next, Action{to, false}, now.cost + distance, state_hash(next),
-                      next.done == ALL_DONE, BS::Next::Sub);
+            // この小さいnextはHash・完成判定にも使います。Actionの生成は保存時だけです。
+            emit.push_lazy(
+                now.cost + distance,
+                BS::Next::Sub,
+                state_hash(next),
+                next.done == ALL_DONE,
+                [to]() -> Action { return Action{to, false}; },
+                [&now, distance](const Action& action) -> State {
+                    return State{now.state.done | (1U << (action.to - 1)),
+                                 action.to, now.state.fuel - distance};
+                }
+            );
         }
         const int distance = std::abs(position[now.state.at]);
         if (now.turn + 1 < param.max_turn && now.state.at != 0 && distance <= now.state.fuel) {
             const State next{now.state.done, 0, FUEL};
             // 帰庫・給油は日を確定する操作です。配達回数に関係なく次turnへ進みます。
-            emit.push(next, Action{0, true}, now.cost + distance, state_hash(next),
-                      false, BS::Next::Turn);
+            emit.push_lazy(
+                now.cost + distance,
+                BS::Next::Turn,
+                state_hash(next),
+                false,
+                []() -> Action { return Action{0, true}; },
+                [&now](const Action& action) -> State {
+                    return State{now.state.done, action.to, FUEL};
+                }
+            );
         }
         // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
     };
@@ -1680,7 +1795,7 @@ day=2 deliver:3 deliver:4
 
 1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-## 10. beam_delta_sub_v25.hpp
+## 10. beam_delta_sub_v26.hpp
 
 ### 例15：期内の操作を差分適用し、期ごとのAction区間を返す
 
@@ -1694,7 +1809,7 @@ day=2 deliver:3 deliver:4
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "beam_delta_sub_v25.hpp"
+#include "beam_delta_sub_v26.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1725,12 +1840,20 @@ int main() {
     auto expand = [&](const BS::NodeView&, BS::Emitter<Action>& emit) {
         // 生産は期を確定する操作です。増強回数の違う経路も次turnで比較されます。
         const long long income = INCOME_PER_LEVEL * level;
-        emit.push(Action{false, income}, -(profit + income),
-                  static_cast<Hash>(level), BS::Next::Turn);
+        emit.push(
+            -(profit + income),
+            BS::Next::Turn,
+            static_cast<Hash>(level),
+            Action{false, income}
+        );
         if (level < MAX_LEVEL) {
             // 増強は同turn内の操作です。level上限によりSubの連鎖は必ず有限です。
-            emit.push(Action{true, -UPGRADE_COST}, -(profit - UPGRADE_COST),
-                      static_cast<Hash>(level + 1), BS::Next::Sub);
+            emit.push(
+                -(profit - UPGRADE_COST),
+                BS::Next::Sub,
+                static_cast<Hash>(level + 1),
+                Action{true, -UPGRADE_COST}
+            );
         }
     };
     auto forward = [&](const Action& action) {
@@ -1791,7 +1914,7 @@ period=3 commands=P
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "beam_delta_sub_v25.hpp"
+#include "beam_delta_sub_v26.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1839,15 +1962,25 @@ int main() {
             const State next{world.done | bit, to, world.fuel - distance};
             const Action action{world.at, to, world.fuel, distance, false};
             // 配達は同じ日のSub操作です。全件完了したSub状態を解にします。
-            emit.push(action, traveled + distance, state_hash(next),
-                      next.done == ALL_DONE, BS::Next::Sub);
+            emit.push(
+                traveled + distance,
+                BS::Next::Sub,
+                state_hash(next),
+                next.done == ALL_DONE,
+                action
+            );
         }
         const int distance = std::abs(position[world.at]);
         if (now.turn + 1 < param.max_turn && world.at != 0 && distance <= world.fuel) {
             const State next{world.done, 0, FUEL};
             // 車庫へ戻って給油すると、次の日へ進みます。
-            emit.push(Action{world.at, 0, world.fuel, distance, true},
-                      traveled + distance, state_hash(next), false, BS::Next::Turn);
+            emit.push(
+                traveled + distance,
+                BS::Next::Turn,
+                state_hash(next),
+                false,
+                Action{world.at, 0, world.fuel, distance, true}
+            );
         }
         // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
     };
@@ -1903,7 +2036,7 @@ day=2 deliver:3 deliver:4
 
 1日目は帰庫まで完了し、2日目は最後の配達直後に完成しています。最後の日の操作もpathに含まれます。
 
-## 11. chokudai_copy_sub_v25.hpp
+## 11. chokudai_copy_sub_v27.hpp
 
 ### 例17：期の開始候補を残し、期内の増強回数を探索する
 
@@ -1917,7 +2050,7 @@ day=2 deliver:3 deliver:4
 #include <array>
 #include <cstdint>
 #include <iostream>
-#include "chokudai_copy_sub_v25.hpp"
+#include "chokudai_copy_sub_v27.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -1951,24 +2084,34 @@ int main() {
 
     auto expand = [](const BS::StateView<State>& now, BS::Emitter<State>& emit) {
         const long long profit = now.state.profit + INCOME_PER_LEVEL * now.state.level;
-        // makerは保存が必要なときだけ実行されます。末尾のNextが保存先を決めます。
-        emit.push_lazy(-profit, static_cast<Hash>(now.state.level), false,
+        // makerは保存が必要なときだけ実行されます。cost直後のNextが保存先を決めます。
+        emit.push_lazy(
+            -profit,
+            BS::Next::Turn,
+            static_cast<Hash>(now.state.level),
+            false,
             [&now, profit] {
                 State next = now.state;
                 next.profit = profit;
                 return next;
-            }, BS::Next::Turn);
+            }
+        );
         if (now.state.level < MAX_LEVEL) {
             const int level = now.state.level + 1;
             const long long next_profit = now.state.profit - UPGRADE_COST;
-            emit.push_lazy(-next_profit, static_cast<Hash>(level), false,
+            emit.push_lazy(
+                -next_profit,
+                BS::Next::Sub,
+                static_cast<Hash>(level),
+                false,
                 [&now, level, next_profit] {
                     State next = now.state;
                     next.level = level;
                     next.profit = next_profit;
                     ++next.upgrades[now.turn];
                     return next;
-                }, BS::Next::Sub);
+                }
+            );
         }
         // level上限により、どの経路のSub遷移も有限です。
         // 同じ保存先・levelなら将来条件は同じで、利益が大きい計画を残せます。
@@ -2012,7 +2155,7 @@ profit=42 level=4 upgrades=3 0 0
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
-#include "chokudai_copy_sub_v25.hpp"
+#include "chokudai_copy_sub_v27.hpp"
 
 using Hash = std::uint64_t;
 // Costはlong long。すべてのライブラリで、小さいcostほど良い候補です。
@@ -2055,16 +2198,33 @@ int main() {
             const int distance = std::abs(position[to] - position[now.state.at]);
             if (distance > now.state.fuel) continue;
             const State next{now.state.done | bit, to, now.state.fuel - distance};
-            // 履歴ありpushはStateの直後にActionを置き、Nextは最後に指定します。
-            emit.push(next, Action{to, false}, now.cost + distance, state_hash(next),
-                      next.done == ALL_DONE, BS::Next::Sub);
+            // この小さいnextはHash・完成判定にも使います。Actionの生成は保存時だけです。
+            emit.push_lazy(
+                now.cost + distance,
+                BS::Next::Sub,
+                state_hash(next),
+                next.done == ALL_DONE,
+                [to]() -> Action { return Action{to, false}; },
+                [&now, distance](const Action& action) -> State {
+                    return State{now.state.done | (1U << (action.to - 1)),
+                                 action.to, now.state.fuel - distance};
+                }
+            );
         }
         const int distance = std::abs(position[now.state.at]);
         if (now.turn + 1 < param.max_turn && now.state.at != 0 && distance <= now.state.fuel) {
             const State next{now.state.done, 0, FUEL};
             // 帰庫・給油は日を確定する操作です。配達回数に関係なく次turnへ進みます。
-            emit.push(next, Action{0, true}, now.cost + distance, state_hash(next),
-                      false, BS::Next::Turn);
+            emit.push_lazy(
+                now.cost + distance,
+                BS::Next::Turn,
+                state_hash(next),
+                false,
+                []() -> Action { return Action{0, true}; },
+                [&now](const Action& action) -> State {
+                    return State{now.state.done, action.to, FUEL};
+                }
+            );
         }
         // Subごとに未配達件数が減り、Turnは最大日数に制限されるので有限です。
     };

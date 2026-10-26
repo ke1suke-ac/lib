@@ -220,7 +220,7 @@ struct NoOp {
         struct Row { EventType event; DebugRuntime runtime; };
         std::string filename;
         std::int64_t interval_us;
-        std::vector<Row> rows;
+        std::deque<Row> rows; // 追記時に既存行をコピーしない。
         explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
             : filename(std::move(path)), interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
         void operator()(EventType event, const DebugRuntime& rt) {
@@ -231,7 +231,7 @@ struct NoOp {
                 (rt.diagnostic_flags != rows.back().runtime.diagnostic_flags ||
                  (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) || rt.turns_cut_by_time > rows.back().runtime.turns_cut_by_time);
             if (mandatory || changed || rows.empty() || interval_us == 0 ||
-                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.push_back({event, rt});
+                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.emplace_back(event, rt);
             if (event == EventType::RunEnd) write();
         }
     private:
@@ -447,28 +447,28 @@ struct Result {
 // is_answer=true は解候補フラグ。expand_answers=falseなら保存だけを行う。
 template<class Action> class Emitter {
 public:
-    // 引数順は action, cost, [hash,] step, [is_answer] とする。step は int 固定。
+    // 引数順は cost, step, [hash,] [is_answer,] action。step は int 固定。
     template<class U, StepArg S>
     requires ActionArg<U, Action>
-    bool push(U&& action, Cost cost, S step) {
+    bool push(Cost cost, S step, U&& action) {
         return push_impl(std::forward<U>(action), cost, now_hash_, step, false, false);
     }
 
     template<class U, StepArg S, BoolArg B>
     requires ActionArg<U, Action>
-    bool push(U&& action, Cost cost, S step, B is_answer) {
+    bool push(Cost cost, S step, B is_answer, U&& action) {
         return push_impl(std::forward<U>(action), cost, now_hash_, step, false, is_answer);
     }
 
     template<class U, class H, StepArg S>
     requires ActionArg<U, Action> && CompatibleHashArg<H, Hash>
-    bool push(U&& action, Cost cost, H hash, S step) {
+    bool push(Cost cost, S step, H hash, U&& action) {
         return push_impl(std::forward<U>(action), cost, static_cast<Hash>(hash), step, true, false);
     }
 
     template<class U, class H, StepArg S, BoolArg B>
     requires ActionArg<U, Action> && CompatibleHashArg<H, Hash>
-    bool push(U&& action, Cost cost, H hash, S step, B is_answer) {
+    bool push(Cost cost, S step, H hash, B is_answer, U&& action) {
         return push_impl(std::forward<U>(action), cost, static_cast<Hash>(hash), step, true, is_answer);
     }
 
@@ -666,7 +666,6 @@ template<class Action> class Engine {
         [[nodiscard]] int size() const { return static_cast<int>(candidates_.size()); }
         [[nodiscard]] bool rejects_by_width(Cost cost) const { return full_ && !(cost < worst_cost_); }
         std::vector<Candidate>& selected() { return candidates_; }
-        const std::vector<Candidate>& selected() const { return candidates_; }
 
         struct Choice {
             int slot = -1, hash_slot = -1;
@@ -1628,9 +1627,9 @@ struct Harness {
         int item = child;
 #endif
 #if RUNTIME_TEST_MULTI
-        bool ok = emit.push(item, cost, hash, 1, answer);
+        bool ok = emit.push(cost, 1, hash, answer, item);
 #else
-        bool ok = emit.push(item, cost, hash, answer);
+        bool ok = emit.push(cost, hash, answer, item);
 #endif
         accepted.push_back(ok); return ok;
     }
@@ -1793,7 +1792,7 @@ void review_regressions() {
                 for (int i = 1; i <= 3; ++i) h.push(emit, i, i, static_cast<std::uint64_t>(i));
                 Clock::value += 100;
             } else if (now.turn == 1) {
-                emit.push(Action{h.world, 10}, 0, std::uint64_t{10}, 2);
+                emit.push(0, 2, std::uint64_t{10}, Action{h.world, 10});
                 Clock::value += 1500;
             } else {
                 check(now.turn == 3, "empty arrival turn is skipped");
@@ -1856,9 +1855,9 @@ void diagnostic_mode() {
         int child = now.state + 1;
 #endif
 #if RUNTIME_TEST_MULTI
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1), 1);
+        emit.push(-double(now.turn + 1), 1, std::uint64_t(now.turn + 1), child);
 #else
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1));
+        emit.push(-double(now.turn + 1), std::uint64_t(now.turn + 1), child);
 #endif
     };
     auto hook = [&](typename T::EventType event, const typename T::DebugRuntime& rt) {

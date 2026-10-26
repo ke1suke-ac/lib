@@ -1,23 +1,23 @@
-// beam_skelton_v44.cpp
+// beam_skelton_v46.cpp
 //
 // ビームサーチ6種類とchokudaiサーチ3種類を、1ファイル内で切り替えて試すためのスケルトンです。
 // 使うライブラリは BEAM_SKELTON_KIND で選びます。
 //
-//   1: beam_delta_multi_v82.hpp       turn + Action保持型
-//   2: beam_delta_single_v58.hpp      turn統一 + Action保持型。各手は必ず +1 turn
-//   3: beam_copy_multi_v56.hpp        turn + State保持型
-//   4: beam_copy_single_v52.hpp       turn統一 + State保持型。各手は必ず +1 turn
-//   5: chokudai_copy_multi_v29.hpp    chokudai + State保持型。各手のstepを指定
-//   6: chokudai_copy_single_v27.hpp   chokudai + State保持型。各手は必ず +1 turn
-//   7: beam_delta_sub_v25.hpp        turn内sub探索 + Action保持型
-//   8: beam_copy_sub_v24.hpp         turn内sub探索 + State保持型
-//   9: chokudai_copy_sub_v25.hpp     chokudai + turn内sub探索 + State保持型
+//   1: beam_delta_multi_v83.hpp       turn + Action保持型
+//   2: beam_delta_single_v59.hpp      turn統一 + Action保持型。各手は必ず +1 turn
+//   3: beam_copy_multi_v58.hpp        turn + State保持型
+//   4: beam_copy_single_v54.hpp       turn統一 + State保持型。各手は必ず +1 turn
+//   5: chokudai_copy_multi_v31.hpp    chokudai + State保持型。各手のstepを指定
+//   6: chokudai_copy_single_v29.hpp   chokudai + State保持型。各手は必ず +1 turn
+//   7: beam_delta_sub_v26.hpp        turn内sub探索 + Action保持型
+//   8: beam_copy_sub_v26.hpp         turn内sub探索 + State保持型
+//   9: chokudai_copy_sub_v27.hpp     chokudai + turn内sub探索 + State保持型
 //
 // 例:
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v44.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v44.cpp
-//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v44.cpp
-//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v44.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=1 beam_skelton_v46.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=7 beam_skelton_v46.cpp
+//   g++ -std=gnu++20 -O2 -DBEAM_SKELTON_KIND=8 beam_skelton_v46.cpp
+//   g++ -std=gnu++20 -O2 -DLOCAL -DBEAM_SKELTON_KIND=9 -DBEAM_SKELTON_USE_CSV_HOOK=1 beam_skelton_v46.cpp
 //
 // 注意:
 //   使うヘッダをこのファイルと同じディレクトリに置くか、コンパイル時に -I で場所を指定してください。
@@ -37,7 +37,7 @@
 //   全9種類で、最良有効解を幅・Hash選別と独立して保存します。
 //   max_turn到着候補は継続探索用プールへ入れず、必要なら最良解として保存します。
 //   pushのfalseは探索候補への棄却であり、解なしとは限りません。解の有無はfoundで確認します。
-//   copy型のpush_lazyは解だけの保存でもmakerを呼びます。1呼び出しにつき高々1回です。
+//   copy型のpush_lazyは解だけの保存でもmakerを呼びます。各makerは1呼び出しにつき高々1回です。
 //   有効解をすべて終端にする問題ではexpand_answers=falseにし、expand内の終端判定を省けます。
 //   続けたい有効解と終端が混在する場合はtrueにし、終端だけ利用側でreturnします。
 //   有効解候補の生成数はdebug hookのanswer_candidatesで確認します。
@@ -86,11 +86,11 @@
 //   集計は診断有効時のみ。評価値の同点と、State自体の多様性は別に確認してください。
 //
 // sub版（7 / 8 / 9）について:
-//   push / push_lazy の末尾の Next::Sub は同turnの次sub層へ、Next::Turn は次turnの開始候補へ追加します。
+//   push / push_lazy のcost直後の Next::Sub は同turnの次sub層へ、Next::Turn は次turnの開始候補へ追加します。
 //   delta subは親・部分木が近い候補をまとめて展開し、外部状態の往復を減らします。
 //   不要Nodeはまとめて回収し、候補・最良解・現在地に必要な祖先は保持します。
 //   不要Nodeを回収・再利用し、格納領域は必要に応じて自動拡張します。
-//   Next を省略すると Next::Turn です。同じexpandで両方を生成でき、それぞれ別の候補群で比較します。
+//   Nextは省略できません。同じexpandで両方を生成でき、それぞれ別の候補群で比較します。
 //   beam_width は次turnの開始候補幅、sub_beam_width はturn内の各sub層の幅（0以下ならbeam_width）です。
 //   now.turn は完了turn数、now.sub_step は現在turn内のSub遷移数、now.depth は経路全体の遷移数です。
 //   Turn遷移でsub_stepは0へ戻ります。Sub遷移は各経路で必ず有限回となるようにしてください。
@@ -102,9 +102,19 @@
 //   9のmax_sweepsは通常スイープの上限です。時間超過後、有効解未発見時の救済には適用しません。
 //   is_answer=true はSub / Turnのどちらでも指定でき、規定turn数に達する前の有効解にも使えます。
 //
+// Actionも遅延生成するpush_lazy（copy6種類）:
+//   cost / hashなどの後に、make_action、make_stateの順で2つのmakerを渡せます。
+//   make_action() -> Actionを生成後、make_state(const Action&) -> Stateを同期的に各1回呼びます。
+//   保存不要な候補では両方とも呼びません。最良解だけを保存してfalseを返す場合には呼びます。
+//   Action参照はmake_stateの実行中だけ有効です。参照やポインタをStateへ保持しないでください。
+//   コストの高いAction生成はmake_actionの本体へ置き、キャプチャ初期化で先に生成しないでください。
+//   maker内では候補1個を生成し、emitへの再入呼出しは行わないでください。
+//   push_lazy(cost, ..., action, make_state)も使えます。make_stateはconst Action&を受け取ります。軽いActionでは両形式を比較してください。
+//
 // 操作履歴について:
 //   copy6種類はrun<State, Action>で履歴を共有木に保存し、result.pathに返します。
 //   操作列が不要ならrun<State> / Emitter<State>を使い、pushからAction引数を除きます。
+//   履歴なしのpush_lazyには、引数なしでStateを返すmakerだけを渡します。
 //   emit.history()はexpand中の経路の参照です。empty()、action()、parent()で祖先をたどれます。
 //   Viewはexpand内だけ有効。Action参照はpush / push_lazyをまたいで保持せず再取得します。
 //   祖先のStateは保持しません。必要な評価用情報は現在のStateへ持たせます。
@@ -147,7 +157,7 @@
 #include <iostream>
 
 #if BEAM_SKELTON_KIND == 1
-#include "beam_delta_multi_v82.hpp"
+#include "beam_delta_multi_v83.hpp"
 
 namespace {
 
@@ -195,9 +205,9 @@ int example_main() {
         const int step = 1; // 1以上、param.max_step以下。到着turnがmax_turnを超える候補は棄却されます。
         const bool is_answer = (now.turn + step >= param.max_turn);
 
-        // Emitter::push の最大引数例: action, cost, hash, step, is_answer。
+        // Emitter::push の最大引数例: cost, step, hash, is_answer, action。
         // step は int 固定です。hash は unsigned かつ Hash 以下の幅の型を渡します。
-        emit.push(action, next_cost, next_hash, step, is_answer);
+        emit.push(next_cost, step, next_hash, is_answer, action);
     };
 
     // Action型ライブラリでは、外部状態を move_forward / move_backward で更新します。
@@ -247,7 +257,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 2
-#include "beam_delta_single_v58.hpp"
+#include "beam_delta_single_v59.hpp"
 
 namespace {
 
@@ -291,8 +301,8 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // Emitter::push の最大引数例: action, cost, hash, is_answer。
-        emit.push(action, next_cost, next_hash, is_answer);
+        // Emitter::push の最大引数例: cost, hash, is_answer, action。
+        emit.push(next_cost, next_hash, is_answer, action);
     };
 
     // depth/turn統一 + Action型では、move callback は Action を受け取ります。
@@ -340,7 +350,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 3
-#include "beam_copy_multi_v56.hpp"
+#include "beam_copy_multi_v58.hpp"
 
 namespace {
 
@@ -393,18 +403,18 @@ int example_main() {
         const int step = 1; // 1以上、param.max_step以下。到着turnがmax_turnを超える候補は棄却されます。
         const bool is_answer = (now.turn + step >= param.max_turn);
 
-        // Emitter::push の最大引数例: state, action, cost, hash, step, is_answer。
-        emit.push(next, Action{1}, next_cost, next_hash, step, is_answer);
+        // Emitter::push の最大引数例: cost, step, hash, is_answer, action, state。
+        emit.push(next_cost, step, next_hash, is_answer, Action{1}, next);
 
-        // Emitter::push_lazy の最大引数例: action, cost, hash, step, is_answer, maker。
-        // makerは探索候補または最良有効解の保存に必要な場合だけ同期的に1回呼ばれ、保存されません。
+        // Emitter::push_lazy の最大引数例: cost, step, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         emit.push_lazy(
-            Action{1},
             next_cost + 10,
-            static_cast<Hash>(next_hash + Hash{100}),
             step,
+            static_cast<Hash>(next_hash + Hash{100}),
             is_answer,
-            [next]() { return next; }
+            []() -> Action { return Action{1}; },
+            [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
         );
     };
 
@@ -451,7 +461,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 4
-#include "beam_copy_single_v52.hpp"
+#include "beam_copy_single_v54.hpp"
 
 namespace {
 
@@ -502,17 +512,17 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // Emitter::push の最大引数例: state, action, cost, hash, is_answer。
-        emit.push(next, Action{1}, next_cost, next_hash, is_answer);
+        // Emitter::push の最大引数例: cost, hash, is_answer, action, state。
+        emit.push(next_cost, next_hash, is_answer, Action{1}, next);
 
-        // Emitter::push_lazy の最大引数例: action, cost, hash, is_answer, maker。
-        // makerは探索候補または最良有効解の保存に必要な場合だけ同期的に1回呼ばれ、保存されません。
+        // Emitter::push_lazy の最大引数例: cost, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         emit.push_lazy(
-            Action{1},
             next_cost + 10,
             static_cast<Hash>(next_hash + Hash{100}),
             is_answer,
-            [next]() { return next; }
+            []() -> Action { return Action{1}; },
+            [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
         );
     };
 
@@ -559,7 +569,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 5
-#include "chokudai_copy_multi_v29.hpp"
+#include "chokudai_copy_multi_v31.hpp"
 
 namespace {
 
@@ -616,18 +626,18 @@ int example_main() {
         const int step = 1; // 1以上、param.max_step以下。到着turnがmax_turnを超える候補は棄却されます。
         const bool is_answer = (now.turn + step >= param.max_turn);
 
-        // Emitter::push の最大引数例: state, action, cost, hash, step, is_answer。
-        emit.push(next, Action{1}, next_cost, next_hash, step, is_answer);
+        // Emitter::push の最大引数例: cost, step, hash, is_answer, action, state。
+        emit.push(next_cost, step, next_hash, is_answer, Action{1}, next);
 
-        // Emitter::push_lazy の最大引数例: action, cost, hash, step, is_answer, maker。
-        // makerは探索候補または最良有効解の保存に必要な場合だけ同期的に1回呼ばれ、保存されません。
+        // Emitter::push_lazy の最大引数例: cost, step, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         emit.push_lazy(
-            Action{1},
             next_cost + 10,
-            static_cast<Hash>(next_hash + Hash{100}),
             step,
+            static_cast<Hash>(next_hash + Hash{100}),
             is_answer,
-            [next]() { return next; }
+            []() -> Action { return Action{1}; },
+            [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
         );
     };
 
@@ -676,7 +686,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 6
-#include "chokudai_copy_single_v27.hpp"
+#include "chokudai_copy_single_v29.hpp"
 
 namespace {
 
@@ -731,17 +741,17 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // Emitter::push の最大引数例: state, action, cost, hash, is_answer。
-        emit.push(next, Action{1}, next_cost, next_hash, is_answer);
+        // Emitter::push の最大引数例: cost, hash, is_answer, action, state。
+        emit.push(next_cost, next_hash, is_answer, Action{1}, next);
 
-        // Emitter::push_lazy の最大引数例: action, cost, hash, is_answer, maker。
-        // makerは探索候補または最良有効解の保存に必要な場合だけ同期的に1回呼ばれ、保存されません。
+        // Emitter::push_lazy の最大引数例: cost, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         emit.push_lazy(
-            Action{1},
             next_cost + 10,
             static_cast<Hash>(next_hash + Hash{100}),
             is_answer,
-            [next]() { return next; }
+            []() -> Action { return Action{1}; },
+            [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
         );
     };
 
@@ -790,7 +800,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 7
-#include "beam_delta_sub_v25.hpp"
+#include "beam_delta_sub_v26.hpp"
 
 namespace {
 
@@ -831,14 +841,14 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // 最大引数例: action, cost, hash, is_answer, next。
+        // 最大引数例: cost, next, hash, is_answer, action。
         // 次turnの開始候補は、現在turn内の全sub層から生成した候補の中で比較されます。
-        emit.push(action, next_cost, next_hash, is_answer, BS::Next::Turn);
+        emit.push(next_cost, BS::Next::Turn, next_hash, is_answer, action);
 
         // 同じexpandから、同turn内を継続する候補も生成します。
         // この例ではSubを最大2回とし、各turnを1〜3回の遷移で完了させます。
         if (now.sub_step < 2) {
-            emit.push(action, next_cost, next_hash, false, BS::Next::Sub);
+            emit.push(next_cost, BS::Next::Sub, next_hash, false, action);
         }
     };
 
@@ -894,7 +904,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 8
-#include "beam_copy_sub_v24.hpp"
+#include "beam_copy_sub_v26.hpp"
 
 namespace {
 
@@ -943,20 +953,20 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // pushの最大引数例: state, action, cost, hash, is_answer, next。
-        emit.push(next, Action{1}, next_cost, next_hash, is_answer, BS::Next::Turn);
+        // pushの最大引数例: cost, next, hash, is_answer, action, state。
+        emit.push(next_cost, BS::Next::Turn, next_hash, is_answer, Action{1}, next);
 
-        // push_lazyの最大引数例: action, cost, hash, is_answer, maker, next。
-        // makerは候補または最良解として保存するときだけ同期的に呼ばれ、保存されません。
+        // push_lazyの最大引数例: cost, next, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         // この例ではSubを最大2回とし、各turnを1〜3回の遷移で完了させます。
         if (now.sub_step < 2) {
             emit.push_lazy(
-                Action{1},
                 next_cost,
+                BS::Next::Sub,
                 next_hash,
                 false,
-                [&now]() { return State{now.state.value + 1}; },
-                BS::Next::Sub
+                []() -> Action { return Action{1}; },
+                [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
             );
         }
     };
@@ -1005,7 +1015,7 @@ int example_main() {
 } // namespace
 
 #elif BEAM_SKELTON_KIND == 9
-#include "chokudai_copy_sub_v25.hpp"
+#include "chokudai_copy_sub_v27.hpp"
 
 namespace {
 
@@ -1057,20 +1067,20 @@ int example_main() {
         const Hash next_hash = static_cast<Hash>(now.hash + Hash{1});
         const bool is_answer = (now.turn + 1 >= param.max_turn);
 
-        // pushの最大引数例: state, action, cost, hash, is_answer, next。
-        emit.push(next, Action{1}, next_cost, next_hash, is_answer, BS::Next::Turn);
+        // pushの最大引数例: cost, next, hash, is_answer, action, state。
+        emit.push(next_cost, BS::Next::Turn, next_hash, is_answer, Action{1}, next);
 
-        // push_lazyの最大引数例: action, cost, hash, is_answer, maker, next。
-        // makerは候補または最良解として保存するときだけ同期的に呼ばれ、保存されません。
+        // push_lazyの最大引数例: cost, next, hash, is_answer, make_action, make_state。
+        // Action生成、State生成の順で各1回呼びます。保存不要なら両方とも呼びません。
         // この例ではSubを最大2回とし、各turnを1〜3回の遷移で完了させます。
         if (now.sub_step < 2) {
             emit.push_lazy(
-                Action{1},
                 next_cost,
+                BS::Next::Sub,
                 next_hash,
                 false,
-                [&now]() { return State{now.state.value + 1}; },
-                BS::Next::Sub
+                []() -> Action { return Action{1}; },
+                [&now](const Action& action) -> State { return State{now.state.value + action.delta}; }
             );
         }
     };

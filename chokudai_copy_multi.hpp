@@ -233,7 +233,7 @@ public:
         struct Row { EventType event; DebugRuntime runtime; };
         std::string filename;
         std::int64_t interval_us;
-        std::vector<Row> rows;
+        std::deque<Row> rows; // 追記時に既存行をコピーしない。
         explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
             : filename(std::move(path)), interval_us(multi_detail::to_us(interval_ms)) {}
         void operator()(EventType event, const DebugRuntime& rt) {
@@ -246,7 +246,7 @@ public:
                 (rt.diagnostic_flags != rows.back().runtime.diagnostic_flags ||
                  (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) );
             if (mandatory || changed || rows.empty() || interval_us == 0 ||
-                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.push_back({event, rt});
+                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.emplace_back(event, rt);
             if (event == EventType::RunEnd) write();
         }
     private:
@@ -437,7 +437,7 @@ public:
     // 状態を候補として追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class U, class S>
     requires StateArg<U, State> && StepArg<S>
-    bool push(U&& state, Cost cost, S step) {
+    bool push(Cost cost, S step, U&& state) {
         auto maker = [&]() -> decltype(auto) { return std::forward<U>(state); };
         return engine_.push_candidate(turn_, step, cost, now_hash_, false, false, maker);
     }
@@ -445,7 +445,7 @@ public:
     // 状態を候補として追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class U, class S, class B>
     requires StateArg<U, State> && StepArg<S> && BoolArg<B>
-    bool push(U&& state, Cost cost, S step, B is_answer) {
+    bool push(Cost cost, S step, B is_answer, U&& state) {
         auto maker = [&]() -> decltype(auto) { return std::forward<U>(state); };
         return engine_.push_candidate(turn_, step, cost, now_hash_, false, is_answer, maker);
     }
@@ -453,7 +453,7 @@ public:
     // 状態を候補として追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class U, class H, class S>
     requires StateArg<U, State> && CompatibleHashArg<H, Hash> && StepArg<S>
-    bool push(U&& state, Cost cost, H hash, S step) {
+    bool push(Cost cost, S step, H hash, U&& state) {
         auto maker = [&]() -> decltype(auto) { return std::forward<U>(state); };
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, false, maker);
     }
@@ -461,7 +461,7 @@ public:
     // 状態を候補として追加する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class U, class H, class S, class B>
     requires StateArg<U, State> && CompatibleHashArg<H, Hash> && StepArg<S> && BoolArg<B>
-    bool push(U&& state, Cost cost, H hash, S step, B is_answer) {
+    bool push(Cost cost, S step, H hash, B is_answer, U&& state) {
         auto maker = [&]() -> decltype(auto) { return std::forward<U>(state); };
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, is_answer, maker);
     }
@@ -483,14 +483,14 @@ public:
     // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class H, class S>
     requires CompatibleHashArg<H, Hash> && StepArg<S>
-    bool push_lazy(Cost cost, H hash, S step, Maker&& maker) {
+    bool push_lazy(Cost cost, S step, H hash, Maker&& maker) {
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, false, std::forward<Maker>(maker));
     }
 
     // 探索候補または最良解の保存時だけ状態を生成する、期待償却 O(log W + S)、到着キュー初回確保は O(W S)
     template<class Maker, class H, class S, class B>
     requires CompatibleHashArg<H, Hash> && StepArg<S> && BoolArg<B>
-    bool push_lazy(Cost cost, H hash, S step, B is_answer, Maker&& maker) {
+    bool push_lazy(Cost cost, S step, H hash, B is_answer, Maker&& maker) {
         return engine_.push_candidate(turn_, step, cost, static_cast<Hash>(hash), true, is_answer, std::forward<Maker>(maker));
     }
 
@@ -537,55 +537,70 @@ public:
         Emitter(Emitter<Stored, void>& raw, Pool& pool, std::size_t parent, int turn) noexcept
             : raw_(raw), pool_(pool), parent_(parent), turn_(turn) {}
         template<class A, class Maker>
-        bool emit(A&& action, Cost cost, Hash hash, bool has_hash, bool is_answer, int step, Maker&& maker) {
-            auto traced = [&]() {
-                return Stored{State(std::invoke(std::forward<Maker>(maker))), pool_.make(parent_, Value{std::forward<A>(action), turn_, step})};
+        static constexpr bool lazy_source =
+            (std::same_as<std::remove_cvref_t<A>, Action> || requires(A&& source) {
+                { std::invoke(std::forward<A>(source)) } -> std::same_as<Action>;
+            }) && requires(Maker&& maker, const Action& action) {
+                State(std::invoke(std::forward<Maker>(maker), action));
             };
-
-            if (has_hash) return raw_.push_lazy(cost, hash, step, is_answer, traced);
+        template<class A, class Maker>
+        bool emit(A&& source, Cost cost, Hash hash, bool has_hash, bool is_answer, int step, Maker&& maker) {
+            auto traced = [&]() {
+                // Action型そのものは値として扱い、makerの場合だけここで生成する。
+                if constexpr (std::same_as<std::remove_cvref_t<A>, Action>) {
+                    return Stored{State(std::invoke(std::forward<Maker>(maker), std::as_const(source))), pool_.make(parent_, Value{std::forward<A>(source), turn_, step})};
+                } else {
+                    Action action = std::invoke(std::forward<A>(source));
+                    return Stored{State(std::invoke(std::forward<Maker>(maker), std::as_const(action))), pool_.make(parent_, Value{std::move(action), turn_, step})};
+                }
+            };
+            if (has_hash) return raw_.push_lazy(cost, step, hash, is_answer, traced);
             return raw_.push_lazy(cost, step, is_answer, traced);
         }
     public:
         HistoryView<Action> history() const noexcept { return {pool_, parent_}; }
+
         template<class U, class A, class S>
         requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && StepArg<S>
-        bool push(U&& state, A&& action, Cost cost, S step) {
-            return emit(std::forward<A>(action), cost, Hash{}, false, false, step, [&]() -> decltype(auto) { return std::forward<U>(state); });
-        }
-        template<class A, class S, class Maker>
-        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && StepArg<S>
-        bool push_lazy(A&& action, Cost cost, S step, Maker&& maker) {
-            return emit(std::forward<A>(action), cost, Hash{}, false, false, step, std::forward<Maker>(maker));
+        bool push(Cost cost, S step, A&& action, U&& state) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, false, step, [&](const Action&) -> decltype(auto) { return std::forward<U>(state); });
         }
         template<class U, class A, class S, class B>
         requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && StepArg<S> && BoolArg<B>
-        bool push(U&& state, A&& action, Cost cost, S step, B is_answer) {
-            return emit(std::forward<A>(action), cost, Hash{}, false, is_answer, step, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        bool push(Cost cost, S step, B is_answer, A&& action, U&& state) {
+            return emit(std::forward<A>(action), cost, Hash{}, false, is_answer, step, [&](const Action&) -> decltype(auto) { return std::forward<U>(state); });
         }
-        template<class A, class S, class B, class Maker>
-        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && StepArg<S> && BoolArg<B>
-        bool push_lazy(A&& action, Cost cost, S step, B is_answer, Maker&& maker) {
-            return emit(std::forward<A>(action), cost, Hash{}, false, is_answer, step, std::forward<Maker>(maker));
+        template<class U, class A, class S, class H>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && StepArg<S> && CompatibleHashArg<H, Hash>
+        bool push(Cost cost, S step, H hash, A&& action, U&& state) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, false, step, [&](const Action&) -> decltype(auto) { return std::forward<U>(state); });
         }
-        template<class U, class A, class H, class S>
-        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && CompatibleHashArg<H, Hash> && StepArg<S>
-        bool push(U&& state, A&& action, Cost cost, H hash, S step) {
-            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, false, step, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        template<class U, class A, class S, class H, class B>
+        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && StepArg<S> && CompatibleHashArg<H, Hash> && BoolArg<B>
+        bool push(Cost cost, S step, H hash, B is_answer, A&& action, U&& state) {
+            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, is_answer, step, [&](const Action&) -> decltype(auto) { return std::forward<U>(state); });
         }
-        template<class A, class H, class S, class Maker>
-        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && CompatibleHashArg<H, Hash> && StepArg<S>
-        bool push_lazy(A&& action, Cost cost, H hash, S step, Maker&& maker) {
-            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, false, step, std::forward<Maker>(maker));
+        // Action値またはmake_action() -> Action、make_state(const Action&)を末尾へ渡す。
+        // 保存が必要な場合だけ各makerを同期的に高々1回呼ぶ。Action参照はmake_state内だけ有効。
+        template<class A, class Maker, class S>
+        requires lazy_source<A, Maker> && StepArg<S>
+        bool push_lazy(Cost cost, S step, A&& source, Maker&& make_state) {
+            return emit(std::forward<A>(source), cost, Hash{}, false, false, step, std::forward<Maker>(make_state));
         }
-        template<class U, class A, class H, class S, class B>
-        requires StateArg<U, State> && std::same_as<std::remove_cvref_t<A>, Action> && CompatibleHashArg<H, Hash> && StepArg<S> && BoolArg<B>
-        bool push(U&& state, A&& action, Cost cost, H hash, S step, B is_answer) {
-            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, is_answer, step, [&]() -> decltype(auto) { return std::forward<U>(state); });
+        template<class A, class Maker, class S, class B>
+        requires lazy_source<A, Maker> && StepArg<S> && BoolArg<B>
+        bool push_lazy(Cost cost, S step, B is_answer, A&& source, Maker&& make_state) {
+            return emit(std::forward<A>(source), cost, Hash{}, false, is_answer, step, std::forward<Maker>(make_state));
         }
-        template<class A, class H, class S, class B, class Maker>
-        requires std::same_as<std::remove_cvref_t<A>, Action> && std::invocable<Maker&&> && CompatibleHashArg<H, Hash> && StepArg<S> && BoolArg<B>
-        bool push_lazy(A&& action, Cost cost, H hash, S step, B is_answer, Maker&& maker) {
-            return emit(std::forward<A>(action), cost, static_cast<Hash>(hash), true, is_answer, step, std::forward<Maker>(maker));
+        template<class A, class Maker, class S, class H>
+        requires lazy_source<A, Maker> && StepArg<S> && CompatibleHashArg<H, Hash>
+        bool push_lazy(Cost cost, S step, H hash, A&& source, Maker&& make_state) {
+            return emit(std::forward<A>(source), cost, static_cast<Hash>(hash), true, false, step, std::forward<Maker>(make_state));
+        }
+        template<class A, class Maker, class S, class H, class B>
+        requires lazy_source<A, Maker> && StepArg<S> && CompatibleHashArg<H, Hash> && BoolArg<B>
+        bool push_lazy(Cost cost, S step, H hash, B is_answer, A&& source, Maker&& make_state) {
+            return emit(std::forward<A>(source), cost, static_cast<Hash>(hash), true, is_answer, step, std::forward<Maker>(make_state));
         }
     };
 
@@ -752,6 +767,10 @@ private:
             }
             layers_.resize(static_cast<std::size_t>(rt_.param.max_turn));
             layer(0).insert(0, cost, hash, hashed, serial_++, [&]() -> State&& { return std::move(initial); });
+            if constexpr (diagnostics_enabled) {
+                rt_.pending_turns = 1;
+                rt_.full_pending_turns = rt_.param.beam_width == 1;
+            }
             pending_ = 1; peak();
         }
         // 候補を検査し、探索候補または最良解の保存に必要なら状態を生成する、期待償却 O(log W + S)
@@ -807,6 +826,10 @@ private:
             else if (full) { if constexpr (diagnostics_enabled) ++rt_.selection.replaced_by_width; }
             else {
                 ++pending_;
+                if constexpr (diagnostics_enabled) {
+                    rt_.pending_turns += q.size == 1;
+                    rt_.full_pending_turns += q.size == rt_.param.beam_width;
+                }
                 peak();
             }
             if (answer) save_best(*q.items[static_cast<std::size_t>(slot)], cost, turn);
@@ -904,7 +927,10 @@ private:
                     const Key key = q.keys[static_cast<std::size_t>(slot)];
                     State item = std::move(*q.items[static_cast<std::size_t>(slot)]);
                     q.erase(slot);
-
+                    if constexpr (diagnostics_enabled) {
+                        rt_.pending_turns -= q.size == 0;
+                        rt_.full_pending_turns -= q.size == rt_.param.beam_width - 1;
+                    }
                     --pending_;
                     begin_expansion();
                     if constexpr (diagnostics_enabled) rt_.expanded_step_sum += key.incoming_step;
@@ -953,17 +979,8 @@ private:
                 rt_.peak_pending_candidates = std::max(rt_.peak_pending_candidates, rt_.pending_candidates);
             }
         }
-        void snapshot() {
-        if constexpr (diagnostics_enabled) {
-            peak();
-            rt_.pending_turns = rt_.full_pending_turns = 0;
-            for (const auto& q : layers_) {
-                if (q && q->size > 0) { ++rt_.pending_turns; rt_.full_pending_turns += q->size >= rt_.param.beam_width; }
-            }
-        }
-        }
         template<class Hook> void notify(EventType event, Hook& hook) {
-            if constexpr (diagnostics_enabled) { sample_time(); snapshot(); hook(event, static_cast<const DebugRuntime&>(rt_)); }
+            if constexpr (diagnostics_enabled) { sample_time(); peak(); hook(event, static_cast<const DebugRuntime&>(rt_)); }
         }
 
     private:
@@ -995,7 +1012,7 @@ private:
         template<class ResultType, class Hook>
         void finish(ResultType& result, Hook& hook) {
             sample_time();
-            if constexpr (diagnostics_enabled) { snapshot(); hook(EventType::RunEnd, static_cast<const DebugRuntime&>(rt_)); }
+            if constexpr (diagnostics_enabled) { peak(); hook(EventType::RunEnd, static_cast<const DebugRuntime&>(rt_)); }
             result.runtime = rt_; result.time_limit_reached = rt_.time_limit_reached;
         }
 };
@@ -1129,9 +1146,9 @@ struct Harness {
         int item = child;
 #endif
 #if RUNTIME_TEST_MULTI
-        bool ok = emit.push(item, cost, hash, 1, answer);
+        bool ok = emit.push(cost, 1, hash, answer, item);
 #else
-        bool ok = emit.push(item, cost, hash, answer);
+        bool ok = emit.push(cost, hash, answer, item);
 #endif
         accepted.push_back(ok); return ok;
     }
@@ -1412,9 +1429,9 @@ void diagnostic_mode() {
         int child = now.state + 1;
 #endif
 #if RUNTIME_TEST_MULTI
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1), 1);
+        emit.push(-double(now.turn + 1), 1, std::uint64_t(now.turn + 1), child);
 #else
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1));
+        emit.push(-double(now.turn + 1), std::uint64_t(now.turn + 1), child);
 #endif
     };
     auto hook = [&](typename T::EventType event, const typename T::DebugRuntime& rt) {
@@ -1455,8 +1472,99 @@ void diagnostic_mode() {
 }
 }
 
-int main() {
+
+void lazy_action_test() {
+    using B = RUNTIME_TEST_BEAM<double, std::uint64_t>;
+    using runtime_test::check;
+    struct Action {
+        int from, to;
+        Action() = delete;
+        Action(int f, int t) : from(f), to(t) {}
+    };
+    B::Param p;
+    p.max_turn = 2; p.beam_width = 1; p.time_limit_ms = 0;
+    p.use_hash_dedup = false;
+#if RUNTIME_TEST_MULTI
+    p.max_step = 1;
+#endif
+#if RUNTIME_TEST_CHOKU
+    p.first_sweep_width = 1; p.sweep_width = 1; p.max_sweeps = 1;
+#endif
+    int action_calls = 0, state_calls = 0;
+    auto expand = [&](const B::StateView<int>& now, B::Emitter<int, Action>& emit) {
+        auto offer = [&](double cost, int to, bool accepted) {
+            auto make_action = [&]() -> Action { ++action_calls; return Action(now.state, to); };
+            auto make_state = [&](const Action& action) -> int {
+                check(action_calls == state_calls + 1 && action.from == now.state, "maker order and Action");
+                ++state_calls; return action.to;
+            };
+#if RUNTIME_TEST_MULTI
+            check(emit.push_lazy(cost, 1, make_action, make_state) == accepted, "lazy candidate result");
+#else
+            check(emit.push_lazy(cost, make_action, make_state) == accepted, "lazy candidate result");
+#endif
+        };
+        offer(1, now.state + 1, now.turn == 0);
+        offer(2, 100, false); // 幅棄却、または最良解を改善しない終端候補。
+    };
+    const auto result = B::run<int, Action>(p, 0, 0.0, expand);
+    check(action_calls == 2 && state_calls == 2, "only saved candidates call makers");
+    check(result.found && *result.best_state == 2 && result.path.size() == 2, "lazy result and path");
+#if RUNTIME_TEST_MULTI
+    check(result.path.back().action.to == 2, "saved lazy Action");
+#else
+    check(result.path.back().to == 2, "saved lazy Action");
+#endif
+}
+
 #ifdef LOCAL
+namespace runtime_test {
+void pending_turn_snapshots() {
+    for (int width : {1, 2, 5}) for (bool broad : {false, true}) for (bool timeout : {false, true}) {
+        reset_clock();
+        B::Param p;
+        p.max_turn = 4; p.max_step = 4; p.beam_width = width;
+        p.first_sweep_width = broad ? width : 1; p.sweep_width = 1;
+        p.max_sweeps = width + 2; p.time_check_interval = 1;
+        p.time_limit_ms = timeout ? 0.5 : 0;
+        std::array<int, 4> expected{1, 0, 0, 0};
+        auto expand = [&](const B::StateView<int>& now, B::Emitter<int>& emit) {
+            --expected[static_cast<std::size_t>(now.turn)];
+            if (now.turn == 0) {
+                for (int step : {1, 3}) {
+                    for (int j = 0; j < width; ++j)
+                        emit.push(static_cast<double>(j), step, static_cast<std::uint64_t>(j + 1), false, j);
+                    expected[static_cast<std::size_t>(step)] = width;
+                    // Width rejection, width replacement, then Hash replacement leave the size unchanged.
+                    emit.push(100.0, step, std::uint64_t{100}, false, 100);
+                    emit.push(-1.0, step, std::uint64_t{100}, false, -1);
+                    emit.push(-2.0, step, std::uint64_t{100}, false, -2);
+                }
+                // A terminal answer is saved without creating a pending queue.
+                emit.push(-100.0, 4, std::uint64_t{999}, true, 999);
+            }
+            if (timeout) Clock::value += 1000;
+        };
+        auto hook = [&](E, const B::DebugRuntime& rt) {
+            int nonempty = 0, full = 0, candidates = 0;
+            for (int count : expected) {
+                nonempty += count > 0; full += count == width; candidates += count;
+            }
+            check(rt.pending_turns == nonempty, "incremental nonempty turn count");
+            check(rt.full_pending_turns == full, "incremental full turn count");
+            check(rt.pending_candidates == static_cast<std::size_t>(candidates), "pending candidate total");
+        };
+        const auto result = B::run<int>(p, 0, 0.0, expand, hook);
+        check(result.found && result.best_cost == -100, "terminal answer with pending counts");
+    }
+}
+}
+#endif
+
+int main() {
+    lazy_action_test();
+#ifdef LOCAL
+    runtime_test::pending_turn_snapshots();
     runtime_test::review_regressions();
     runtime_test::counts(); runtime_test::boundaries();
 #if RUNTIME_TEST_CHOKU

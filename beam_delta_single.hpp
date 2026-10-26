@@ -209,7 +209,7 @@ struct NoOp {
         struct Row { EventType event; DebugRuntime runtime; };
         std::string filename;
         std::int64_t interval_us;
-        std::vector<Row> rows;
+        std::deque<Row> rows; // 追記時に既存行をコピーしない。
         explicit CsvStatHook(std::string path = "beam_stat.csv", double interval_ms = 50)
             : filename(std::move(path)), interval_us(detail::time_limit_to_microseconds(interval_ms)) {}
         void operator()(EventType event, const DebugRuntime& rt) {
@@ -220,7 +220,7 @@ struct NoOp {
                 (rt.diagnostic_flags != rows.back().runtime.diagnostic_flags ||
                  (rt.time_limit_reached && !rows.back().runtime.time_limit_reached) || rt.turns_cut_by_time > rows.back().runtime.turns_cut_by_time);
             if (mandatory || changed || rows.empty() || interval_us == 0 ||
-                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.push_back({event, rt});
+                rt.elapsed_us - rows.back().runtime.elapsed_us >= interval_us) rows.emplace_back(event, rt);
             if (event == EventType::RunEnd) write();
         }
     private:
@@ -420,31 +420,31 @@ struct Result {
 // is_answer=true は解候補フラグ。expand_answers=falseなら保存だけを行う。
 template<class Action> class Emitter {
 public:
-    // action, cost のみを渡すと、現在ノードの hash を引き継ぐ。
+    // cost, action のみを渡すと、現在ノードの hash を引き継ぐ（重複排除なし）。
     template<class U>
         requires ActionArg<U, Action>
-    bool push(U&& action, Cost cost) {
+    bool push(Cost cost, U&& action) {
         return push_impl(std::forward<U>(action), cost, now_hash_, false, false);
     }
 
-    // 第3引数が bool の場合は is_answer を指定する。
+    // is_answerを指定する。
     template<class U, class B>
         requires ActionArg<U, Action> && BoolArg<B>
-    bool push(U&& action, Cost cost, B is_answer) {
+    bool push(Cost cost, B is_answer, U&& action) {
         return push_impl(std::forward<U>(action), cost, now_hash_, false, static_cast<bool>(is_answer));
     }
 
-    // 第3引数が unsigned hash の場合は hash を指定する。
+    // Hashを明示する。
     template<class U, class H>
         requires ActionArg<U, Action> && CompatibleHashArg<H, Hash>
-    bool push(U&& action, Cost cost, H hash) {
+    bool push(Cost cost, H hash, U&& action) {
         return push_impl(std::forward<U>(action), cost, static_cast<Hash>(hash), true, false);
     }
 
     // hash と is_answer を同時に指定する。
     template<class U, class H, class B>
         requires ActionArg<U, Action> && CompatibleHashArg<H, Hash> && BoolArg<B>
-    bool push(U&& action, Cost cost, H hash, B is_answer) {
+    bool push(Cost cost, H hash, B is_answer, U&& action) {
         return push_impl(std::forward<U>(action), cost, static_cast<Hash>(hash), true, static_cast<bool>(is_answer));
     }
 
@@ -613,7 +613,6 @@ template<class Action> class Engine {
         [[nodiscard]] bool empty() const { return candidates_.empty(); }
         [[nodiscard]] int size() const { return static_cast<int>(candidates_.size()); }
         std::vector<Candidate>& selected() { return candidates_; }
-        const std::vector<Candidate>& selected() const { return candidates_; }
 
         // Candidateを構築・コピーする前に、幅枝刈りで確実に落ちるか判定する。
         // fullでない場合や、現在の最悪候補より良い可能性がある場合はfalseを返す。
@@ -1317,9 +1316,9 @@ struct Harness {
         int item = child;
 #endif
 #if RUNTIME_TEST_MULTI
-        bool ok = emit.push(item, cost, hash, 1, answer);
+        bool ok = emit.push(cost, 1, hash, answer, item);
 #else
-        bool ok = emit.push(item, cost, hash, answer);
+        bool ok = emit.push(cost, hash, answer, item);
 #endif
         accepted.push_back(ok); return ok;
     }
@@ -1506,9 +1505,9 @@ void diagnostic_mode() {
         int child = now.state + 1;
 #endif
 #if RUNTIME_TEST_MULTI
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1), 1);
+        emit.push(-double(now.turn + 1), 1, std::uint64_t(now.turn + 1), child);
 #else
-        emit.push(child, -double(now.turn + 1), std::uint64_t(now.turn + 1));
+        emit.push(-double(now.turn + 1), std::uint64_t(now.turn + 1), child);
 #endif
     };
     auto hook = [&](typename T::EventType event, const typename T::DebugRuntime& rt) {
